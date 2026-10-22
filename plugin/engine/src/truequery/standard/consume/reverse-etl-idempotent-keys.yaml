@@ -1,0 +1,45 @@
+id: consume/reverse-etl-idempotent-keys
+title: Reverse-ETL syncs declare idempotent merge keys
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each reverse-ETL sync into a SaaS destination declares the destination
+  merge key and runs as an idempotent upsert, so retries and overlapping
+  runs never create duplicate records downstream.
+rationale: >
+  At-least-once delivery plus blind inserts duplicates CRM contacts, double
+  -counts audiences, and triggers repeated customer emails; keyed upserts
+  make every retry safe.
+failure_example: >
+  A retried Salesforce sync inserts 40k duplicate leads because the sync
+  used insert instead of upsert on the external id; sales works the same
+  lead three times.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: per-sync destination object and merge key. Check:
+  every sync names a merge key that exists in the payload projection and the
+  operation is upsert, not insert. False positives: append-only event
+  destinations where duplication is handled by downstream dedup windows,
+  which must be declared to waive the check.
+severity_suggestion: warning
+examples:
+  bad: |
+    syncs:
+      - name: crm_contacts
+        operation: insert   # retries duplicate
+  good: |
+    syncs:
+      - name: crm_contacts
+        operation: upsert
+        merge_key: external_user_id
+sources:
+  - title: What is Airflow
+    url: https://airflow.apache.org/docs/apache-airflow/stable/index.html
+    publisher: Apache Software Foundation
+    accessed: 2026-10-12
+    supports: Documents retry semantics of scheduled workflows, the failure mode idempotent syncs must survive.
+confidence: medium
+conflicts_with: []
+status: draft

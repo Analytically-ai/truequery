@@ -1,0 +1,59 @@
+id: sql/set-operation-column-position
+title: Set-operation branches align columns explicitly by position
+domain: sql
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every branch of a UNION, INTERSECT, or EXCEPT projects the same columns in
+  the same order with compatible types, verified by alias and type
+  comparison across branches; branches never use SELECT * and branches with
+  mismatched names fail review.
+rationale: >
+  Set operations pair columns by position, not by name. A reordered branch
+  silently merges codes into names, and the query returns wrong rows with no
+  error whenever the swapped types are compatible.
+failure_example: >
+  SELECT name, code ... UNION ALL SELECT code, name ... puts '2' in the name
+  column for every row from the second branch; a customer file ships with
+  codes as names.
+enforcement: detector
+detection_sketch: >
+  Compare projected aliases and resolved types positionally across branches;
+  flag name mismatches, star projections whose expansion is unknown, or type
+  pairs needing implicit casts. False positives: intentional positional
+  alignment with different alias spellings, resolved by aliasing
+  identically.
+severity_suggestion: error
+examples:
+  bad: SELECT name, code FROM a UNION ALL SELECT code, name FROM b;
+  good: SELECT name, code FROM a UNION ALL SELECT name, code FROM b;
+sources:
+- title: Combining Queries (UNION, INTERSECT, EXCEPT) (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/queries-union.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: The queries combined must be union compatible, returning the same number of columns with compatible types; columns are combined by position.
+- title: Set Operations (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/query_syntax/setops
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: UNION combines rows by column position by default; UNION BY NAME is the separate by-name form.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE a(name VARCHAR, code VARCHAR);
+    INSERT INTO a VALUES ('alice', '1');
+    CREATE TABLE b(code VARCHAR, name VARCHAR);
+    INSERT INTO b VALUES ('2', 'bob');
+  bad: "SELECT name, code FROM a UNION ALL SELECT * FROM b ORDER BY name"
+  bad_result: "[('2', 'bob'), ('alice', '1')]"
+  good: "SELECT name, code FROM a UNION ALL SELECT name, code FROM b ORDER BY name"
+  good_result: "[('alice', '1'), ('bob', '2')]"
+  note: >
+    Table b stores the same columns in the order (code, name). SELECT * in
+    the second branch pairs code with name by position, so bob's code '2'
+    lands in the name column; both are VARCHAR, so nothing errors. Standard
+    SQL positional pairing in Postgres, BigQuery, Snowflake and SQL Server.
+    DuckDB also offers UNION [ALL] BY NAME, which pairs by column name.

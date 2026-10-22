@@ -1,0 +1,39 @@
+id: consume/aggregate-before-export
+title: BI queries aggregate in the warehouse instead of pulling raw rows
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Dashboard and report queries that visualize an aggregate (totals, series,
+  top-N) perform the aggregation in warehouse SQL and transfer only the
+  grouped result, never raw event rows for client-side rollup.
+rationale: >
+  Pulling millions of raw rows into a BI server or browser to sum them
+  there wastes scan cost, saturates BI memory, and times out dashboards;
+  grouped results are orders of magnitude smaller and render instantly.
+failure_example: >
+  A dashboard pulls 18M raw click rows into the BI middle tier every refresh
+  to draw a 30-point daily trend that one GROUP BY day query could return.
+enforcement: judgment
+detection_sketch: >
+  Judgment: taught, not checked. Whether a query "should" aggregate depends
+  on the visualization, the table's volume and whether the view is a
+  deliberate drill-through, none of which is in the SQL. A tool may at most
+  print an advisory hint (a persisted dashboard query over a large fact
+  table with no GROUP BY or aggregate) labelled as a heuristic; it must
+  never fail a build.
+severity_suggestion: advisory
+examples:
+  bad: |
+    SELECT ts, user_id, revenue FROM fact_clicks WHERE dt >= '2026-09-01'
+  good: |
+    SELECT DATE(ts) AS day, SUM(revenue) AS revenue FROM fact_clicks WHERE dt >= '2026-09-01' GROUP BY 1
+sources:
+  - title: Introduction to optimizing query performance
+    url: https://docs.cloud.google.com/bigquery/docs/best-practices-performance-overview
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Advises reducing data read via aggregation and filtering to control bytes processed.
+confidence: medium
+conflicts_with: []
+status: draft

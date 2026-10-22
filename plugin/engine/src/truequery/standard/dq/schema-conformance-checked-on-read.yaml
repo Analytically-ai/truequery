@@ -1,0 +1,48 @@
+id: dq/schema-conformance-checked-on-read
+title: Schema conformance is checked before content checks run
+domain: dq
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Before any content check executes, the scan verifies required columns are
+  present with expected types; schema mismatch aborts the run as ERROR
+  rather than letting content checks pass vacuously or crash mid-suite.
+rationale: >
+  Content checks against a drifted schema lie in both directions: a missing
+  column can crash the suite (masking all other results) or be silently
+  skipped (reporting green on data never examined). A schema gate first
+  keeps every downstream verdict meaningful.
+failure_example: >
+  Upstream drops the email column; the validity check errors, the runner
+  reports the whole suite as failed-email rather than schema-drift, and the
+  team debugs email content for a day before noticing the column is gone.
+enforcement: runtime
+detection_sketch: >
+  Compare the declared column list and types against the observed relation
+  before running content checks; needs schema access at scan time. False
+  positives: additive columns (new optional fields) must not fail the gate;
+  only missing, removed, or retyped contracted columns abort.
+severity_suggestion: warning
+examples:
+  bad: |-
+    -- content checks run directly; dropped column crashes suite mid-run
+  good: |-
+    Schema Check [PASSED]
+    row_count > 0 [PASSED]
+    missing_count(email) = 0 [PASSED]
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: Soda scan summaries lead with a schema check alongside metric
+      checks in the same run
+  - title: Constraints
+    url: https://duckdb.org/docs/current/sql/constraints
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: DuckDB documents table constraints including checks and keys
+      as declared schema properties
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,50 @@
+id: dq/validity-range-format-type-rules
+title: Numeric ranges, string formats, and types are checked per column
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Columns with a known shape declare range, format, length, or type rules in
+  the contract (for example amount non-negative, email matching a pattern,
+  code within a length bound), and a check fails rows violating them.
+rationale: >
+  Out-of-shape values are the classic wrong-number source: negative
+  amounts, malformed identifiers that break joins, and type drift (integer
+  ids arriving as floats) that silently changes join and aggregation
+  behavior.
+failure_example: >
+  A currency conversion bug writes negative line totals; with no range
+  check, net revenue is understated by the absolute value of every affected
+  row until quarter-close reconciliation.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Verify each shaped column in the contract has a corresponding validity
+  predicate and that the predicate compiles; runtime evaluation needs the
+  data. False positives: overly strict patterns (an email regex rejecting
+  valid international addresses) until the pattern is reviewed against real
+  data.
+severity_suggestion: warning
+examples:
+  bad: |-
+    -- no constraint; negative amounts persist for months
+    amount NUMERIC
+  good: |-
+    ALTER TABLE lines ADD CONSTRAINT positive_amount CHECK (amount >= 0);
+    -- plus a validity check on the pipeline for warehouses without enforcement
+sources:
+  - title: PostgreSQL Constraints
+    url: https://www.postgresql.org/docs/current/ddl-constraints.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: check constraints constrain column values against other columns
+      or rows, complementing coarse type limits
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: invalid-count metrics are a standard SodaCL check family for
+      values violating their declared shape
+confidence: high
+conflicts_with: []
+status: draft

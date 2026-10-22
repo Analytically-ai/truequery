@@ -1,0 +1,70 @@
+id: sql/keyset-pagination
+title: Paginated reads use keyset seeks, not OFFSET
+domain: sql
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Queries that page through a table that can change between page fetches
+  use a keyset predicate on a unique ordered key (WHERE key > :last_seen
+  ORDER BY key LIMIT n) instead of LIMIT plus OFFSET, and page ordering always
+  includes a unique tiebreaker. Large literal OFFSETs (default threshold
+  10,000) are flagged for cost as well.
+rationale: >
+  Rows inserted or deleted ahead of the cursor between page fetches shift
+  every OFFSET, so rows are skipped or delivered twice and the export still
+  reports success. OFFSET also forces the engine to produce and discard the
+  skipped rows, so cost grows with page depth.
+failure_example: >
+  An export reads page 1 (ids 1, 2) with LIMIT 2 OFFSET 0; a row with id 0
+  arrives; page 2 (LIMIT 2 OFFSET 2) returns ids 2 and 3. Id 2 is exported
+  twice, and id 4 is never exported because the loop ends one page short.
+enforcement: detector
+detection_sketch: >
+  Match OFFSET clauses with a non-literal (parameterised, i.e. paging) value
+  or a literal above the threshold, and ORDER BY without a unique key
+  feeding paged queries. Suggest the keyset rewrite carrying the last seen
+  key. False positives: paging over immutable snapshots, and small fixed
+  offsets in tests; exempt via waiver or below the threshold.
+severity_suggestion: warning
+examples:
+  bad: SELECT id FROM p ORDER BY id LIMIT 2 OFFSET 2;
+  good: SELECT id FROM p WHERE id > 2 ORDER BY id LIMIT 2;
+sources:
+- title: LIMIT and OFFSET (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/queries-limit.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Rows skipped by an OFFSET clause still have to be computed inside the server, so a large OFFSET might be inefficient; without ORDER BY the row subset is unpredictable.
+- title: Troubleshoot query issues (BigQuery)
+  url: https://docs.cloud.google.com/bigquery/docs/troubleshoot-queries
+  publisher: Google Cloud
+  accessed: 2026-10-11
+  supports: ORDER BY ... LIMIT ... OFFSET can exhaust memory on a single compute unit, particularly with a large OFFSET; the docs advise avoiding large OFFSET values.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [sql/limit-requires-order-by]
+proof:
+  setup: |
+    -- table state when page 2 is fetched with no concurrent writes
+    CREATE TABLE p12(id INT);
+    INSERT INTO p12 VALUES (1), (2), (3), (4);
+  setup_alt: |
+    -- same table, but page 1 (ids 1, 2) was read, then a writer inserted id 0
+    CREATE TABLE p12(id INT);
+    INSERT INTO p12 VALUES (1), (2), (3), (4);
+    SELECT id FROM p12 ORDER BY id LIMIT 2 OFFSET 0;
+    INSERT INTO p12 VALUES (0);
+  bad: "SELECT id FROM p12 ORDER BY id LIMIT 2 OFFSET 2"
+  bad_result: "[(3,), (4,)]"
+  bad_result_alt: "[(2,), (3,)]"
+  good: "SELECT id FROM p12 WHERE id > 2 ORDER BY id LIMIT 2"
+  good_result: "[(3,), (4,)]"
+  note: >
+    The bad and good queries both fetch page 2 after page 1 returned ids 1
+    and 2 (so the keyset cursor is 2). setup is the table with no write
+    between pages; setup_alt replays page 1 and then a concurrent INSERT of
+    id 0, as real SQL. After the insert, the OFFSET page returns 2 again and
+    shifts 4 off the end, while the keyset page still returns 3 and 4.
+    Standard SQL; same behaviour in Postgres, BigQuery, Snowflake and SQL
+    Server (OFFSET ... FETCH).

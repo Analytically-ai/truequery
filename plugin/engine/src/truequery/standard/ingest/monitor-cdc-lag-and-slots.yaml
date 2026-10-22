@@ -1,0 +1,47 @@
+id: ingest/monitor-cdc-lag-and-slots
+title: CDC lag and replication slots are monitored with alerts
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every CDC pipeline MUST monitor end-to-end replication lag and the health
+  of its replication slot / offset state, with an alert threshold declared
+  in the pipeline contract. A CDC connector with no lag or slot monitoring
+  fails review.
+rationale: >
+  A stalled or lagging CDC stream produces the most dangerous failure mode:
+  fresh-looking dashboards on frozen data. Unconsumed slots also retain
+  write-ahead logs on the source, risking source disk exhaustion and
+  outages in the production database.
+failure_example: >
+  A Debezium connector task dies but the Kafka Connect process stays up.
+  No lag alert exists; the warehouse copy of inventory freezes for two days
+  while the source database accumulates retained WAL.
+enforcement: runtime
+detection_sketch: >
+  Needs a live system: compare source commit position against the
+  subscriber's applied position and alert past the declared threshold.
+  Static review can only confirm the monitor exists, not that lag is low.
+severity_suggestion: warning
+examples:
+  bad: |
+    # connector deployed; no lag metric, no alert
+    curl -X POST /connectors -d @pg-source.json
+  good: |
+    # lag alert declared alongside the connector
+    alert: cdc_lag_seconds > 300 for 10m on connector pg-inventory
+    alert: pg_replication_slots.confirmed_flush_lag_bytes > 1GB
+sources:
+  - title: Debezium Architecture
+    url: https://debezium.io/documentation/reference/stable/architecture.html
+    publisher: Debezium
+    accessed: 2026-10-12
+    supports: Debezium streams source change events through offsets that must advance; stalled offsets mean frozen data
+  - title: Chapter 29. Logical Replication
+    url: https://www.postgresql.org/docs/current/logical-replication.html
+    publisher: PostgreSQL Project
+    accessed: 2026-10-12
+    supports: Replication slots retain WAL until consumed, so unconsumed slots endanger the source
+confidence: high
+conflicts_with: []
+status: draft

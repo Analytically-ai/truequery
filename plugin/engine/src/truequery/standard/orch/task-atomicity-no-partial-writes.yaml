@@ -1,0 +1,62 @@
+id: orch/task-atomicity-no-partial-writes
+title: Task outputs become visible all at once, never half-written
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- any
+statement: >
+  Each task MUST publish its output in one atomic step so that a failed or
+  retried task never leaves a half-written result that downstream readers
+  can see: a database transaction around delete+insert or MERGE, a
+  partition overwrite/swap, a table-format commit, or writing to a staging
+  location and publishing with a single final step (for file outputs, a
+  completion marker that downstream readers require).
+rationale: >
+  A database transaction is all-or-nothing and its intermediate state is not
+  visible to other sessions until commit; without that, a task that fails
+  midway exposes partial data. Orchestrators make this worse because
+  downstream tasks or other pipelines may read the target before the retry
+  finishes, and the partial result looks like a successful load.
+failure_example: >
+  A task writes 10 of 24 hourly parquet files directly into the final prefix
+  and then fails; a downstream rollup reads the partial set and publishes an
+  understated daily total.
+enforcement: runtime
+detection_sketch: >
+  Static pre-screen: flag tasks that write to a final table with separate
+  DELETE and INSERT statements outside an explicit transaction, or that
+  write multiple files into a final location in a loop without a staging
+  prefix or completion marker. Runtime: in staging, kill the task mid-write
+  and confirm readers see either the old or the new complete output, never
+  a mix. False positives: streaming appenders whose atomicity unit is the
+  micro-batch by design.
+severity_suggestion: error
+examples:
+  bad: |
+    for h in hours:
+        df_h.write.parquet(f"s3://mart/daily/{day}/{h}.parquet")  # each file visible as written
+  good: |
+    BEGIN;
+    DELETE FROM mart.daily WHERE day = '{{ ds }}';
+    INSERT INTO mart.daily SELECT ... WHERE day = '{{ ds }}';
+    COMMIT;
+    -- files: write to s3://mart/_staging/{run_id}/, then write the _SUCCESS marker readers wait on
+sources:
+- title: Transactions (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/tutorial-transactions.html
+  publisher: PostgreSQL Global Development Group
+  accessed: '2026-10-11'
+  supports: A transaction bundles steps into an all-or-nothing operation whose intermediate states are not
+    visible to other transactions until commit.
+- title: Best Practices (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Tasks are retried and must give the same result on re-run, writing a specific partition rather
+    than the latest data. The atomic-publish requirement itself is our synthesis; no orchestrator doc we
+    fetched states it directly.
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,42 @@
+id: ingest/pin-file-format-options
+title: File intake pins format options explicitly, never relies on sniffing
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Production file readers MUST declare delimiter, header presence, quoting,
+  encoding, and column types explicitly. Auto-detection (schema sniffing)
+  is allowed for exploration only and MUST be denied in scheduled intake
+  code.
+rationale: >
+  Sniffers guess from a sample: a delimiter change, a stray quote, or a
+  column that looks numeric in the first rows silently retypes or splits
+  the whole file. Explicit options make the expected shape a contract that
+  fails loudly instead of loading wrong.
+failure_example: >
+  A CSV sniffer infers comma delimiters; a new free-text field contains
+  unquoted commas and every downstream column shifts by one. Amounts land
+  in the quantity column for a full day.
+enforcement: detector
+detection_sketch: >
+  Flag read_csv / COPY / load calls in scheduled code with no explicit
+  delimiter, header, or column-type options. False positives: one-off
+  exploration scripts and genuinely headerless ad-hoc reads outside the
+  pipeline path.
+severity_suggestion: warning
+examples:
+  bad: |
+    select * from 's3://landing/orders.csv';  -- all sniffed
+  good: |
+    select * from read_csv('s3://landing/orders.csv',
+      delim = ',', header = true,
+      columns = {'order_id': 'BIGINT', 'amount': 'DECIMAL(12,2)'});
+sources:
+  - title: CSV Import
+    url: https://duckdb.org/docs/current/data/csv/overview
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: DuckDB CSV reading documents auto-detection alongside explicit delimiter/header/column options
+confidence: high
+conflicts_with: []
+status: draft

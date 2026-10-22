@@ -1,0 +1,40 @@
+id: store/incremental-watermark-partition-alignment
+title: Align incremental watermarks with the physical partition grain
+domain: store
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Incremental models must filter source reads on the same grain as the target's
+  partition key (event date for daily partitions, hour for hourly), using a
+  declared watermark column and lookback; an incremental filter on a different
+  grain than the partition key is a violation.
+rationale: >
+  Misaligned watermarks either rescan everything (watermark coarser than
+  partitions never prunes) or silently miss late data (watermark finer than the
+  overwrite grain drops rows that arrive after the partition was written),
+  producing duplicates or gaps that compound daily.
+failure_example: >
+  A model partitioned by day filters incrementally on updated_at hours with no
+  lookback; rows updated 3 hours after their event day was built never appear
+  downstream.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs the declared watermark column, lookback, and partition grain from the
+  contract/model config; checker compares grains and requires a lookback window
+  when late arrival is declared. Static fallback: flag incremental models with
+  no watermark predicate at all. False positives: append-only immutable streams
+  with no late data (contract declares immutability).
+severity_suggestion: warning
+examples:
+  bad: "-- partitioned by event_date, but incremental filter uses a different key:\nSELECT * FROM src WHERE _ingested_at > (SELECT MAX(_ingested_at) FROM {{ this }})"
+  good: "-- same grain + lookback:\nSELECT * FROM src WHERE event_date >= DATE_SUB(CURRENT_DATE, INTERVAL 3 DAY)"
+sources:
+  - title: dbt — Configure incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Incremental models process new/updated rows via configured watermark logic rather than full rebuilds.
+confidence: medium
+conflicts_with: []
+status: draft

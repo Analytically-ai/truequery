@@ -1,0 +1,56 @@
+id: sql/natural-join-explicit-keys
+title: Joins name their keys explicitly, never NATURAL JOIN
+domain: sql
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Joins name their keys with an explicit ON or USING list; NATURAL JOIN is
+  rejected. (Comma joins without a predicate are covered by
+  sql/accidental-cross-join, not by this record.)
+rationale: >
+  NATURAL JOIN infers keys from shared column names, so adding an audit
+  column to both tables silently rewrites join semantics with no query edit.
+  If the tables share no column names it degrades to a CROSS JOIN. The query
+  text stops describing the grain it computes.
+failure_example: >
+  Adding updated_at to both sides of a NATURAL JOIN adds it to the inferred
+  key; matches collapse to zero rows and a mart goes empty overnight.
+enforcement: detector
+detection_sketch: >
+  Match Join nodes with the NATURAL modifier. Suggest the explicit ON or
+  USING form with the currently shared columns. False positives: none in
+  production code; exploratory one-offs can carry a waiver.
+severity_suggestion: warning
+examples:
+  bad: SELECT * FROM a NATURAL JOIN b;
+  good: SELECT * FROM a JOIN b ON a.id = b.id;
+sources:
+- title: Table Expressions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/queries-table-expressions.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: NATURAL is shorthand for USING over all column names that appear in both tables, and with no common column names it behaves like CROSS JOIN.
+- title: FROM and JOIN Clauses (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/query_syntax/from
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: Natural joins join two tables on attributes that share the same name.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/accidental-cross-join]
+proof:
+  setup: |
+    CREATE TABLE n1(id INT, val VARCHAR, updated_at DATE);
+    INSERT INTO n1 VALUES (1, 'a', '2024-01-01');
+    CREATE TABLE n2(id INT, val2 VARCHAR, updated_at DATE);
+    INSERT INTO n2 VALUES (1, 'b', '2024-02-01');
+  bad: "SELECT n1.id, val, val2 FROM n1 NATURAL JOIN n2"
+  bad_result: "[]"
+  good: "SELECT n1.id, val, val2 FROM n1 JOIN n2 ON n1.id = n2.id"
+  good_result: "[(1, 'a', 'b')]"
+  note: >
+    Both tables gained an audit column updated_at, so NATURAL JOIN joins on
+    (id, updated_at); the timestamps differ and the intended id match
+    vanishes. The inference rule is the SQL-standard one documented by
+    Postgres and DuckDB; it applies in any engine that supports NATURAL JOIN.

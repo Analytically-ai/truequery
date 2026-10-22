@@ -1,0 +1,39 @@
+id: model/microbatch-event-time
+title: Microbatch models partition on event time with explicit batch size
+domain: model
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  Microbatch incremental models must declare an event-time column and an
+  explicit batch size, process only closed batches, and reject or quarantine
+  rows stamped in the future relative to run time.
+rationale: >
+  Batching on processing time instead of event time reprocesses open,
+  still-arriving intervals on every run (cost, duplicates), while future
+  timestamps poison watermarks so subsequent batches silently skip real data.
+failure_example: >
+  A model batches on ingestion day; late mobile events land in already-built
+  batches that never rebuild, and the events are missing forever.
+enforcement: detector
+detection_sketch: >
+  Check microbatch configs for a declared event_time column and batch_size,
+  and scan for future-timestamp guards. Flag processing-time batching. False
+  positives: real-time sources where event and processing time coincide by design.
+severity_suggestion: warning
+examples:
+  bad: |
+    {{ config(materialized='incremental', incremental_strategy='microbatch') }}
+    -- no event_time, framework falls back to run-time batching
+  good: |
+    {{ config(materialized='incremental', incremental_strategy='microbatch',
+               event_time='occurred_at', batch_size='day', begin_date='2024-01-01') }}
+    SELECT * FROM raw_events WHERE occurred_at < CURRENT_TIMESTAMP;
+sources:
+  - title: About microbatch incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-microbatch
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: event-time batched processing of large time-series models
+confidence: high
+conflicts_with: []
+status: draft

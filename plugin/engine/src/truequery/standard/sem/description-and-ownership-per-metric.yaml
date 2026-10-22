@@ -1,0 +1,50 @@
+id: sem/description-and-ownership-per-metric
+title: Every governed metric has a plain-language definition and an owner
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each governed metric carries a one-paragraph plain-language definition
+  (what it counts, key inclusions/exclusions, grain) and a named owner or
+  owning team, both stored in the metric definition itself.
+rationale: >
+  An undocumented metric is a rumor with a number: two teams read different
+  meanings into the same name, and when the number moves nobody owns the
+  explanation. The definition plus owner turns disputes into 30-second reads.
+failure_example: >
+  `activated_account` has no description; Sales counts trial conversions while
+  Product counts first key actions, and both quote "activation" in planning
+  with numbers 3x apart.
+enforcement: detector
+detection_sketch: >
+  Flag governed metrics missing a description above a minimum length or
+  missing an owner tag. This checks presence, not prose quality — quality is
+  a review concern. False positives: none structural; keep the length floor
+  low (a sentence) so the bar is documentation existence.
+severity_suggestion: warning
+examples:
+  bad: |-
+    - name: activated_account
+      type: simple
+      type_params: { measure: activations }
+      # no description, no owner
+  good: |-
+    - name: activated_account
+      type: simple
+      type_params: { measure: activations }
+      description: 'Workspace completing onboarding checklist within 14 days of signup. Excludes internal/test workspaces.'
+      meta: { owner: growth-analytics, tier: 1 }
+sources:
+  - title: Creating metrics
+    url: https://docs.getdbt.com/docs/build/metrics-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Metrics support descriptions and metadata for governance
+  - title: Semantic models
+    url: https://docs.getdbt.com/docs/build/semantic-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Semantic objects carry descriptions consumed by documentation
+confidence: medium
+conflicts_with: []
+status: draft

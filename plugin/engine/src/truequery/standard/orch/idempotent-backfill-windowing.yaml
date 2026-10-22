@@ -1,0 +1,68 @@
+id: orch/idempotent-backfill-windowing
+title: Backfills are windowed, capped, and rerunnable
+domain: orch
+modes:
+- change
+- assure
+applies_to:
+- airflow
+- dagster
+- dbt
+statement: >
+  Reprocessing of historical windows MUST run as an explicitly bounded
+  backfill (a from/to date or partition range plus a cap on concurrent runs)
+  over logic that writes the run's own interval or partition in a rerun-safe
+  way (overwrite of that partition, or MERGE/UPSERT on a key), so replaying
+  a window twice leaves the target unchanged.
+rationale: >
+  Airflow re-runs every DAG instance in a backfill range and retries failed
+  tasks, and its best-practices page warns that INSERT on re-run can create
+  duplicate rows and recommends UPSERT and reading/writing a specific
+  partition keyed by the data interval. A replay over append-only logic
+  silently double-counts every replayed interval.
+failure_example: >
+  An engineer backfills two months of a DAG whose load is INSERT-only; 60
+  runs each append rows that already exist, and the fact table double-counts
+  revenue for the whole period.
+enforcement: runtime
+detection_sketch: >
+  Static pre-screen: backfill invocations (Airflow 3 `airflow backfill
+  create`, Dagster backfills, dbt `--full-refresh`/`--vars` date windows in
+  CI or runbooks) specify a from/to range and a max-active-runs cap; target
+  writes key on the run's data interval/partition (partition overwrite or
+  MERGE) rather than a bare INSERT. Runtime confirmation: in staging, run
+  one window twice and compare row counts and a checksum of the target
+  partition; any difference fails. False positives: append-only event
+  streams whose rerun safety comes from documented downstream dedup.
+severity_suggestion: error
+examples:
+  bad: |
+    INSERT INTO fct_orders SELECT * FROM stg_orders WHERE order_date >= '{{ ds }}'
+    -- backfilled with no end date and no concurrency cap
+  good: |
+    airflow backfill create --dag-id orders --from-date 2026-09-01 --to-date 2026-09-07 --max-active-runs 3
+    -- task: DELETE FROM fct_orders WHERE order_date = '{{ ds }}'; INSERT ... WHERE order_date = '{{ ds }}'
+    -- (in one transaction) or MERGE ... ON (order_id)
+sources:
+- title: Best Practices (Airflow 3.3.2 documentation), Writing a Dag / idempotency
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Tasks should give the same result on every re-run; INSERT on re-run may create duplicate rows,
+    use UPSERT; read and write a specific partition keyed by data_interval_start rather than the latest
+    data.
+- title: Dag Runs (Airflow 3.3.2 documentation), Backfill
+  url: https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dag-run.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Airflow 3 backfills use airflow backfill create with --from-date/--to-date and options such
+    as --max-active-runs and --reprocess-behavior, re-running all DAG instances in the range.
+- title: Backfilling data (Dagster docs)
+  url: https://dagster.io/docs/guides/build/partitions-and-backfills/backfilling-data
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Dagster backfills target a partition range, by default one run per partition, with an optional
+    single-run backfill policy.
+confidence: high
+conflicts_with: []
+status: draft

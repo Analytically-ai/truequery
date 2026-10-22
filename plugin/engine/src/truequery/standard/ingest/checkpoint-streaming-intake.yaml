@@ -1,0 +1,42 @@
+id: ingest/checkpoint-streaming-intake
+title: Streaming intake checkpoints progress for exactly-once resume
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every streaming/file-watch intake MUST declare a durable checkpoint
+  (offset store, checkpoint directory) that is separate from its output,
+  and resume from it after restarts. A stream with no checkpoint location
+  fails review.
+rationale: >
+  Without durable progress tracking, every restart replays from scratch
+  (massive duplicates) or from latest (dropped data). Checkpointing is
+  what converts at-least-once delivery into effectively-once results.
+failure_example: >
+  A file-watch stream restarts during a cluster upgrade with no checkpoint.
+  It reprocesses the full backlog directory, tripling the day's events in
+  the landing table.
+enforcement: detector
+detection_sketch: >
+  Flag streaming reads with no checkpoint / offset-store option configured
+  (e.g. cloudFiles without checkpointLocation, Kafka consumers with
+  offsets unmanaged). False positives: bounded one-shot backfills where
+  restart-from-scratch is declared and idempotent.
+severity_suggestion: error
+examples:
+  bad: |
+    spark.readStream.format("cloudFiles").load("s3://landing/events/")
+    # no checkpointLocation: restart behavior undefined
+  good: |
+    spark.readStream.format("cloudFiles")
+      .option("checkpointLocation", "s3://meta/checkpoints/events/")
+      .load("s3://landing/events/")
+sources:
+  - title: What is Auto Loader?
+    url: https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Auto Loader persists discovered-file state in a checkpoint store so data is processed exactly once across restarts
+confidence: high
+conflicts_with: []
+status: draft

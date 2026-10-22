@@ -1,0 +1,41 @@
+id: model/snapshot-strategy-choice
+title: Snapshot strategy matches source change-tracking capability
+domain: model
+modes: [explore, build]
+applies_to: [dbt]
+statement: >
+  Snapshot models must use timestamp strategy when the source provides a
+  reliable updated-at column, and check strategy over an explicit column list
+  only when it does not; the choice and, for check strategy, the tracked
+  columns must be recorded on the snapshot.
+rationale: >
+  A check strategy over all columns fires on irrelevant changes and balloons
+  history; a timestamp strategy on an unreliable column misses real changes.
+  Either way history silently diverges from the source and audits fail.
+failure_example: >
+  A product snapshot uses check strategy over 60 columns including an
+  ingestion-batch id; every load creates a new version of every product and
+  the dimension grows 100x in a month.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    {% snapshot prod_snapshot %}
+    {{ config(strategy='check', check_cols='all', unique_key='sku') }}
+    SELECT * FROM raw_products;
+    {% endsnapshot %}
+  good: |
+    {% snapshot prod_snapshot %}
+    {{ config(strategy='timestamp', updated_at='updated_at', unique_key='sku') }}
+    SELECT sku, name, price, updated_at FROM raw_products;
+    {% endsnapshot %}
+sources:
+  - title: Add snapshots to your DAG
+    url: https://docs.getdbt.com/docs/build/snapshots
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: timestamp versus check strategies and when each applies
+confidence: medium
+conflicts_with: []
+status: draft

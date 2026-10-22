@@ -1,0 +1,45 @@
+id: gov/audit-columns-or-snapshots
+title: Mutable governed tables keep an audit trail
+domain: gov
+modes: [build, change, assure]
+applies_to: [any, dbt]
+statement: >
+  Mutable production tables either carry updated_at/updated_by-style audit
+  columns maintained on every write, or are covered by a snapshot/history
+  strategy recording row validity over time, so any row's last change is
+  attributable without warehouse forensics.
+rationale: >
+  Without a change trail, a wrong-number incident or suspected tampering
+  cannot attribute which job changed which rows when; investigation stalls
+  and the same bad write recurs because its source was never identified.
+failure_example: >
+  balances table silently corrected by a backfill; finance cannot tell
+  which run changed the numbers and re-issues the wrong report twice.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: which tables are mutable and governed (the contract
+  or zone declaration), since mutability is not visible in a CREATE TABLE.
+  With it, check those tables' DDL for updated_at / updated_by-style audit
+  columns with maintained defaults or triggers, or for a covering snapshot
+  definition, and flag tables with neither. Whether triggers actually fire
+  is runtime. False positives: immutable append-only event tables, where the
+  event time is the audit trail.
+severity_suggestion: advisory
+examples:
+  bad: "Mutable dim_customers with no audit columns and no snapshot."
+  good: "dim_customers carries updated_at/updated_by maintained by the merge, plus a snapshot on the PII subset."
+sources:
+- title: Add snapshots to your DAG
+  url: https://docs.getdbt.com/docs/build/snapshots
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: snapshot strategies that record historical row states over time
+- title: The DataOps Manifesto
+  url: https://dataopsmanifesto.org/en/
+  publisher: DataKitchen
+  accessed: 2026-10-12
+  supports: version-everything principle for reproducible analytics
+confidence: medium
+conflicts_with: []
+status: draft

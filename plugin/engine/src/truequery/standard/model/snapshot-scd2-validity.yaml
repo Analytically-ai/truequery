@@ -1,0 +1,45 @@
+id: model/snapshot-scd2-validity
+title: SCD2 snapshots keep exactly one open record per key with valid windows
+domain: model
+modes: [build, assure]
+applies_to: [dbt, snowflake, bigquery, postgres]
+statement: >
+  Every snapshot or hand-built slowly-changing-dimension type 2 table must
+  guarantee per natural key: exactly one open (current) record, validity
+  windows that do not overlap, and contiguous coverage (each new start equals
+  the prior end) unless gaps are documented.
+rationale: >
+  Overlapping or doubled SCD2 windows join facts to two dimension versions at
+  once (fanout, wrong numbers); gaps drop facts from point-in-time joins
+  (missing rows). Both corrupt every historical report built on the dimension.
+failure_example: >
+  A customer dimension backfill creates two open records for one customer;
+  all of that customer's orders double-count in the lifetime-value mart.
+enforcement: runtime
+detection_sketch: >
+  Query per key: count of open records must equal 1, and ordered windows must
+  satisfy start_{n+1} = end_n with no overlaps. Flag violations. False
+  positives: intentionally gapped windows for logically deleted keys where the
+  gap policy is declared.
+severity_suggestion: error
+examples:
+  bad: |
+    -- two open rows for customer 7:
+    -- (7, '2024-01-01', NULL), (7, '2024-06-01', NULL)
+  good: |
+    -- (7, '2024-01-01', '2024-06-01'), (7, '2024-06-01', NULL)
+    -- enforced by snapshot unique_key + dbt_valid_from/dbt_valid_to logic
+sources:
+  - title: Add snapshots to your DAG
+    url: https://docs.getdbt.com/docs/build/snapshots
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: snapshots record type-2 history with validity timestamps per row version
+  - title: Slowly changing data (SCD) Type 2 operation into Delta tables
+    url: https://docs.delta.io/delta-update/
+    publisher: Delta Lake Project
+    accessed: 2026-10-12
+    supports: merge-based pattern for maintaining versioned SCD2 rows
+confidence: high
+conflicts_with: []
+status: draft

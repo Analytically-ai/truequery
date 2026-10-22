@@ -1,0 +1,50 @@
+id: sem/semantic-model-validates
+title: Semantic layer definitions pass static validation in CI
+domain: sem
+modes: [build, change, assure]
+applies_to: [dbt]
+statement: >
+  The project's semantic models, metrics, and saved queries pass static
+  validation (`dbt parse` plus MetricFlow validation) in CI on every change,
+  with zero errors: dangling refs, unresolvable entities, and invalid
+  dimensions fail the build before merge.
+rationale: >
+  Metric YAML is code with no compiler in the editor: a renamed entity or a
+  deleted dimension breaks every query touching it, and without CI validation
+  the breakage surfaces at 9am when the dashboards refresh.
+failure_example: >
+  A model rename merges without validation; overnight, twelve saved queries
+  fail and the morning metrics email goes out half-empty.
+enforcement: detector
+detection_sketch: >
+  Run dbt parse and MetricFlow config validation (mf validate-configs with
+  the data-warehouse validations skipped) in CI and fail on any error-level
+  diagnostic. This runs the tool's own static validator rather than
+  reimplementing it and needs no warehouse. The warehouse validations
+  (checking that measures and dimensions resolve against real tables) are a
+  separate runtime step. False positives: upstream-package version skew
+  producing new diagnostics; pin versions and triage.
+severity_suggestion: warning
+examples:
+  bad: |-
+    # CI runs only `dbt build`; metric YAML errors surface at query time
+    steps: [dbt build --select marts]
+  good: |-
+    steps:
+      - dbt parse --no-partial-parse
+      - mf validate --skip-dw  # static validation, no warehouse needed
+      - dbt build --select marts
+sources:
+  - title: Validations
+    url: https://docs.getdbt.com/docs/build/validation
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: MetricFlow validation checks catch configuration issues before querying
+  - title: About MetricFlow
+    url: https://docs.getdbt.com/docs/build/about-metricflow
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: MetricFlow validates semantic graphs when generating queries
+confidence: high
+conflicts_with: []
+status: draft

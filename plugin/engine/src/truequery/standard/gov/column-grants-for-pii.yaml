@@ -1,0 +1,41 @@
+id: gov/column-grants-for-pii
+title: PII columns granted per-column, and queries name columns explicitly
+domain: gov
+modes: [build, change, assure]
+applies_to: [postgres]
+statement: >
+  Access to classified PII columns is granted at column level rather than
+  whole-table SELECT wherever consumers do not need the full row, and
+  production queries against PII-bearing tables list columns explicitly
+  instead of SELECT *.
+rationale: >
+  Whole-table grants plus SELECT * silently expand PII access every time a
+  sensitive column is added: a consumer approved for order totals starts
+  receiving emails with no new grant and no review.
+failure_example: >
+  Reporting role holds SELECT on users; a new ssn column added for payroll
+  flows into the support dashboard's SELECT * the next morning.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the PII classification of columns (see
+  gov/pii-classification-declared). With it, flag whole-table SELECT grants
+  on tables whose classification names PII columns, and SELECT * in
+  persisted queries against those tables. Without the classification the
+  check cannot tell a PII table from any other and does not run. False
+  positives: full-row consumers (profile pages) documented as needing all
+  columns.
+severity_suggestion: warning
+examples:
+  bad: "SELECT * FROM users; with reporting_role holding SELECT on users including email and ssn."
+  good: "GRANT SELECT (id, name) ON users TO support_role; queries list exactly those columns."
+sources:
+- title: GRANT (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/sql-grant.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: GRANT supports column-level privileges such as SELECT on named columns
+confidence: high
+conflicts_with: []
+see_also: [gov/pii-classification-declared, model/explicit-column-lists]
+status: draft

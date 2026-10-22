@@ -1,0 +1,47 @@
+id: sem/join-paths-declared-via-entities
+title: Cross-model dimensions resolve only through declared entity paths
+domain: sem
+modes: [build, assure]
+applies_to: [dbt]
+statement: >
+  Any query combining a measure from one semantic model with dimensions from
+  another travels through a declared entity join path (entity equality across
+  models). Undeclared fan-out joins and multi-hop paths with ambiguous
+  intermediate grains are rejected at validation time.
+rationale: >
+  Ad-hoc cross-model joins reintroduce every fanout and grain bug the semantic
+  layer was built to prevent, but now wearing the governed metric's trusted
+  name. Declared paths keep the trust earned.
+failure_example: >
+  Revenue joined to campaign attributes on a non-unique campaign name match
+  duplicates 15% of orders; the "governed" revenue number is wrong exactly
+  where marketing looks at it.
+enforcement: detector
+detection_sketch: >
+  Resolve each multi-model query's entity path in the MetricFlow graph; flag
+  queries with no valid path, multiple ambiguous paths, or paths through
+  non-primary entities. False positives: conformed dimensions intentionally
+  shared verbatim across models — register them as shared so the path check
+  passes by design.
+severity_suggestion: warning
+examples:
+  bad: |-
+    SELECT m.revenue, c.attribution
+    FROM revenue_model m JOIN campaigns c ON c.name = m.campaign_name  -- undeclared, non-unique
+  good: |-
+    # MetricFlow query: measure revenue + dimension campaign via campaign entity
+    mf query --metrics revenue --group-by campaign__channel
+sources:
+  - title: Joins
+    url: https://docs.getdbt.com/docs/build/join-logic
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Cross-model queries resolve through declared entity join paths
+  - title: Validations
+    url: https://docs.getdbt.com/docs/build/validation
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Validation surfaces unresolvable join configurations early
+confidence: high
+conflicts_with: []
+status: draft

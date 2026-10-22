@@ -1,0 +1,44 @@
+id: store/cluster-on-frequent-filters-joins
+title: Co-locate data with clustering on frequent filter and join columns
+domain: store
+modes: [build, change]
+applies_to: [bigquery, snowflake, databricks, delta]
+statement: >
+  Tables above ~10 GB (or with recurring filtered queries) must declare a
+  clustering layout — BigQuery CLUSTER BY, Snowflake cluster key, or Delta
+  liquid clustering — over the 1–4 columns most used in filters and joins, with
+  the highest-selectivity filter column first; clustering columns must be
+  low-moderate cardinality, non-repeated top-level columns.
+rationale: >
+  Clustering sorts data within (or across) partitions into blocks so engines skip
+  blocks that cannot match; without it, selective filters still scan everything
+  inside each partition. Wrong or missing clustering is pure wasted scan spend.
+failure_example: >
+  A 900 GB orders table partitioned by day but never clustered on customer_id
+  scans 40 GB per customer lookup; clustering by customer_id drops it under 1 GB.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs the recurring filter/join column set from the contract or query history;
+  checker verifies a clustering spec exists and its leading columns intersect that
+  set. Static fallback: warn on large-table CREATE with neither CLUSTER BY nor
+  liquid-clustering clause. False positives: write-once archival tables with no
+  recurring reads.
+severity_suggestion: warning
+examples:
+  bad: "CREATE TABLE orders (...) PARTITION BY DATE(order_ts); -- no clustering, queries filter customer_id"
+  good: "CREATE TABLE orders (...) PARTITION BY DATE(order_ts) CLUSTER BY customer_id, status;"
+sources:
+  - title: BigQuery — Introduction to clustered tables
+    url: https://docs.cloud.google.com/bigquery/docs/clustered-tables
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Clustering colocates related data so queries filtering on cluster columns scan fewer blocks.
+  - title: Snowflake — Clustering Keys and Clustered Tables
+    url: https://docs.snowflake.com/en/user-guide/tables-clustering-keys
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Cluster keys co-locate rows from the same logical group in micro-partitions to maximize pruning.
+confidence: high
+conflicts_with: []
+status: draft

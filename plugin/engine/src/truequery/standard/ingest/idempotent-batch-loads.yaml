@@ -1,0 +1,49 @@
+id: ingest/idempotent-batch-loads
+title: Batch loads are idempotent and safely replayable
+domain: ingest
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every batch load MUST be replayable with identical results: re-running a
+  batch for the same window MUST NOT create duplicates or partial state.
+  Acceptable mechanisms are merge/upsert on a declared key, partition
+  overwrite of the batch window, or transactional load-and-swap. Plain
+  append with no dedupe key fails review.
+rationale: >
+  Non-idempotent loads turn every retry, backfill, or late-data re-run into
+  duplicate rows. Duplicates inflate counts and revenue figures, and
+  cleanup requires pinpointing which copies are spurious.
+failure_example: >
+  A nightly job appends the day's orders. A transient failure retries the
+  job; both attempts commit, doubling the day's revenue in the mart until
+  someone hand-deletes one copy.
+enforcement: detector
+detection_sketch: >
+  Heuristic detector, advisory only. Code-only part: flag load statements
+  that INSERT/append into a persistent target with no MERGE or upsert key,
+  no preceding DELETE or overwrite of the same load window, and no
+  load-and-swap. Whether a re-run actually produces identical results is
+  runtime (see model/idempotent-reexec), and whether append is the declared
+  design is judgment. False positives: immutable event streams where
+  append-only is the declared design and dedupe happens downstream under a
+  named rule.
+severity_suggestion: advisory
+examples:
+  bad: |
+    -- plain append, re-runs duplicate
+    insert into orders select * from staging_orders;
+  good: |
+    -- merge on the natural key: re-runs converge
+    merge into orders t using staging_orders s
+      on t.order_id = s.order_id
+    when matched then update set * when not matched then insert *;
+sources:
+  - title: Introduction to loading data
+    url: https://docs.cloud.google.com/bigquery/docs/loading-data
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: BigQuery load paths include write dispositions (append vs truncate partition) and dedupe guidance for repeatable loads
+confidence: high
+conflicts_with: []
+see_also: [model/idempotent-reexec]
+status: draft

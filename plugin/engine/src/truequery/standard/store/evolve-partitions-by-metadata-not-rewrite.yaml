@@ -1,0 +1,45 @@
+id: store/evolve-partitions-by-metadata-not-rewrite
+title: Change Iceberg partition layouts by metadata evolution, not rewrites
+domain: store
+modes: [change]
+applies_to: [iceberg]
+statement: >
+  Changes to an Iceberg table's partition spec must use partition evolution
+  (ADD/REPLACE PARTITION FIELD as a metadata operation) so old and new layouts
+  coexist; rewriting all data files into a new Hive-style directory tree is a
+  violation.
+rationale: >
+  Partition evolution is designed as a metadata-only change: existing files stay
+  valid and old partitions remain queryable, while a full rewrite burns compute,
+  doubles storage transiently, and risks data loss on failure mid-migration.
+failure_example: >
+  A team re-creates a 20 TB table to move from monthly to daily partitions with
+  a full INSERT OVERWRITE; the job fails at 80% and leaves two divergent copies
+  with no clean rollback.
+enforcement: judgment
+detection_sketch: >
+  Judgment: taught, not checked. A CREATE-then-INSERT OVERWRITE sequence is
+  only a violation when its purpose is a layout change, and purpose is not
+  in the code; the same statements are legitimate for engine migrations,
+  compaction or data fixes. Reviewers check that Iceberg partition changes
+  use ALTER TABLE ... ADD/REPLACE PARTITION FIELD. A tool may at most print
+  an advisory hint when a rewrite of an Iceberg table changes only its
+  partition spec.
+severity_suggestion: advisory
+examples:
+  bad: "CREATE TABLE events_new PARTITIONED BY (day(ts)); INSERT OVERWRITE events_new SELECT * FROM events; -- full rewrite for layout change"
+  good: "ALTER TABLE events REPLACE PARTITION FIELD month(ts) WITH day(ts); -- metadata-only evolution"
+sources:
+  - title: Iceberg — Evolution (partition evolution)
+    url: https://iceberg.apache.org/docs/latest/evolution/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Partition evolution is a metadata operation; old and new layouts coexist without rewriting files.
+  - title: Iceberg — Partitioning (hidden partitioning)
+    url: https://iceberg.apache.org/docs/latest/partitioning/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Hidden partitioning decouples queries from physical layout so layouts can change safely.
+confidence: high
+conflicts_with: []
+status: draft

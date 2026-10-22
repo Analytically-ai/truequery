@@ -1,0 +1,70 @@
+id: orch/task-timeout-execution-limit
+title: Long-running work declares an execution timeout
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+- dagster
+statement: >
+  Tasks or runs whose duration depends on external systems (extracts, bulk
+  loads, full refreshes, training) MUST declare an execution limit after
+  which they fail loudly: Airflow `execution_timeout` (or a deployment-wide
+  `[core] default_task_execution_timeout`); Dagster the `dagster/max_runtime`
+  run tag or `run_monitoring.max_runtime_seconds`, with run monitoring
+  enabled.
+rationale: >
+  Airflow's default is no execution timeout ("never timed out by default"),
+  and Dagster enforces run timeouts only when run monitoring is enabled. A
+  task hung on a locked table or a stalled connection therefore holds its
+  slot indefinitely, and the first signal is a stale dashboard. A timeout
+  converts the hang into a failure that retries and failure alerts can act
+  on.
+failure_example: >
+  A full-refresh extract hangs on a locked source table for nine hours with
+  no timeout; downstream marts miss their SLA and nobody is paged because
+  nothing failed.
+enforcement: detector
+detection_sketch: >
+  Airflow: flag operators of known long-running kinds (SQL/transfer/
+  Kubernetes/Python callables that call database or HTTP clients) with no
+  execution_timeout in the task or default_args, unless the deployment sets
+  default_task_execution_timeout (accept a config path). Dagster: flag jobs
+  without a dagster/max_runtime tag when the instance config has no
+  run_monitoring.max_runtime_seconds. False positives: short deterministic
+  transforms. For deferrable tasks, execution_timeout counts total runtime
+  across deferrals, so set it above the expected wait.
+severity_suggestion: warning
+examples:
+  bad: |
+    PythonOperator(task_id="extract", python_callable=full_dump)  # never times out by default
+  good: |
+    PythonOperator(task_id="extract", python_callable=full_dump, execution_timeout=timedelta(hours=2))
+    # Dagster: define_asset_job("nightly", tags={"dagster/max_runtime": 7200})
+sources:
+- title: Configuration Reference (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/configurations-ref.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: default_task_execution_timeout is empty by default, meaning operators are never timed out by
+    default.
+- title: Tasks (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Breaching execution_timeout raises AirflowTaskTimeout and fails the task.
+- title: Deferrable Operators & Triggers (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/deferring.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: execution_timeout counts total runtime, not individual executions between deferrals.
+- title: Run monitoring (Dagster docs)
+  url: https://dagster.io/docs/deployment/execution/run-monitoring
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: The dagster/max_runtime tag sets a per-run timeout; run_monitoring.max_runtime_seconds sets a
+    deployment-wide one; runs over the limit are marked failed when run monitoring is enabled.
+confidence: high
+conflicts_with: []
+status: draft

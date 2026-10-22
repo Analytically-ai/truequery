@@ -1,0 +1,45 @@
+id: ingest/dedupe-on-natural-key-before-append
+title: Loads declare a natural key and dedupe on it before append
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every table populated by repeated loads MUST declare a natural
+  (business) key, and each load MUST remove duplicates on that key before
+  committing. A repeatedly-loaded table with no declared key fails review.
+rationale: >
+  Upstream systems routinely redeliver: API pagination overlaps, CDC
+  replays, file re-drops. Without a declared key there is no definition of
+  "same row twice", so redelivery silently becomes duplication and every
+  COUNT and SUM downstream is wrong.
+failure_example: >
+  A connector re-syncs overlapping 7-day windows. No natural key is
+  declared, so the overlap double-counts a week's orders and the weekly
+  KPI report overstates sales by 18%.
+enforcement: judgment
+detection_sketch: >
+  Judgment: taught, not checked. Which tables are loaded repeatedly and
+  which column set is the business key are facts about the data, not the
+  code. A team that declares the key in a contract can test it at runtime
+  with dq/uniqueness-key-no-duplicates; this record teaches the habit of
+  choosing and documenting the key before the first append. Event logs
+  without a natural key document their dedupe story (e.g. an event id
+  assigned at intake) instead.
+severity_suggestion: advisory
+examples:
+  bad: |
+    create table orders_landing (order_id bigint, amount numeric);
+    -- loaded by daily append; no uniqueness anywhere
+  good: |
+    create table orders_landing (order_id bigint primary key, amount numeric);
+    -- loader dedupes staging on order_id before merge
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: SodaCL provides duplicate-count/duplicate-percent metrics as standard intake checks
+confidence: medium
+conflicts_with: []
+see_also: [dq/uniqueness-key-no-duplicates, dq/uniqueness-composite-grain]
+status: draft

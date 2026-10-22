@@ -1,0 +1,43 @@
+id: gov/erasure-path-documented
+title: Personal-data tables document an erasure path
+domain: gov
+modes: [build, assure]
+applies_to: [any, dbt]
+statement: >
+  Every table classified as holding personal data documents how a subject's
+  rows are deleted or anonymized on request, including history and
+  snapshots — or records a signed exemption where erasure is genuinely
+  impossible (for example append-only regulatory archives).
+rationale: >
+  Erasure requests arrive with legal deadlines; append-only snapshots and
+  cached marts discovered mid-request turn a routine deletion into a
+  fire-drill that misses copies and leaves the team non-compliant.
+failure_example: >
+  Deletion removes current rows but type-2 snapshots retain every prior
+  email; the follow-up audit finds the subject's data still queryable.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Join PII classification against an erasure note naming the job, query, or
+  procedure plus history handling; flag classified tables with neither a
+  path nor an exemption. Whether deletion propagates everywhere is
+  runtime. False positives: derived aggregates documented as anonymous
+  beyond re-identification.
+severity_suggestion: warning
+examples:
+  bad: "users classified PII; no documented deletion procedure; snapshots accumulate indefinitely."
+  good: "users documents erase_user(id) procedure deleting base rows, snapshot history entries, and the vendor-sync exposure, with a run log."
+sources:
+- title: Add snapshots to your DAG
+  url: https://docs.getdbt.com/docs/build/snapshots
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: snapshots accumulate row history over time, which erasure must account for
+- title: Introduction (Apache Iceberg documentation)
+  url: https://iceberg.apache.org/docs/latest/
+  publisher: Apache Software Foundation
+  accessed: 2026-10-12
+  supports: snapshot and branch history that retention and deletion procedures must cover
+confidence: medium
+conflicts_with: []
+status: draft

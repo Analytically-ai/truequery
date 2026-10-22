@@ -1,0 +1,46 @@
+id: model/jinja-macro-determinism
+title: Macros are deterministic and free of hidden runtime calls
+domain: model
+modes: [build, assure]
+applies_to: [dbt]
+statement: >
+  Macros that generate model logic must be deterministic for a given input:
+  no unseeded randomness, no wall-clock calls inside compiled predicates or
+  keys, and no queries that change result between compile and run, unless the
+  non-determinism is the documented purpose (e.g. sampling).
+rationale: >
+  Hidden volatility in macros makes identical runs produce different data or
+  different SQL per environment, breaking idempotency and making failures
+  unreproducible across dev and production.
+failure_example: >
+  A macro stamps rows with run time inside the incremental predicate; every
+  retry shifts the watermark boundary and rows are skipped or duplicated.
+enforcement: detector
+detection_sketch: >
+  Scan macro bodies for volatile calls (current timestamp, random, run_query
+  inside predicates) outside documented sampling helpers. Flag unguarded uses.
+  False positives: explicitly documented sampling or run-metadata macros.
+severity_suggestion: warning
+examples:
+  bad: |
+    {% macro recent_filter(col) %}
+    WHERE {{ col }} > CURRENT_TIMESTAMP - INTERVAL '1 day'  -- shifts every run
+    {% endmacro %}
+  good: |
+    {% macro recent_filter(col, cutoff) %}
+    WHERE {{ col }} > '{{ cutoff }}'  -- caller passes an explicit boundary
+    {% endmacro %}
+sources:
+  - title: Jinja and macros
+    url: https://docs.getdbt.com/docs/build/jinja-macros
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: how macros compile into model SQL at build time
+  - title: Idempotence in dbt
+    url: https://docs.getdbt.com/best-practices/idempotence
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: re-runnable transformations must not depend on hidden run-time state
+confidence: medium
+conflicts_with: []
+status: draft

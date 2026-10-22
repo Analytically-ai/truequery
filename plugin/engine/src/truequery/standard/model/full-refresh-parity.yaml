@@ -1,0 +1,49 @@
+id: model/full-refresh-parity
+title: Incremental logic reproduces full-refresh results
+domain: model
+modes: [build, assure]
+applies_to: [dbt, sqlmesh]
+statement: >
+  The incremental path of a model must return the same rows as a full refresh
+  over the same input: teams verify this by periodically comparing a full
+  refresh against the incremental table and treating divergence as a defect.
+rationale: >
+  Incremental filters, lookbacks, and merge keys drift from the full logic
+  over time (schema changes, late data, strategy edits), so the production
+  table quietly diverges from what the SQL claims. Parity checks catch the
+  drift before consumers notice wrong numbers.
+failure_example: >
+  A filter added to the incremental branch but not the full branch excludes
+  refunded orders only in production; finance and the ad-hoc full refresh
+  disagree for a quarter.
+enforcement: runtime
+detection_sketch: >
+  Build the model both ways over identical input in isolation and diff the
+  row sets (minus documented run-metadata columns). Flag any divergence.
+  False positives: intentionally lossy incremental retention (documented).
+severity_suggestion: error
+examples:
+  bad: |
+    SELECT ... FROM raw_events
+    {% if is_incremental() %}
+    WHERE event_type != 'refund'  -- logic differs from full refresh
+    {% endif %};
+  good: |
+    SELECT ... FROM raw_events;  -- identical logic both paths
+    {% if is_incremental() %}   -- only the watermark filter differs
+    WHERE occurred_at > (SELECT MAX(occurred_at) - INTERVAL '3 days' FROM {{ this }})
+    {% endif %};
+sources:
+  - title: Configure incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: incremental SQL must remain consistent with the full-table build
+  - title: SQLMesh overview
+    url: https://sqlmesh.readthedocs.io/en/stable/
+    publisher: Tobiko Data
+    accessed: 2026-10-12
+    supports: virtual environments for previewing change impact before deploy
+confidence: high
+conflicts_with: []
+status: draft

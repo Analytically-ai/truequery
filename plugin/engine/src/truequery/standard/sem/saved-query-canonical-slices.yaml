@@ -1,0 +1,56 @@
+id: sem/saved-query-canonical-slices
+title: Top metrics ship canonical saved queries for standard slices
+domain: sem
+modes: [build, explore]
+applies_to: [dbt]
+statement: >
+  Each tier-1 metric (the handful the business actually runs on) has at least
+  one saved query pinning its standard slice — default dimensions, standard
+  time grain, and common filters — so consumers start from the blessed
+  formulation instead of rebuilding it per dashboard.
+rationale: >
+  Without canonical slices, ten dashboards slice "revenue by month" ten
+  slightly different ways (different status filters, different month
+  definitions) and the reconciliation tax is permanent. Saved queries make the
+  standard answer cheaper to reuse than to reinvent.
+failure_example: >
+  Three dashboards show three monthly revenue figures differing by 1-2% each;
+  investigation finds one excludes refunds, one uses UTC months, one drops
+  internal orders — all choices the saved query would have fixed.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the team's tier-1 metric list in a config or
+  contract file. With it, flag listed metrics that no saved query
+  references. Which metrics are tier-1 is a team decision, so nothing is
+  checked without the list. This is a dbt Semantic Layer convention the
+  community debates; advisory only, not enforced by the checker. False positives:
+  brand-new metrics not yet tier-1; the list, not the checker, decides
+  coverage.
+severity_suggestion: advisory
+examples:
+  bad: |-
+    metrics: [{ name: revenue, ... }]
+    # no saved query: every dashboard hand-rolls "revenue by month"
+  good: |-
+    saved_queries:
+      - name: revenue_by_month
+        query_params:
+          metrics: [revenue]
+          group_by: [TimeDimension('ordered_on', 'month')]
+          where: "{{ Dimension('order_status') }} != 'cancelled'"
+        description: Canonical monthly revenue; start here.
+sources:
+  - title: Saved queries
+    url: https://docs.getdbt.com/docs/build/saved-queries
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Saved queries pin reusable metric queries with dimensions and filters
+  - title: Build your metrics
+    url: https://docs.getdbt.com/docs/build/build-metrics-intro
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Semantic Layer serves consistent metrics to downstream tools
+confidence: medium
+conflicts_with: []
+status: draft

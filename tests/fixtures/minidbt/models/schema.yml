@@ -1,0 +1,19 @@
+version: 2
+models:
+  - name: bad
+    description: fixture model
+    columns:
+      - name: id
+        tests: [unique, not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              values: [paid, void]
+  - name: combo
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [a, b]
+  - name: legacy
+    columns:
+      - name: id
+        data_tests: [unique, not_null]

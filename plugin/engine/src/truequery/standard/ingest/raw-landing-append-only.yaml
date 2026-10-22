@@ -1,0 +1,48 @@
+id: ingest/raw-landing-append-only
+title: Raw landing zones are append-only and never updated in place
+domain: ingest
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Tables or paths designated as raw landing MUST be append-only: no
+  UPDATE, DELETE, or in-place overwrite of landed records. Corrections
+  arrive as new records (new files, new CDC versions); change capture over
+  the landing area uses offsets/streams, never mutation. Any in-place
+  write to a landing object fails review.
+rationale: >
+  Mutating the landing zone destroys the audit trail: replays become
+  unreproducible, late-arriving corrections cannot be distinguished from
+  originals, and forensic questions ("what did we know on Oct 1?") become
+  unanswerable. Immutability makes every downstream state re-derivable.
+failure_example: >
+  A backfill script UPDATEs landed rows to fix a mapping error. The next
+  CDC-driven incremental model double-applies the change (stream offset
+  plus mutated base), and the audit cannot reconstruct either version.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Requires the zone contract to mark landing objects immutable; a detector
+  flags UPDATE/DELETE/overwrite statements targeting them. Consume change
+  via stream/offset primitives. False positives: retention-policy deletes
+  (GDPR/data-retention purges), which must be declared carve-outs.
+severity_suggestion: error
+examples:
+  bad: |
+    update landing.orders set status = 'fixed' where day = '2026-10-01';
+  good: |
+    -- corrections land as new records; consumers read the change stream
+    create stream landing_orders_changes on table landing.orders;
+sources:
+  - title: Introduction to streams
+    url: https://docs.snowflake.com/en/user-guide/streams-intro
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Snowflake streams capture table change deltas so consumers read changes without mutating the base table
+  - title: Introduction - Apache Iceberg
+    url: https://iceberg.apache.org/docs/latest/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Iceberg tables provide snapshot-based history so prior states remain queryable instead of overwritten
+confidence: high
+conflicts_with: []
+status: draft

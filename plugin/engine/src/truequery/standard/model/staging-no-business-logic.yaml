@@ -1,0 +1,44 @@
+id: model/staging-no-business-logic
+title: Staging models mirror sources with renames and casts only
+domain: model
+modes: [build, change]
+applies_to: [dbt, any]
+statement: >
+  Staging models must map one-to-one to a single source with only light
+  preparation (renaming, type casting, basic cleanup); joins, aggregations,
+  and business rules belong in intermediate or mart layers.
+rationale: >
+  Business logic buried in staging is reused blindly by every downstream
+  model, so one wrong filter or join corrupts the whole project at once.
+  Thin staging keeps the blast radius of a fix small and lineage readable.
+failure_example: >
+  A staging model filters to active users only; months later the churn mart
+  built on it cannot see churned users and reports impossibly low churn.
+enforcement: detector
+detection_sketch: >
+  Heuristic detector, advisory only, and a dbt-community convention rather
+  than a correctness rule. Code-only part: in models under the staging layer
+  (path or tag), flag joins, GROUP BY aggregations and WHERE predicates on
+  business-status columns. What counts as "business logic" is judgment;
+  source-specific dedupe of a known dirty feed is legitimate when documented
+  inline. Not enforced by the checker.
+severity_suggestion: advisory
+examples:
+  bad: |
+    -- stg_orders.sql
+    SELECT o.order_id, SUM(l.amount) AS total   -- aggregation in staging
+    FROM raw_orders o JOIN raw_lines l ON l.order_id = o.order_id
+    WHERE o.status = 'complete' GROUP BY o.order_id;
+  good: |
+    -- stg_orders.sql
+    SELECT id AS order_id, status, total_cents / 100.0 AS total
+    FROM raw_orders;
+sources:
+  - title: How we structure our dbt projects
+    url: https://docs.getdbt.com/best-practices/how-we-structure/1-guide-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: staging as atomic building blocks with marts holding business definitions
+confidence: high
+conflicts_with: []
+status: draft

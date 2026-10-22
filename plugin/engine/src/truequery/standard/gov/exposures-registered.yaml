@@ -1,0 +1,73 @@
+id: gov/exposures-registered
+title: Downstream consumers are registered as exposures
+domain: gov
+modes: [build, change, assure]
+applies_to: [dbt]
+statement: >
+  Every production dashboard, report, scheduled export, reverse-ETL sync,
+  notebook, or ML consumer of a governed model or governed metric is
+  registered as a dbt exposure (or an equivalent consumer registry entry)
+  whose depends_on names the models, sources or metrics it reads, with an
+  owner. Impact analysis for schema changes, metric changes, access
+  revocations and deletions can then enumerate every consumer before the
+  change ships. Ad-hoc exploration needs no registration until it becomes
+  recurring.
+rationale: >
+  Unregistered consumers are invisible stakeholders. A renamed or reshaped
+  mart silently breaks dashboards owned by other teams; a metric fix never
+  reaches a consumer nobody knew about; and revoking a column or erasing a
+  user cannot be verified complete while privacy-relevant data keeps
+  flowing to a destination nobody checked. An exposure graph turns all of
+  these into a checkable dependency before merge.
+failure_example: >
+  A team renames orders.status to orders.order_status; three dashboards
+  built on the old column fail on Monday morning because no exposure linked
+  them to the model. Separately, the email column is removed from
+  marts_users, but an unregistered vendor sync keeps exporting an old
+  snapshot table with emails for another quarter.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the team's inventory of production consumers
+  (dashboard ids, syncs, exports). Check: every inventoried consumer
+  appears in an exposure whose depends_on is non-empty and resolves to
+  existing models, sources or metrics, and each exposure names an owner.
+  Without the inventory the checker cannot see shadow consumption and must
+  say so rather than pass. Whether a consumer reimplements a governed
+  metric instead of referencing it is covered (as judgment) by
+  sem/single-governed-metric-definition. False positives: draft dashboards
+  with no production audience, if the production inventory is
+  over-declared.
+severity_suggestion: advisory
+examples:
+  bad: |
+    # Nightly vendor sync and the "Weekly revenue" dashboard read
+    # mart.orders and marts_users; no exposure file exists.
+  good: |
+    exposures:
+      - name: weekly_revenue_dashboard
+        type: dashboard
+        owner: { name: exec-reporting }
+        depends_on:
+          - ref('orders')
+          - metric('revenue')
+      - name: vendor_sync
+        type: application
+        owner: { name: growth-eng }
+        depends_on:
+          - ref('marts_users')
+sources:
+- title: Add Exposures to your DAG
+  url: https://docs.getdbt.com/docs/build/exposures
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Exposures declare downstream uses (dashboards, notebooks, applications, ML) and their upstream dependencies for lineage and impact analysis.
+- title: Build your metrics
+  url: https://docs.getdbt.com/docs/build/build-metrics-intro
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Semantic Layer APIs serve metrics to downstream tools so metric logic stays central.
+confidence: medium
+conflicts_with: []
+see_also: [sem/single-governed-metric-definition, ops/model-versioning-breaking-changes]
+status: draft

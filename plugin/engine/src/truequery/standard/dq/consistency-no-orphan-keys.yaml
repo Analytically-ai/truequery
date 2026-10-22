@@ -1,0 +1,49 @@
+id: dq/consistency-no-orphan-keys
+title: Foreign keys are checked for orphans with an anti-join on every build
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each declared foreign-key relationship carries a referential-integrity
+  check (child rows with no matching parent fail), and orphan count must be
+  zero unless a documented exception with an expiry exists.
+rationale: >
+  Orphan keys silently annihilate rows in inner joins: facts referencing
+  missing dimensions disappear from every mart built on the join, so revenue
+  and counts are wrong with no error anywhere in the logs.
+failure_example: >
+  Deleted dimension members leave 30k orphan order lines; the sales mart
+  inner-joins them away and the company under-reports quarterly bookings.
+enforcement: runtime
+detection_sketch: >
+  Execute the anti-join (child LEFT JOIN parent WHERE parent key IS NULL);
+  any row fails. Needs both tables readable in one run. False positives:
+  late-arriving dimensions during intraday loads until the check runs after
+  the dimension lands or allows a documented landing window.
+severity_suggestion: error
+examples:
+  bad: |-
+    SELECT COUNT(*) FROM order_lines o
+    JOIN dim_customers c ON o.customer_id = c.customer_id;
+    -- orphans vanish silently into the inner join
+  good: |-
+    SELECT o.* FROM order_lines o
+    LEFT JOIN dim_customers c ON o.customer_id = c.customer_id
+    WHERE c.customer_id IS NULL;
+    -- zero rows required; any row fails the build
+sources:
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: relationships is a built-in dbt test asserting child values
+      exist in the parent model for referential integrity
+  - title: Reference checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/reference.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: SodaCL reference checks validate that column values exist in a
+      column of another dataset, collecting failed-row samples
+confidence: high
+conflicts_with: []
+status: draft

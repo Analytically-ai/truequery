@@ -1,0 +1,83 @@
+id: py/deterministic-model-outputs
+title: Python models and transforms give the same output for the same input
+domain: py
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Python executed as a data model or pipeline transform (dbt Python models,
+  SQLMesh Python models, Dagster assets, Airflow task callables) must be
+  deterministic for fixed inputs: random sampling/splitting uses an
+  explicitly seeded generator created inside the run; any order-sensitive
+  step (drop_duplicates, keep first/last, head, cumulative ops) is preceded
+  by a sort on a key that fully orders the rows; no output value or row
+  order depends on wall-clock reads (now(), today(), time.time), uuid4,
+  or set/dict iteration order of unordered data. Unavoidable
+  nondeterminism must be declared and excluded from tests.
+rationale: >
+  Reruns and retries must reproduce the same result: SQLMesh defines
+  idempotency as the same inputs producing the same outputs, and Airflow
+  says now() should never be used inside a task for critical computation.
+  An unseeded draw or an unordered "keep first" gives a different answer on
+  every run, so data tests flake, plan diffs show phantom changes, and a
+  retried task writes different values than the attempt it replaces.
+failure_example: >
+  A dbt Python model deduplicates events with drop_duplicates on an
+  unsorted frame; the surviving row changes from run to run and the mart
+  flickers between values. A second model draws a holdout split with
+  random.sample and no seed, so two retries of the same run write different
+  feature tables.
+enforcement: detector
+detection_sketch: >
+  Inside model/asset/task bodies flag: random.* module functions and
+  np.random.* legacy calls without a prior seed, default_rng()/Random()
+  with no seed argument; datetime.now/utcnow/today, time.time, uuid4 whose
+  values flow into returned/written frames; drop_duplicates(keep=...),
+  groupby().first()/last(), head()/tail() not preceded by sort_values in the
+  same chain or function; iteration over set(...) feeding output rows.
+  False positives: documented arrival-time stamping in ingestion, seeded
+  generators passed in through config, frames already sorted upstream
+  (allow an explicit marker).
+severity_suggestion: warning
+examples:
+  bad: |
+    def model(dbt, session):
+        df = dbt.ref("stg_events").to_pandas()
+        return df.drop_duplicates(subset=["event_id"])  # unsorted: winner varies
+  good: |
+    def model(dbt, session):
+        df = dbt.ref("stg_events").to_pandas()
+        df = df.sort_values(["event_id", "occurred_at", "ingest_id"])
+        df = df.drop_duplicates(subset=["event_id"], keep="last")
+        rng = np.random.default_rng(seed=42)  # seeded inside the run, not module-global state
+        return df.sample(n=1000, random_state=rng)
+sources:
+- title: Glossary, Idempotency (SQLMesh docs)
+  url: https://sqlmesh.readthedocs.io/en/stable/concepts/glossary/
+  publisher: Tobiko Data (SQLMesh)
+  accessed: '2026-10-11'
+  supports: Idempotency is the property that the same inputs produce the same outputs however many times
+    the operation runs.
+- title: Best Practices (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Python now() should never be used inside a task for critical computation; tasks should not read
+    the latest available data because inputs may change between re-runs.
+- title: Random Generator (NumPy documentation)
+  url: https://numpy.org/doc/stable/reference/random/generator.html
+  publisher: NumPy
+  accessed: '2026-10-11'
+  supports: default_rng with no seed pulls fresh OS entropy; passing a seed gives reproducible results.
+    Generator streams are not guaranteed identical across NumPy versions, so pin NumPy too.
+- title: pandas.DataFrame.drop_duplicates (pandas documentation)
+  url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.drop_duplicates.html
+  publisher: pandas
+  accessed: '2026-10-11'
+  supports: keep='first'/'last' retains the first/last occurrence, so which row survives depends on row
+    order.
+confidence: medium
+conflicts_with: []
+see_also:
+- model/jinja-macro-determinism
+- py/pin-pipeline-dependencies
+status: draft

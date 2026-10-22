@@ -1,0 +1,55 @@
+id: consume/explore-question-metric-grain-stated
+title: State the question, metric definition and grain before querying
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  Before the first result-producing query, the analysis records in writing
+  (notebook header, ticket, or answer draft): (1) the question as one
+  sentence that a number or comparison can answer; (2) each metric used,
+  with its numerator, its denominator if it is a ratio, and the inclusion
+  and exclusion rules for both; (3) the grain of the answer (one row per
+  what, e.g. per customer per week); and (4) the population and time window
+  in scope. An analysis follows this practice only if all four items are
+  present and the reported result matches the stated grain and window.
+rationale: >
+  Analysis that starts from the data rather than a question tends to wander,
+  and ratios with unstated numerators and denominators are a main source of
+  two analysts reporting different numbers for the same words. Writing the
+  definition first also gives the reviewer something to check the SQL
+  against.
+failure_example: >
+  Asked for "conversion rate last month", an analyst reports 4.1 percent as
+  orders over sessions; the stakeholder meant paying customers over sign-ups
+  and had a 9 percent figure in mind. Two days are spent reconciling numbers
+  that were never measuring the same thing.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    -- notebook cell 1
+    SELECT * FROM mart_orders LIMIT 100
+    -- ...forty cells later: "conversion is 4.1%"
+  good: |
+    -- Question: did September conversion fall versus August?
+    -- Metric: conversion = distinct customers with >=1 paid order
+    --         / distinct customers who signed up, same calendar month
+    --         (excludes test accounts and internal employees)
+    -- Grain: one row per signup month; Window: 2026-08-01 to 2026-09-30
+    -- Population: self-serve signups, all regions
+sources:
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Says data analysis starts with questions, not data or a technique, and that ratios need clearly defined numerators and denominators.
+  - title: The AQuA Book
+    url: https://www.gov.uk/guidance/the-aqua-book
+    publisher: UK Government Analysis Function
+    accessed: 2026-10-11
+    supports: Scoping step establishes a common, written understanding of the question, context, boundaries and constraints before analysis is done.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [consume/explore-reuse-governed-metric, consume/explore-caveats-and-unchecked-stated]

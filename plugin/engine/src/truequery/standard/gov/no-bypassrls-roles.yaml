@@ -1,0 +1,39 @@
+id: gov/no-bypassrls-roles
+title: Application roles cannot bypass row-level security
+domain: gov
+modes: [build, change, assure]
+applies_to: [postgres]
+statement: >
+  No application, analyst, or service role is created with or granted the
+  BYPASSRLS attribute, and table owners subject to policy review do not
+  rely on the owner exemption to read rows other roles cannot see.
+rationale: >
+  A single BYPASSRLS role anywhere in the application path silently voids
+  every row filter: tenant isolation and region restrictions stop applying
+  for that connection while every audit still claims policies are enabled.
+failure_example: >
+  ETL service role created with BYPASSRLS for convenience; a bug in its
+  export query ships one tenant's PII into another tenant's extract.
+enforcement: detector
+detection_sketch: >
+  Scan DDL for BYPASSRLS in CREATE/ALTER ROLE and for GRANT of bypassing
+  predefined roles. False positives: locked-down admin roles used only for
+  policy maintenance; allowlist named break-glass roles with a review date.
+severity_suggestion: error
+examples:
+  bad: "CREATE ROLE etl LOGIN BYPASSRLS;"
+  good: "CREATE ROLE etl LOGIN; -- row policies apply to every app connection"
+sources:
+- title: Row Security Policies (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/ddl-rowsecurity.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: table owners are typically exempt from policies, so bypass-class roles need control
+- title: Role Membership (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/role-membership.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: privilege management through group roles and membership
+confidence: medium
+conflicts_with: []
+status: draft

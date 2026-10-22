@@ -1,0 +1,42 @@
+id: ingest/reference-sources-not-raw-tables
+title: Models reference declared sources, never raw tables directly
+domain: ingest
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  In dbt projects, every read of raw landing data MUST go through a
+  declared source reference (source observations), never a hard-coded
+  database.schema.table name. Any raw table name appearing in model SQL
+  that is not backed by a source declaration fails review.
+rationale: >
+  Hard-coded raw table names bypass the source boundary contract: freshness
+  checks, lineage, and renames all silently stop applying. A renamed
+  upstream table then breaks models at runtime instead of being caught as
+  a contract change at the boundary.
+failure_example: >
+  A model selects from analytics_raw.shopify_orders directly. The platform
+  team renames the schema to landing_shopify; freshness checks on the
+  declared source stay green (nothing reads it) while the model fails in
+  production.
+enforcement: detector
+detection_sketch: >
+  Scan model SQL for FROM/JOIN targets matching known raw schemas that lack
+  a corresponding source declaration or source() call. False positives:
+  seed tables and snapshot outputs, which are project-owned and correctly
+  referenced with ref().
+severity_suggestion: warning
+examples:
+  bad: |
+    select * from analytics_raw.shopify_orders
+  good: |
+    select * from {{ source('shopify', 'orders') }}
+sources:
+  - title: Add sources to your DAG
+    url: https://docs.getdbt.com/docs/build/sources
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt sources define the lineage and testability boundary for raw data consumed via source()
+confidence: high
+conflicts_with: []
+see_also: [gov/lineage-from-declared-sources]
+status: draft

@@ -1,0 +1,42 @@
+id: ingest/pin-connector-and-schema-versions
+title: Connector and event-schema versions are pinned and reviewed on change
+domain: ingest
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Every intake MUST pin its connector version and, for event/CDC intake,
+  the schema-registry subject version it decodes against. Version bumps
+  MUST go through review like code changes. Floating "latest" connectors
+  in production fail review.
+rationale: >
+  Connectors and event schemas change wire behavior: a connector upgrade
+  can rename fields or alter snapshot locking; a schema-registry evolution
+  can break every downstream decoder at once. Unpinned intake means the
+  pipeline's most critical dependency upgrades itself without review.
+failure_example: >
+  A CDC connector auto-upgrades and changes its decimal serialization.
+  Amounts decode off by 100x for a day before the change is traced to the
+  connector, not the source.
+enforcement: detector
+detection_sketch: >
+  Flag connector configs with floating versions (latest, *, unpinned
+  image tags) and event consumers with no schema-version pin. False
+  positives: managed connectors where the vendor controls versioning; the
+  contract must then name the vendor channel and its change notices.
+severity_suggestion: warning
+examples:
+  bad: |
+    image: debezium/connect:latest
+    # schema subject resolved fresh on every restart
+  good: |
+    image: debezium/connect:3.7.0
+    schema_version: inventory.orders-value v14 (reviewed 2026-09-30)
+sources:
+  - title: Debezium Architecture
+    url: https://debezium.io/documentation/reference/stable/architecture.html
+    publisher: Debezium
+    accessed: 2026-10-12
+    supports: Debezium versions connectors per database with evolving event envelopes across releases
+confidence: medium
+conflicts_with: []
+status: draft

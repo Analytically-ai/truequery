@@ -1,0 +1,52 @@
+id: consume/explore-reuse-governed-metric
+title: Ad-hoc analysis reuses governed metric definitions instead of re-deriving them
+domain: consume
+modes: [explore]
+applies_to: [any, dbt]
+statement: >
+  When a metric named in the question has a governed definition (semantic
+  layer metric, certified mart column, or registered KPI), the analysis
+  computes it from that definition or reports the governed value alongside
+  its own. If the analysis deliberately uses a different formula, the answer
+  names the governed metric, states how the custom formula differs, and
+  labels the result with a name that is not the governed metric's name.
+rationale: >
+  Re-deriving a known metric in a notebook is the quickest way to produce a
+  number that disagrees with the dashboard the stakeholder already trusts.
+  Starting from the standard metric also catches problems early: if the
+  standard metric moves unexpectedly, the custom analysis built on top of it
+  is suspect too.
+failure_example: >
+  An analyst computes "active users" as distinct user_ids with any event in
+  30 days, while the governed metric excludes background sync events. The
+  ad-hoc answer is 18 percent higher than the board deck and is circulated
+  under the same name.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    -- "active users" re-derived from raw events
+    SELECT COUNT(DISTINCT user_id) FROM raw_events
+    WHERE event_ts >= CURRENT_DATE - 30
+  good: |
+    -- governed metric via the semantic layer
+    -- dbt sl query --metrics active_users --group-by metric_time__month
+    -- custom variant, labelled as such:
+    -- "active_users_incl_sync (differs from governed active_users:
+    --  includes background sync events)"
+sources:
+  - title: Build your metrics
+    url: https://docs.getdbt.com/docs/build/build-metrics-intro
+    publisher: dbt Labs
+    accessed: 2026-10-11
+    supports: MetricFlow centrally defines metrics to avoid duplicative coding and guarantee consistency for data consumers who query them downstream.
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Under "standard first, custom second", advises checking standard metrics before custom ones, even when the standard metrics are expected to change.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sem/single-governed-metric-definition, consume/explore-question-metric-grain-stated]

@@ -1,0 +1,48 @@
+id: dq/completeness-table-not-empty
+title: Every produced table has a non-empty row-count floor check
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each table a pipeline writes carries a check that its row count is greater
+  than zero (or above a declared minimum) after every write; an empty result
+  fails the build.
+rationale: >
+  A silently empty table is the cheapest catastrophic failure: a broken
+  filter or an empty source produces a valid schema with zero rows, and every
+  downstream consumer reports plausible-looking zeros instead of erroring.
+failure_example: >
+  A WHERE clause typo (event_date > CURRENT_DATE on a historical load) writes
+  an empty daily partition; dashboards show zero revenue for the day until
+  someone notices by eye.
+enforcement: runtime
+detection_sketch: >
+  Execute SELECT COUNT(*) per produced table after the write and compare
+  against the floor; needs the warehouse or the produced artifact, so it
+  cannot be decided from code alone. False positives: legitimately empty
+  edge partitions (a new region with no sales yet) until the floor is scoped
+  per partition.
+severity_suggestion: error
+examples:
+  bad: |-
+    -- no volume assertion; empty output deploys cleanly
+    CREATE TABLE mart_daily AS SELECT * FROM staging WHERE 1 = 0;
+  good: |-
+    checks for mart_daily:
+      - row_count > 0
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: row_count compared against a threshold is the canonical
+      non-empty example in the SodaCL checks reference
+  - title: Introduction to GX Core
+    url: https://docs.greatexpectations.io/docs/core/introduction/
+    publisher: Great Expectations
+    accessed: 2026-10-12
+    supports: GX Core is a Python validation library whose expectations assert
+      properties of batch data on each run
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,66 @@
+id: orch/partitioned-assets-windowing
+title: Large time-ranged datasets are partitioned so fixes reprocess only a window
+domain: orch
+modes:
+- build
+- change
+applies_to:
+- dagster
+- airflow
+statement: >
+  A large dataset that is built from time-ranged (or key-ranged) inputs
+  SHOULD be modeled so that one window can be reprocessed on its own:
+  Dagster partitioned assets (e.g. DailyPartitionsDefinition, code reading
+  context.partition_key or the partition time window), or Airflow tasks that
+  read and write only their run's data interval. A fix to one week then
+  reprocesses that week, not the full history. Whether a backfill runs one
+  run per partition or a single run over a range is a separate choice;
+  both are fine.
+rationale: >
+  Dagster describes partitioning as the way to manage large datasets
+  incrementally and launches a run per selected partition; Airflow's best
+  practices ask tasks to read and write a specific partition keyed by the
+  data interval. An unpartitioned build couples every correction to a
+  full-history rebuild, which is expensive enough that fixes get postponed.
+failure_example: >
+  A three-year orders table is rebuilt end-to-end for a one-week source fix,
+  scanning the full table and occupying the warehouse for hours.
+enforcement: detector
+detection_sketch: >
+  Weak heuristic, advisory only. Dagster: flag @asset functions whose body
+  filters on date columns or dated paths (WHERE ... date, f-strings with
+  dates) but which have no partitions_def. Airflow: flag tasks writing to a
+  target with no reference to data_interval_start/end, ds, or logical_date
+  in their SQL or arguments. False positives: small dimensions where full
+  rebuild is cheaper than partition bookkeeping; snapshot-style tables.
+severity_suggestion: advisory
+examples:
+  bad: |
+    @asset
+    def orders(): ...  # full-history rebuild is the only option
+  good: |
+    @asset(partitions_def=DailyPartitionsDefinition(start_date="2024-01-01"))
+    def orders(context):
+        day = context.partition_key  # reprocess a single day
+sources:
+- title: Partitioning assets (Dagster docs)
+  url: https://dagster.io/docs/guides/build/partitions-and-backfills/partitioning-assets
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Partitioning manages large datasets and enables incremental processing; materializing selected
+    partitions launches a run per partition; DailyPartitionsDefinition and context.partition_key.
+- title: Backfilling data (Dagster docs)
+  url: https://dagster.io/docs/guides/build/partitions-and-backfills/backfilling-data
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Backfills default to one run per partition, and a single_run backfill policy can cover a range
+    in one run.
+- title: Best Practices (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Tasks should read and write a specific partition, e.g. keyed by data_interval_start, rather
+    than the latest data.
+confidence: medium
+conflicts_with: []
+status: draft

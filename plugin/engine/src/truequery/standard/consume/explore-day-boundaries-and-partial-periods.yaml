@@ -1,0 +1,51 @@
+id: consume/explore-day-boundaries-and-partial-periods
+title: Day-level answers state their time zone and exclude or label partial periods
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  An answer reported at day, week, or month grain states the time zone used
+  to assign timestamps to periods, and that zone matches the one the
+  question's audience reports in (or the difference is called out). The
+  query converts timestamps to that zone explicitly before truncating. Any
+  period that is not complete at query time (including the current day,
+  week, or month) is excluded with a closed upper bound, or is shown and
+  labelled as partial.
+rationale: >
+  Warehouses default to UTC or to the session's time zone, so the same
+  query can assign late-evening events to different days depending on where
+  it runs; a peak day can split across two dates. Including the current,
+  incomplete period makes every trend appear to end in a drop.
+failure_example: >
+  A daily orders chart built in UTC shows Black Friday split across two
+  days for a US-reporting business, and its last bar (today, 10 hours in)
+  shows a 60 percent decline that the stakeholder escalates.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT DATE(created_at) AS day, COUNT(*) FROM orders
+    WHERE created_at >= CURRENT_DATE - 14
+    GROUP BY 1
+  good: |
+    -- Days in America/New_York; last complete day is 2026-10-10
+    SELECT DATE(created_at, 'America/New_York') AS day, COUNT(*) FROM orders
+    WHERE created_at >= TIMESTAMP('2026-09-27', 'America/New_York')
+      AND created_at <  TIMESTAMP('2026-10-11', 'America/New_York')   -- closed: today excluded
+    GROUP BY 1
+sources:
+  - title: Date functions (GoogleSQL)
+    url: https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/date_functions
+    publisher: Google Cloud
+    accessed: 2026-10-11
+    supports: CURRENT_DATE and DATE(timestamp) use UTC when no time zone argument is given, so the zone determines which date a timestamp falls on.
+  - title: Date/Time Types
+    url: https://www.postgresql.org/docs/current/datatype-datetime.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-11
+    supports: timestamptz values are stored in UTC and converted to the session TimeZone for display and for inputs without an explicit zone; AT TIME ZONE selects another zone.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [consume/explicit-timezone-consumers, consume/explore-freshness-and-coverage-checked]

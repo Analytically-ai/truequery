@@ -1,0 +1,51 @@
+id: sem/time-dimension-standardized
+title: Time dimensions use one canonical date column and timezone per grain
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each semantic model exposes a declared primary time dimension per usable
+  grain (day, week, month), all derived from one canonical event timestamp in
+  one declared timezone, and metrics aggregate over these dimensions rather
+  than ad-hoc date casts.
+rationale: >
+  Mixed timezones and competing date columns split single days across two
+  reporting days: UTC-midnight vs Pacific-midnight cutoffs move up to 8% of
+  events between days and make day-over-day deltas meaningless.
+failure_example: >
+  Orders timestamped in UTC grouped by DATE(ts) while ad spend grouped by
+  Pacific date shifts New Year's Eve revenue into the wrong year for one
+  source, and annual growth misses by a full day of holiday sales.
+enforcement: detector
+detection_sketch: >
+  Flag models with multiple candidate time dimensions at the same grain from
+  different base columns, and flag date casts in metric SQL that bypass the
+  declared time dimension. Check a single timezone declaration per project.
+  False positives: legitimate dual time perspectives (event time vs
+  processing time) — both declared with distinct names and documented use.
+severity_suggestion: warning
+examples:
+  bad: |-
+    SELECT DATE(created_at) AS day, SUM(total) FROM orders GROUP BY 1        -- UTC
+    SELECT DATE(created_at_pt) AS day, SUM(spend) FROM ad_spend GROUP BY 1  -- Pacific
+  good: |-
+    dimensions:
+      - name: ordered_on
+        type: time
+        type_params: { time_granularity: day }
+        expr: CONVERT_TZ(created_at_utc, 'America/Los_Angeles')
+        # declared primary time dimension; all daily metrics use it
+sources:
+  - title: Dimensions
+    url: https://docs.getdbt.com/docs/build/dimensions
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Time dimensions with declared granularity anchor metric time queries
+  - title: MetricFlow time spine
+    url: https://docs.getdbt.com/docs/build/metricflow-time-spine
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Time spine joins require consistent time granularity
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,40 @@
+id: gov/description-coverage-for-shared-models
+title: Shared and contracted models are documented in the catalog
+domain: gov
+modes: [build, assure]
+applies_to: [dbt, any]
+statement: >
+  Every public, contracted, or exposure-facing model and each of its columns
+  carries a human description in the catalog (a reviewer can tell what a
+  column means and whether it is sensitive without reading SQL).
+rationale: >
+  Undocumented shared models force every consumer to guess semantics;
+  misread columns produce wrong numbers at scale, and sensitivity guesses
+  miss PII that a one-line description would have flagged.
+failure_example: >
+  Column value added without description; two teams interpret it as dollars
+  and cents respectively, and leadership reports both numbers.
+enforcement: detector
+detection_sketch: >
+  Check catalog/schema metadata for missing model and column descriptions
+  on shared models; fully checkable from code. Cannot judge description
+  quality (judgment). False positives: internal staging models, which need
+  descriptions only when promoted to shared.
+severity_suggestion: advisory
+examples:
+  bad: "Public marts_orders ships with five undescribed columns including val and flag2."
+  good: "marts_orders documents every column, e.g. total_cents: charge amount in cents, tax inclusive."
+sources:
+- title: About documentation
+  url: https://docs.getdbt.com/docs/build/documentation
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: generated documentation and catalog from model and column descriptions
+- title: Data Mesh Principles and Logical Architecture
+  url: https://martinfowler.com/articles/data-mesh-principles.html
+  publisher: martinfowler.com (Zhamak Dehghani)
+  accessed: 2026-10-12
+  supports: data-as-a-product expectations including discoverability and documentation
+confidence: high
+conflicts_with: []
+status: draft

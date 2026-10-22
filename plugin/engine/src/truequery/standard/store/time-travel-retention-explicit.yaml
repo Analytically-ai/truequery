@@ -1,0 +1,46 @@
+id: store/time-travel-retention-explicit
+title: Declare an explicit time-travel and retention window per table class
+domain: store
+modes: [build, assure]
+applies_to: [snowflake, bigquery, databricks, delta, iceberg]
+statement: >
+  Every production table (or its database/schema default) must declare an
+  explicit historical window — Snowflake DATA_RETENTION_TIME_IN_DAYS, BigQuery
+  table history expectations, Delta log/VACUUM retention, Iceberg
+  snapshot-retention settings — matched to its recovery class (e.g. finance ≥ 30
+  days where edition allows); relying on silent platform defaults is a violation.
+rationale: >
+  Defaults are short (Snowflake standard 1 day, Delta VACUUM default 7 days,
+  BigQuery travel window 7 days) and differ per platform; a team that assumes
+  "we can always go back a month" discovers after an incident that history is
+  already gone, while over-long retention silently multiplies storage cost.
+failure_example: >
+  A finance table on Snowflake Standard keeps the 1-day default; a Friday error
+  found on Monday is past recovery and requires a full source reload under audit
+  pressure.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Read declared retention per table/class from the contract file and compare
+  against the DDL/ALTER properties actually present; flag tables with no explicit
+  setting. Pure static check cannot see account-level defaults, so absence of a
+  declaration is the violation — never claim the effective window without the
+  warehouse. False positives: ephemeral tables covered by the transient-table rule.
+severity_suggestion: warning
+examples:
+  bad: "CREATE TABLE finance.ledger (...); -- no retention declared, default applies"
+  good: "CREATE TABLE finance.ledger (...) DATA_RETENTION_TIME_IN_DAYS = 30;"
+sources:
+  - title: Snowflake — Understanding and using Time Travel
+    url: https://docs.snowflake.com/en/user-guide/data-time-travel
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Time Travel recovery is bounded by the configured retention period; the default is short and edition-dependent.
+  - title: BigQuery — Data retention with time travel and fail-safe
+    url: https://docs.cloud.google.com/bigquery/docs/time-travel
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: BigQuery history is available only inside a bounded retention window that teams must plan around.
+confidence: high
+conflicts_with: []
+status: draft

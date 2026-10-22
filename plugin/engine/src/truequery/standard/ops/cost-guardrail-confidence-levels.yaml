@@ -1,0 +1,39 @@
+id: ops/cost-guardrail-confidence-levels
+title: Present cost guardrails honestly by warehouse capability, never as uniform blocks
+domain: ops
+modes: [assure]
+applies_to: [bigquery, snowflake]
+statement: >
+  Cost controls must reflect what each warehouse can actually know
+  pre-execution: hard-block thresholds are allowed only where exact
+  pre-execution pricing exists (BigQuery dry-run dollars); everywhere
+  else guardrails must be warn-only estimates until calibrated.
+rationale: >
+  A uniform "cost guardrail" abstraction lies: it hard-blocks where it
+  cannot measure and waves through where it should warn. False blocks
+  train teams to disable the guardrail; false passes train them to
+  ignore it. Both end with the surprise bill.
+failure_example: >
+  A generic guardrail claims to cap Snowflake spend pre-execution using
+  an uncalibrated heuristic. It blocks a cheap incremental run, the team
+  disables it globally, and the next unpartitioned backfill bills freely.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: One threshold labeled "max cost $50" applied identically on BigQuery and Snowflake.
+  good: BigQuery job hard-blocked above its dry-run dollar estimate; Snowflake job warns on estimated scan footprint with calibration status shown.
+sources:
+- title: Run a query (BigQuery documentation)
+  url: https://docs.cloud.google.com/bigquery/docs/running-queries
+  publisher: Google Cloud
+  accessed: 2026-10-12
+  supports: Dry runs give exact pre-execution byte estimates, the basis for exact dollar figures.
+- title: EXPLAIN (Snowflake documentation)
+  url: https://docs.snowflake.com/en/sql-reference/sql/explain
+  publisher: Snowflake
+  accessed: 2026-10-12
+  supports: EXPLAIN describes the plan without executing, but carries no native dollar estimate.
+confidence: medium
+conflicts_with: []
+status: draft

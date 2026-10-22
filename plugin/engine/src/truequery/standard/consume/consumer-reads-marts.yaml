@@ -1,0 +1,38 @@
+id: consume/consumer-reads-marts
+title: BI and extracts read from curated marts, not raw or staging tables
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Persisted consumer queries (dashboards, reports, exports, reverse-ETL)
+  reference only tables in declared serving marts; direct reads of raw,
+  staging, or intermediate tables are rejected.
+rationale: >
+  Consumers wired to staging inherit every pipeline refactor as a breaking
+  change and bypass tested business logic; marts are the versioned contract
+  that lets pipelines evolve safely.
+failure_example: >
+  A dashboard reads stg_orders directly; a staging column rename during a
+  refactor blanks the CEO report hours before a board meeting.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the serving-mart table set. Check: every table ref
+  in a persisted consumer query resolves inside the set. False positives:
+  data-quality spot checks that intentionally compare raw to mart, waived by
+  marking the query as a validation artifact.
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT status, COUNT(*) FROM stg_orders GROUP BY 1
+  good: |
+    SELECT status, COUNT(*) FROM mart_orders GROUP BY 1
+sources:
+  - title: About dbt models
+    url: https://docs.getdbt.com/docs/build/models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Describes layered model organization in which marts are the downstream-serving layer.
+confidence: high
+conflicts_with: []
+status: draft

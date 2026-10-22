@@ -1,0 +1,59 @@
+id: py/hook-adapter-connection-lifecycle
+title: Hooks and adapters must scope connections per run and always release them
+domain: py
+modes: [build, change]
+applies_to: [airflow, dagster]
+statement: >
+  Custom hook/adapter/client code used by pipeline Python must acquire
+  connections lazily inside the run (not at import), reuse one connection
+  per task execution, and release it in a finally/context-manager path;
+  per-row connects and unclosed clients are forbidden.
+rationale: >
+  A hook that connects per call or leaks clients exhausts pools and file
+  descriptors under backfill parallelism: healthy tasks fail with
+  connection timeouts, the scheduler throttles the whole deployment, and
+  the incident looks like warehouse overload instead of a client bug.
+failure_example: >
+  A custom API hook opens a new session per record inside a 200k-row
+  load; at backfill concurrency 16 the source rate-limits, tasks pile in
+  retry loops, and the DAG misses SLA for two days.
+enforcement: detector
+detection_sketch: >
+  Flag connect/session/client constructors inside row loops or per-record
+  helpers, module-level connection singletons, and acquire calls without
+  a matching close/release in finally/__exit__. False positives:
+  orchestrator-managed hooks whose lifecycle the framework owns (Airflow
+  Hook.get_conn within one task is fine); pooled clients with documented
+  pool-level lifecycle.
+severity_suggestion: warning
+examples:
+  bad: |
+    def fetch_user(uid):
+        conn = psycopg2.connect(DSN)  # per-row connect, never closed
+        return query(conn, uid)
+  good: |
+    from contextlib import contextmanager
+    @contextmanager
+    def warehouse_conn():
+        conn = psycopg2.connect(DSN)
+        try:
+            yield conn
+        finally:
+            conn.close()
+sources:
+  - title: "External resources (Connecting to databases) | Dagster Docs"
+    url: https://dagster.io/docs/guides/build/external-resources
+    publisher: Dagster
+    accessed: 2026-10-12
+    supports: Database connections are managed through resource lifecycle
+      docs (partially verified; body truncated in fetch).
+  - title: "Best Practices — Apache Airflow"
+    url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+    publisher: Apache Airflow
+    accessed: 2026-10-12
+    supports: UNVERIFIED — could not live-fetch (DNS resolution failed from
+      this host); cited for hook/connection reuse guidance, treat as
+      unverified until re-fetched.
+confidence: low
+conflicts_with: []
+status: draft

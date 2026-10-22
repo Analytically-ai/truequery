@@ -1,0 +1,47 @@
+id: consume/reverse-etl-schema-contract
+title: Reverse-ETL syncs pin an explicit field mapping contract
+domain: consume
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Each reverse-ETL sync declares an explicit source-column to destination
+  -field mapping with types; upstream renames or type changes that break the
+  mapping fail the sync at validation time instead of shipping misaligned
+  data.
+rationale: >
+  Positional or name-matched syncs silently misalign when upstream schemas
+  evolve: amounts land in text notes fields, nulls overwrite good CRM data,
+  and nobody notices until customers complain.
+failure_example: >
+  An upstream rename from plan to plan_tier shifts a name-matched sync so
+  the destination plan field receives NULLs and wipes the field on 200k
+  contacts.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the field mapping per sync. Check: every mapped
+  source column resolves in the current schema with a compatible type, and
+  every required destination field is mapped. False positives: intentionally
+  sparse syncs where unmapped optional fields are valid, handled by marking
+  fields optional in the contract.
+severity_suggestion: warning
+examples:
+  bad: |
+    syncs:
+      - name: crm_accounts
+        source: mart_accounts   # implicit name matching, no mapping
+  good: |
+    syncs:
+      - name: crm_accounts
+        mapping:
+          - {from: account_id, to: External_Id__c, type: string}
+          - {from: plan_tier, to: Plan__c, type: picklist}
+sources:
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Documents schema and relationship tests that catch the upstream breaks a sync contract must also catch.
+confidence: medium
+conflicts_with: []
+status: draft

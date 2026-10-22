@@ -1,0 +1,44 @@
+id: py/pandas-no-row-loop-mutations
+title: Vectorize DataFrame transforms instead of looping rows in Python
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Row-wise Python loops over DataFrames (for + iterrows/itertuples/index
+  access, df.apply with row-wise Python logic where a vectorized op
+  exists) must be replaced with vectorized pandas/NumPy operations in
+  pipeline and model code paths that scale with data volume.
+rationale: >
+  Row loops are orders of magnitude slower than vectorized ops: a feature
+  job that finishes in minutes on a sample blows past its task timeout
+  and memory budget on full data, turning every backfill into a runaway
+  run that blocks the warehouse queue.
+failure_example: >
+  A dbt Python model scores 40M rows with iterrows and a per-row helper;
+  the full-refresh run exceeds the 6-hour job limit, gets killed, and the
+  stale table keeps serving yesterday's scores.
+enforcement: detector
+detection_sketch: >
+  Flag For loops whose iterator is iterrows/itertuples/iteritems or whose
+  body indexes rows by position, plus row-wise apply(axis=1) with a lambda
+  doing arithmetic/comparison expressible vectorized. False positives:
+  genuinely sequential logic (running totals with reset conditions, API
+  calls per row handled by the no-n-plus-one rule instead); small
+  constant-size loops over schema lists, not rows.
+severity_suggestion: warning
+examples:
+  bad: |
+    for idx, row in df.iterrows():
+        df.at[idx, "total"] = row["qty"] * row["price"]
+  good: |
+    df["total"] = df["qty"] * df["price"]
+sources:
+  - title: "Enhancing performance | pandas docs"
+    url: https://pandas.pydata.org/docs/user_guide/enhancingperf.html
+    publisher: pandas
+    accessed: 2026-10-12
+    supports: Optimize in Python first by removing for-loops and using
+      NumPy vectorization before reaching for Cython/Numba.
+confidence: high
+conflicts_with: []
+status: draft

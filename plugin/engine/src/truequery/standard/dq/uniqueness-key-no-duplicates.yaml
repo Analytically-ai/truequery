@@ -1,0 +1,53 @@
+id: dq/uniqueness-key-no-duplicates
+title: Declared keys carry a zero-duplicate uniqueness check
+domain: dq
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every declared primary key or unique identifier has a check asserting zero
+  duplicate values (COUNT(*) minus COUNT(DISTINCT key) equals zero), enforced
+  on every write to the table.
+rationale: >
+  Duplicate keys fan out every downstream join, double-counting revenue,
+  users, or events. The failure is multiplicative and silent: each dup row
+  inflates all measures built on the table.
+failure_example: >
+  A duplicated order_id from a reprocessed upstream batch doubles reported
+  revenue for the day; finance restates earnings because no uniqueness check
+  blocked the mart build.
+enforcement: runtime
+detection_sketch: >
+  Run the failing-rows form (GROUP BY key HAVING COUNT(*) > 1) against the
+  table; any returned row fails. Needs the data, so warehouse or artifact
+  access is required. False positives: keys that are unique only within a
+  partition (event_id unique per day) until the check is scoped to the grain.
+severity_suggestion: error
+examples:
+  bad: |-
+    SELECT order_id, COUNT(*) AS n FROM fct_orders
+    GROUP BY order_id HAVING COUNT(*) > 1;
+    -- query exists in a notebook but blocks nothing
+  good: |-
+    models:
+      - name: fct_orders
+        columns:
+          - name: order_id
+            data_tests:
+              - unique
+              - not_null
+sources:
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: unique is a built-in dbt data test alongside not_null, with
+      severity configuration and stored failures
+  - title: PostgreSQL Constraints
+    url: https://www.postgresql.org/docs/current/ddl-constraints.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: unique constraints and primary keys are the database-native way
+      to declare one-row-per-key rules
+confidence: high
+conflicts_with: []
+status: draft

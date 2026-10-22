@@ -1,0 +1,52 @@
+id: sem/dimension-naming-conventions
+title: Shared dimensions use one name and one definition everywhere
+domain: sem
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Dimensions representing the same business concept (customer, country,
+  order date) use the identical name, data type, and value set across all
+  semantic models, enforced by a checked naming convention or a shared
+  dimension reference.
+rationale: >
+  `country` in one model and `country_code` in another (one ISO-2, one
+  full name) makes cross-model filtering silently drop rows on join, and
+  every new analyst re-learns the mapping by trial and error.
+failure_example: >
+  Revenue sliced by `country` (full name) joined to ad spend sliced by
+  `country_code` (ISO-2) matches nothing; blended ROAS renders empty and the
+  team concludes the data is missing.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: a synonym map that says which dimensions represent
+  the same business concept (and the expected type and value set). Which
+  names mean "the same concept" is not inferable from code. With the map,
+  flag same-concept dimensions whose names, types or value domains differ
+  across semantic models. False positives: different concepts sharing a word
+  (ship country vs billing country); the map records the distinction and
+  distinct names are the fix.
+severity_suggestion: warning
+examples:
+  bad: |-
+    # orders model: country (full name); spend model: country_code (ISO-2)
+    dimensions: [{ name: country, ... }]   # vs [{ name: country_code, ... }]
+  good: |-
+    dimensions:
+      - name: country_code   # identical name, type, ISO-2 values in both models
+        type: categorical
+        expr: country_code
+sources:
+  - title: Dimensions
+    url: https://docs.getdbt.com/docs/build/dimensions
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Dimensions declared per model with names, types, and expressions
+  - title: LookML terms and concepts
+    url: https://docs.cloud.google.com/looker/docs/lookml-terms-and-concepts
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Dimensions as the shared categorical vocabulary of explores
+confidence: medium
+conflicts_with: []
+status: draft

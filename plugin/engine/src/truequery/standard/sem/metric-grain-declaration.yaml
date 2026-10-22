@@ -1,0 +1,52 @@
+id: sem/metric-grain-declaration
+title: Every metric declares the grain it is defined at
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each metric or measure declares its native grain (the entity it is true at,
+  e.g. per order, per user per day) in its definition, and any query slicing
+  it at a coarser grain uses the documented rollup path rather than
+  re-aggregating raw rows.
+rationale: >
+  An undeclared grain invites averaging averages and summing counts that were
+  already summed: numbers that look precise and are wrong by construction.
+  Declared grain tells every consumer which rollups are valid.
+failure_example: >
+  `avg_order_value` defined at order grain gets averaged again across days in
+  a weekly report, weighting a 10-order day equally with a 10,000-order day
+  and understating revenue per order by 18%.
+enforcement: detector
+detection_sketch: >
+  Check each metric definition for a grain signal: dbt entity reference,
+  Cube `drill_members`/`sql` grain, or explicit description tag. Flag metrics
+  with no grain evidence. False positives: trivial row-count metrics where
+  grain equals the model grain — allow inheriting the semantic model's grain.
+severity_suggestion: warning
+examples:
+  bad: |-
+    - name: avg_order_value
+      type: simple
+      type_params:
+        expr: AVG(order_total)   # grain undeclared; consumers re-average freely
+  good: |-
+    - name: avg_order_value
+      type: ratio
+      type_params:
+        numerator: order_revenue
+        denominator: order_count
+      description: 'Grain: order. Never average across days; re-query at day grain.'
+sources:
+  - title: Semantic models
+    url: https://docs.getdbt.com/docs/build/semantic-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Semantic models bind measures to entities that fix their level of detail
+  - title: Ratio metrics
+    url: https://docs.getdbt.com/docs/build/ratio
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Ratios computed from constituent metrics keep grain-correct rollups
+confidence: high
+conflicts_with: []
+status: draft

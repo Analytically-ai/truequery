@@ -1,0 +1,9 @@
+table: fx_rates
+grain: one row per (rate_date, currency)
+keys:
+  - [rate_date, currency]
+columns:
+  rate_date: {unit: date}
+  currency: {unit: ISO code}
+  rate_to_usd: {unit: rate}
+quirks: rate_to_usd varies daily (+-2%); join on the business date, never on today()/max date.

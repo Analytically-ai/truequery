@@ -1,0 +1,46 @@
+id: ingest/test-intake-against-fixtures
+title: Intake logic is tested against fixture files and edge rows
+domain: ingest
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every intake transformation (parsing, typing, filtering, keying) MUST
+  have tests running against checked-in fixture files that include edge
+  cases: malformed rows, null keys, exotic encodings, schema-drifted
+  variants. Untested intake parsing fails review.
+rationale: >
+  Intake parsing is the code least tested and most exposed to hostile
+  input: real-world files contain BOMs, mixed line endings, null bytes,
+  and surprise encodings. Without fixtures, each novelty is discovered in
+  production at 3am instead of in CI.
+failure_example: >
+  A parser that never saw a UTF-16 file with BOM crashes the nightly load
+  when a new partner system emits exactly that. The fixture would have
+  taken ten minutes to add.
+enforcement: detector
+detection_sketch: >
+  Heuristic detector, advisory only. Code-only part: flag intake parsing
+  modules (readers, parsers, type-coercion code) with no test file that
+  references them, or tests with no fixture files. Whether the fixtures
+  cover the right edge cases (malformed rows, null keys, odd encodings,
+  drifted schemas) is judgment, taught rather than checked. False positives:
+  thin pass-through connectors with no parsing logic of their own.
+severity_suggestion: advisory
+examples:
+  bad: |
+    # parsers/partner_csv.py has no tests directory entry at all
+    tests/fixtures/intake/  (empty)
+  good: |
+    tests/fixtures/intake/partner_v1.csv
+    tests/fixtures/intake/partner_v1_bom_utf16.csv
+    tests/fixtures/intake/partner_v2_new_column.csv
+    tests/fixtures/intake/partner_malformed_row.csv
+sources:
+  - title: CSV Import
+    url: https://duckdb.org/docs/current/data/csv/overview
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: CSV readers document dedicated paths for faulty files, implying faulty-file fixtures are a normal test concern
+confidence: medium
+conflicts_with: []
+status: draft

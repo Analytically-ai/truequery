@@ -1,0 +1,75 @@
+id: orch/deferrable-sensors-with-timeout
+title: Sensors declare a timeout, a deliberate interval, and a non-blocking mode
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+statement: >
+  Every Airflow sensor MUST set an explicit `timeout` sized to the real
+  expected wait (the built-in default is seven days) and an explicit
+  `poke_interval` proportional to how often the awaited data can actually
+  land. A sensor expected to wait longer than a few minutes MUST NOT hold a
+  worker slot while waiting: use `deferrable=True` (requires a running
+  triggerer) or, where no deferrable variant exists, `mode="reschedule"`.
+  Plain `poke` mode is acceptable only for short waits. Sensors polling a
+  metered warehouse or rate-limited API MUST NOT poke at second-level
+  intervals.
+rationale: >
+  In the default poke mode a sensor occupies a worker slot for its whole
+  runtime; with the seven-day default timeout, a sensor on data that never
+  arrives can hold that slot for a week and hides the missing data as
+  "running". Deferrable and reschedule modes release the slot between checks,
+  and a timeout turns a missing arrival into a visible failure
+  (AirflowSensorTimeout; or SKIPPED if soft_fail=True). Very short intervals
+  against warehouses or APIs add query cost and rate-limit pressure, while
+  very short intervals in reschedule mode add scheduler load.
+failure_example: >
+  A FileSensor in poke mode with default settings waits for a file a
+  decommissioned partner never sends. It holds a worker slot and shows
+  "running" for six days while queued tasks behind it miss their SLAs.
+enforcement: detector
+detection_sketch: >
+  AST-scan instantiations of classes ending in Sensor (or subclasses of
+  BaseSensorOperator) and the @task.sensor decorator. Flag: no explicit
+  timeout; no explicit poke_interval; mode left as poke (no deferrable=True,
+  no mode="reschedule") when timeout exceeds a threshold (default 15
+  minutes) or is absent; poke_interval < 60 seconds on SQL/warehouse/HTTP
+  sensors. Treat `operators.default_deferrable = True` in airflow.cfg (if
+  provided) as satisfying the deferrable check. False positives: short,
+  reliably fast waits where poke mode is cheaper; local filesystem sensors
+  with short intervals.
+severity_suggestion: warning
+examples:
+  bad: |
+    FileSensor(task_id="wait", filepath="/landing/partner/")
+    # poke mode, 60s default interval, 7-day default timeout
+  good: |
+    S3KeySensor(task_id="wait", bucket_key="s3://landing/orders/{{ ds }}/_SUCCESS",
+                deferrable=True, poke_interval=300, timeout=6 * 3600, soft_fail=False)
+sources:
+- title: Sensors (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/sensors.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Poke mode (default) holds a worker slot for the sensor's entire runtime; reschedule holds one
+    only while checking; timeout is measured from the first attempt; soft_fail marks the task SKIPPED on
+    timeout.
+- title: Deferrable Operators & Triggers (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/deferring.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: A deferred task no longer occupies a worker slot; deferral requires a triggerer process; the
+    deferrable argument defaults to operators.default_deferrable (False).
+- title: Airflow sensors
+  url: https://www.astronomer.io/docs/learn/what-is-a-sensor
+  publisher: Astronomer
+  accessed: '2026-10-11'
+  supports: Default poke_interval is 60 seconds and default timeout is seven days; recommends always setting
+    a meaningful timeout and poke_interval, deferrable (else reschedule) for long waits, and poke mode for
+    waits under about 5 minutes. The cost of second-level pokes on metered systems is our inference, not
+    a documented figure.
+confidence: high
+conflicts_with: []
+status: draft

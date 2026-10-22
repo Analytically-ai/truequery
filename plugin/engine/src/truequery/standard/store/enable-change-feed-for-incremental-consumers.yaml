@@ -1,0 +1,44 @@
+id: store/enable-change-feed-for-incremental-consumers
+title: Enable change data feed where downstream reads are incremental
+domain: store
+modes: [build]
+applies_to: [databricks, delta]
+statement: >
+  Delta tables consumed incrementally (streaming reads, CDC outbox, audit
+  consumers) must enable the change data feed (delta.enableChangeDataFeed)
+  rather than forcing consumers to diff full snapshots.
+rationale: >
+  Without CDF, every incremental consumer re-reads whole partitions and
+  hand-rolls change detection — slower, more expensive, and prone to missed
+  deletes; CDF provides row-level change semantics the engine maintains.
+failure_example: >
+  Three downstream jobs each scan a 2 TB table hourly to find changed rows;
+  enabling CDF turns each into a megabyte-scale change read.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: which Delta tables have streaming or incremental
+  consumers, from the consumer list in the contract (or registered
+  exposures). With it, flag those tables when their DDL or table properties
+  lack delta.enableChangeDataFeed = true. Table properties set outside the
+  repo are visible only at runtime. Without the consumer list nothing can be
+  flagged, because the requirement only applies to tables that have
+  incremental consumers.
+severity_suggestion: advisory
+examples:
+  bad: "CREATE TABLE outbox (id BIGINT, op STRING) USING DELTA; -- consumed by streaming job, no CDF"
+  good: "CREATE TABLE outbox (id BIGINT, op STRING) USING DELTA TBLPROPERTIES (delta.enableChangeDataFeed = true);"
+sources:
+  - title: Delta Lake — Table utility commands (change feed and history)
+    url: https://docs.delta.io/delta-utility/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Delta documents change-oriented reads (history, CDF-adjacent flows) for tracking what changed.
+  - title: Databricks — Optimization recommendations
+    url: https://docs.databricks.com/aws/en/optimizations
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Databricks recommends matching table features to workload patterns for incremental processing.
+confidence: low
+conflicts_with: []
+status: draft

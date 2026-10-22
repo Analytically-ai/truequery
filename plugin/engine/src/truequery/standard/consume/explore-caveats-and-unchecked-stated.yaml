@@ -1,0 +1,52 @@
+id: consume/explore-caveats-and-unchecked-stated
+title: The answer states its filters, assumptions, caveats and what was not checked
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  The shared answer contains a section that lists: (1) every exclusion
+  filter applied (test accounts, internal users, outliers, date limits) with
+  the number or share of rows each removed; (2) the assumptions the result
+  depends on; (3) known limitations, including whether the result is
+  descriptive or supports a causal claim; and (4) checks that were not
+  performed. If the analysis supports no causal claim, the answer does not
+  use causal language ("drove", "caused", "because of") about its findings.
+rationale: >
+  Readers cannot weigh a number whose filters and assumptions are hidden,
+  and silent filtering is a common way for an analysis to answer a narrower
+  question than the one asked. Saying what was not checked turns a
+  confident-sounding answer into one that reviewers can calibrate and
+  extend, and keeps correlations from being read as causes.
+failure_example: >
+  An answer states that users who enabled notifications "retain 2x better
+  because of notifications". It silently excluded users with under three
+  sessions (38 percent of sign-ups) and never mentioned that engaged users
+  self-select into enabling notifications; the roadmap shifts on a
+  correlation.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: |
+    Notifications drive retention: 61% vs 30% D30 retention.
+  good: |
+    D30 retention: 61% (notifications on) vs 30% (off). Descriptive only.
+    Filters: excluded test accounts (1,204 rows, 0.3%); users with <3 sessions
+      (38% of sign-ups), so this covers engaged users only.
+    Assumptions: notification flag as of day 7 reflects the user's setting.
+    Not checked: self-selection (engaged users opt in); iOS vs Android split.
+sources:
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Advises acknowledging and counting every filter, not claiming causation from correlation, being clear with consumers about what can be claimed, and admitting what is not known.
+  - title: The AQuA Book
+    url: https://www.gov.uk/guidance/the-aqua-book
+    publisher: UK Government Analysis Function
+    accessed: 2026-10-11
+    supports: Calls for an assumptions log and for delivery documentation that describes limitations, what the analysis can and cannot be used for, and how uncertainty affects the outputs.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [consume/explore-answer-carries-reproducible-query, consume/explore-question-metric-grain-stated]

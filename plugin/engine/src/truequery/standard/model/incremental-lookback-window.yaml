@@ -1,0 +1,53 @@
+id: model/incremental-lookback-window
+title: Incremental watermark filters include a lookback window for late data
+domain: model
+modes: [build, assure]
+applies_to: [dbt, sqlmesh]
+statement: >
+  Incremental models whose sources can arrive late or be updated after first
+  arrival must subtract a documented lookback window (e.g. 3 days) from the
+  watermark maximum, combined with a merge/upsert strategy, so late rows are
+  picked up on subsequent runs.
+rationale: >
+  A strict greater-than-max filter permanently drops late-arriving and
+  restated rows, producing missing or understated facts that are hard to
+  notice. Lookback windows are the standard guard against this silent loss.
+failure_example: >
+  Mobile events arrive up to 48 hours late; the model filters strictly on max
+  timestamp, so two days of each week are permanently undercounted in the
+  revenue mart.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: whether a source can deliver late or updated rows
+  (its late-arrival expectation), which is a property of the source, not the
+  code. With it, check incremental watermark predicates on late-arriving
+  sources for an interval subtracted from the max-watermark comparison plus
+  a merge-capable strategy, and flag strict greater-than-max filters.
+  Without the declaration the checker cannot tell an on-time source from a
+  late one. False positives: sources declared as on-time.
+severity_suggestion: warning
+examples:
+  bad: |
+    {% if is_incremental() %}
+    WHERE occurred_at > (SELECT MAX(occurred_at) FROM {{ this }})
+    {% endif %}
+  good: |
+    {% if is_incremental() %}
+    WHERE occurred_at > (SELECT MAX(occurred_at) - INTERVAL '3 days' FROM {{ this }})
+    {% endif %}
+    -- with unique_key + merge strategy so reprocessed rows upsert cleanly
+sources:
+  - title: Configure incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: guidance on filtering with a lookback period for updated or late rows
+  - title: About microbatch incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-microbatch
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: batched event-time processing that reprocesses recent batches for late data
+confidence: high
+conflicts_with: []
+status: draft

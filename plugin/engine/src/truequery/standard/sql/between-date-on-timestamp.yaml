@@ -1,0 +1,74 @@
+id: sql/between-date-on-timestamp
+title: Filter timestamps with a half-open range, not BETWEEN date literals
+domain: sql
+modes: [explore, build, change]
+applies_to: [any]
+statement: >
+  A filter on a TIMESTAMP (or DATETIME) column uses a half-open range,
+  ts >= start AND ts < end_exclusive, never BETWEEN with date-only bounds
+  such as BETWEEN '2024-01-01' AND '2024-01-31'.
+rationale: >
+  BETWEEN includes both endpoints, and a date-only bound compared with a
+  timestamp means midnight. BETWEEN '2024-01-01' AND '2024-01-31' therefore
+  keeps only the first instant of January 31 and drops the rest of that
+  day. Widening the upper bound to '2024-02-01' over-counts instead, by
+  including events at exactly midnight on February 1.
+failure_example: >
+  A January revenue query using BETWEEN '2024-01-01' AND '2024-01-31' on
+  order_ts silently excludes every order placed after 00:00 on January 31;
+  month-end revenue reads about 3 percent low and never reconciles with
+  finance.
+enforcement: detector
+detection_sketch: >
+  Match BETWEEN predicates whose tested expression resolves to a TIMESTAMP,
+  TIMESTAMPTZ or DATETIME type (from the catalog, a contract, a cast, or a
+  column name heuristic such as *_ts / *_at) and whose upper bound is a
+  date-only literal or a DATE-typed expression. Suggest the half-open
+  rewrite. Heuristic when the column type is unknown, hence warning. False
+  positives: columns that only ever hold midnight values, which should be
+  typed DATE instead.
+severity_suggestion: warning
+examples:
+  bad: SELECT SUM(amount) FROM orders WHERE order_ts BETWEEN '2024-01-01' AND '2024-01-31';
+  good: SELECT SUM(amount) FROM orders WHERE order_ts >= '2024-01-01' AND order_ts < '2024-02-01';
+sources:
+- title: Comparison Functions and Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-comparison.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: a BETWEEN x AND y is equivalent to a >= x AND a <= y; BETWEEN treats the endpoint values as included in the range.
+- title: Date/Time Functions and Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-datetime.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: A date value is assumed to represent midnight when comparing it to a timestamp.
+- title: Comparison Operators (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/expressions/comparison_operators
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: Documents BETWEEN as the inclusive range form, equivalent to the paired >= and <= comparisons.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/sargable-filter-bare-column, consume/explore-day-boundaries-and-partial-periods]
+proof:
+  setup: |
+    CREATE TABLE orders(id INT, order_ts TIMESTAMP, amount INT);
+    INSERT INTO orders VALUES
+      (1, '2024-01-01 00:00:00', 10),
+      (2, '2024-01-15 12:00:00', 20),
+      (3, '2024-01-31 00:00:00', 30),
+      (4, '2024-01-31 18:30:00', 40),
+      (5, '2024-02-01 00:00:00', 50);
+  bad: "SELECT COUNT(*), SUM(amount) FROM orders WHERE order_ts BETWEEN '2024-01-01' AND '2024-01-31'"
+  bad_result: "[(3, 60)]"
+  good: "SELECT COUNT(*), SUM(amount) FROM orders WHERE order_ts >= '2024-01-01' AND order_ts < '2024-02-01'"
+  good_result: "[(4, 100)]"
+  note: >
+    January has four orders totalling 100. BETWEEN with date-only bounds
+    compares against 2024-01-31 00:00:00, so order 4 (18:30 on January 31)
+    is dropped. The obvious "fix" BETWEEN '2024-01-01' AND '2024-02-01' would
+    include order 5 from February. The half-open range is exact. Postgres
+    documents the same rule (a date compared with a timestamp means
+    midnight, and BETWEEN is inclusive); the logic holds in any engine that
+    converts a date-only bound to a timestamp at midnight.

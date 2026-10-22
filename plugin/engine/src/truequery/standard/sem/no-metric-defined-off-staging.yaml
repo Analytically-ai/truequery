@@ -1,0 +1,47 @@
+id: sem/no-metric-defined-off-staging
+title: Governed metrics build on tested marts, not staging tables
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Semantic models sit on top of cleaned, tested mart or intermediate models —
+  never directly on raw staging tables — so every governed metric inherits
+  the data-quality tests and documented contracts of the layer below.
+rationale: >
+  A metric wired to staging inherits every upstream schema wobble and null
+  surprise with no test to catch it: the metric becomes the first alert for
+  breakages that mart tests were built to contain.
+failure_example: >
+  A churn metric defined on a staging events table silently drops 20% of
+  events when the source renames a column; the mart model's contract test
+  would have caught it, but the metric bypassed the mart.
+enforcement: detector
+detection_sketch: >
+  Resolve each semantic model's underlying ref/source; flag refs to models
+  tagged staging/raw or sources without an intermediate model between them
+  and the metric. False positives: deliberate staging metrics for data-quality
+  monitoring itself — allowlist metrics explicitly tagged observability.
+severity_suggestion: advisory
+examples:
+  bad: |-
+    semantic_models:
+      - name: churn_inputs
+        model: ref('stg_events')   # raw staging, untested
+  good: |-
+    semantic_models:
+      - name: churn_inputs
+        model: ref('mart_customer_activity')  # tested, contracted
+sources:
+  - title: Semantic models
+    url: https://docs.getdbt.com/docs/build/semantic-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Semantic models layer measures over existing dbt models
+  - title: Validations
+    url: https://docs.getdbt.com/docs/build/validation
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Validation assumes well-formed underlying model configurations
+confidence: medium
+conflicts_with: []
+status: draft

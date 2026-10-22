@@ -1,0 +1,40 @@
+id: consume/dashboard-query-budget
+title: Dashboards carry a per-refresh query and scan budget
+domain: consume
+modes: [build, assure]
+applies_to: [bigquery, snowflake, databricks]
+statement: >
+  Each production dashboard declares a per-refresh budget (maximum query
+  count and maximum bytes or credits scanned); refreshes breaching the
+  budget alert the owner and freeze non-essential tiles until reviewed.
+rationale: >
+  Tile sprawl turns one dashboard into fifty queries per viewer per refresh;
+  without a budget the cost grows with headcount while nobody owns it.
+failure_example: >
+  A 60-tile dashboard with per-tile queries costs $4k per month per heavy
+  viewer and nobody notices for two quarters because each query looks cheap
+  alone.
+enforcement: runtime
+detection_sketch: >
+  Needs warehouse telemetry: per-refresh query history joined to dashboard
+  issuance. Not statically decidable: tile counts understate cost when one
+  tile scans terabytes. Static tile-count lint is a weak proxy, not the
+  check.
+severity_suggestion: warning
+examples:
+  bad: |
+    dashboards:
+      - name: everything_overview   # 60 tiles, no budget
+  good: |
+    dashboards:
+      - name: everything_overview
+        per_refresh_budget: {max_queries: 20, max_bytes_scanned: 50000000000}
+sources:
+  - title: Introduction to optimizing query performance
+    url: https://docs.cloud.google.com/bigquery/docs/best-practices-performance-overview
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Advises monitoring and limiting bytes processed per workload, the basis for a per-dashboard budget.
+confidence: medium
+conflicts_with: []
+status: draft

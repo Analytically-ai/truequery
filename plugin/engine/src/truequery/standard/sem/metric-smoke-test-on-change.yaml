@@ -1,0 +1,43 @@
+id: sem/metric-smoke-test-on-change
+title: Changed metrics carry a before/after smoke comparison
+domain: sem
+modes: [change, assure]
+applies_to: [any]
+statement: >
+  Every change to a governed metric's logic ships with a before/after query
+  over a fixed comparison window (same grain, same filters), reviewed in the
+  PR, so the magnitude and direction of the restatement are known before
+  merge — not discovered by consumers afterwards.
+rationale: >
+  Even approved redefinitions blindside consumers when the size of the jump
+  is unknown: a "small filter fix" that moves revenue 6% breaks forecasts,
+  targets, and trust simultaneously. The smoke comparison prices the change.
+failure_example: >
+  A refund-handling fix merges without comparison; finance's forecast model
+  trained on old-definition history misfires for a quarter before anyone
+  quantifies the 6% level shift.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |-
+    # PR changes revenue filter with no comparison evidence
+    -    - status NOT IN ('refunded')
+    +    - status NOT IN ('refunded', 'chargeback')
+  good: |-
+    # PR includes: old vs new revenue over trailing 90d at month grain,
+    # max monthly delta 0.8%, direction uniform — attached to the change record
+sources:
+  - title: Validations
+    url: https://docs.getdbt.com/docs/build/validation
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Validation discipline catches configuration drift before querying
+  - title: Saved queries
+    url: https://docs.getdbt.com/docs/build/saved-queries
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Saved queries give a stable baseline to compare redefinitions against
+confidence: low
+conflicts_with: []
+status: draft

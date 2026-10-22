@@ -1,0 +1,51 @@
+id: consume/explore-reconcile-to-known-total
+title: Reconcile the headline number against a known total before reporting it
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  Before an ad-hoc answer is shared, its headline number (or the total its
+  breakdown sums to) is compared with at least one independent reference: a
+  governed dashboard or mart figure for the same window, the same quantity
+  computed by a different route (another table or method), or the value for
+  a previous period. The answer records the reference used, both values, and
+  the difference. A difference larger than the tolerance stated in the
+  answer is explained or the result is not reported as final.
+rationale: >
+  Most surprising numbers turn out to be errors rather than discoveries.
+  Measuring the same thing two ways, and checking it against past values,
+  catches broken joins, wrong filters and partial loads that look perfectly
+  plausible in isolation.
+failure_example: >
+  An analyst's breakdown of Q3 revenue by channel sums to 14.2 million; the
+  finance mart shows 11.9 million for Q3. Nobody compared the two, and the
+  channel shares are presented to leadership with a duplicated affiliate
+  feed inside them.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    -- revenue by channel, Q3: shared directly from the notebook
+    SELECT channel, SUM(amount) FROM stg_payments
+    WHERE paid_at >= '2026-07-01' AND paid_at < '2026-10-01' GROUP BY 1
+  good: |
+    -- same query, plus a reconciliation cell kept in the answer:
+    -- sum over channels = 11,904,220
+    -- fct_revenue Q3 (governed) = 11,911,005; diff -0.06% (tolerance 0.5%)
+    -- Q2 by same query = 11,236,410; Q3/Q2 = +5.9%, in line with plan
+sources:
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Recommends measuring the same thing in more than one way, ideally from different data sources, and checking new numbers for consistency with past measurements, because most surprising data is an error.
+  - title: The AQuA Book
+    url: https://www.gov.uk/guidance/the-aqua-book
+    publisher: UK Government Analysis Function
+    accessed: 2026-10-11
+    supports: Treats verification (the analysis does what it was designed to do) and validation (it meets the users' need) as required quality-assurance steps before delivery.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [consume/explore-reuse-governed-metric, dq/consistency-paired-aggregate-reconciliation]

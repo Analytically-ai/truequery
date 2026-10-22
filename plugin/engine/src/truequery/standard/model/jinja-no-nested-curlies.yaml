@@ -1,0 +1,43 @@
+id: model/jinja-no-nested-curlies
+title: Jinja logic lives in macros, never in nested curlies
+domain: model
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  Model SQL must not nest Jinja delimiters inside one another; repeated or
+  conditional SQL fragments must be extracted into tested macros instead of
+  inline nested expressions.
+rationale: >
+  Nested curlies fail in confusing ways at compile time and hide logic that
+  reviewers cannot trace, so model behavior diverges from what the SQL
+  appears to say. Extracted macros are reviewable and testable in one place.
+failure_example: >
+  A nested ref-in-if expression compiles to an empty string in production but
+  not in dev; the model silently queries the wrong table for a week.
+enforcement: detector
+detection_sketch: >
+  Scan compiled and uncompiled model text for a Jinja delimiter opened inside
+  another Jinja expression. Flag every occurrence; no data access needed.
+  False positives: none known; nested delimiters never compile as intended.
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT * FROM {{ ref({{ var('mart_name') }}) }};
+  good: |
+    -- macros/resolve_mart.sql
+    {% macro resolve_mart(name) %}{{ ref(name) }}{% endmacro %}
+    SELECT order_id FROM {{ resolve_mart(var('mart_name')) }};
+sources:
+  - title: Don't nest your curlies
+    url: https://docs.getdbt.com/best-practices/dont-nest-your-curlies
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: nested Jinja delimiters are a compile-level error pattern to avoid
+  - title: Jinja and macros
+    url: https://docs.getdbt.com/docs/build/jinja-macros
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: reusable Jinja logic belongs in macros
+confidence: high
+conflicts_with: []
+status: draft

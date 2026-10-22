@@ -1,0 +1,48 @@
+id: py/dbt-python-model-contract
+title: dbt Python models must declare schema and use the dbt session context
+domain: py
+modes: [build, assure]
+applies_to: [dbt]
+statement: >
+  Every dbt Python model must define a model(df, session) entry point that
+  returns a DataFrame the declared adapter accepts, must read upstream data
+  only through dbt.ref()/dbt.source() (not ad-hoc reads), and must not rely
+  on undeclared packages outside the packages documented for the adapter.
+rationale: >
+  A Python model that reads arbitrary tables or returns an undeclared shape
+  breaks dbt's DAG contract: ref-based lineage, docs, and partial parsing
+  silently diverge from what actually runs, so a renamed upstream column
+  produces wrong numbers instead of a compile error.
+failure_example: >
+  A Python model hardcodes spark.table("analytics.orders_v2") instead of
+  dbt.ref("orders"); the upstream model is renamed to orders_curated and
+  dbt builds green while the Python model keeps scoring stale v2 rows.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Statically check the model file defines model(df, session), that every
+  table read resolves to a dbt.ref/dbt.source call, and that imports are a
+  subset of the adapter's supported packages. False positives: adapter
+  helper imports aliased under another name; legitimately reading seeds
+  via dbt.ref is fine and must not be flagged.
+severity_suggestion: warning
+examples:
+  bad: |
+    import pandas as pd
+    def model(dbt, session):
+        df = session.table("analytics.orders_v2").to_pandas()  # bypasses lineage
+        return df.assign(total=df["qty"] * df["price"])
+  good: |
+    def model(dbt, session):
+        df = dbt.ref("orders")
+        return df.withColumn("total", df["qty"] * df["price"])
+sources:
+  - title: "Python models | dbt Developer Hub"
+    url: https://docs.getdbt.com/docs/build/python-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Python models run through a model(df, session) function with
+      adapter-supported packages and ref-based upstream reads.
+confidence: high
+conflicts_with: []
+status: draft

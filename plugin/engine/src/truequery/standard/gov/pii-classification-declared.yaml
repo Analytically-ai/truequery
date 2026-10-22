@@ -1,0 +1,42 @@
+id: gov/pii-classification-declared
+title: PII and sensitive columns are classified in the contract
+domain: gov
+modes: [explore, build, assure]
+applies_to: [any]
+statement: >
+  Every column holding personal, contact, credential, financial, health, or
+  location data is tagged with its sensitivity class in the model or dataset
+  contract (schema metadata), and unclassified columns on a classified table
+  are explicitly marked reviewed, not left blank.
+rationale: >
+  Row filters, masks, grants, and retention rules all key off
+  classification; unclassified columns default to unprotected, so every
+  downstream control silently skips the data nobody labeled.
+failure_example: >
+  phone column added without a tag; masking views, column grants, and the
+  erasure job all miss it, and raw numbers ship to the vendor for months.
+enforcement: contract
+contract_required: true
+detection_sketch: >
+  Scan schema/contract metadata for sensitivity tags; flag governed tables
+  with untagged columns. Cannot verify a tag is correct (judgment), only
+  that coverage is complete. False positives: genuinely non-sensitive
+  columns bulk-marked reviewed by the owner.
+severity_suggestion: warning
+examples:
+  bad: "schema.yml for users lists columns id, email, phone with no tags or meta."
+  good: "schema.yml tags email and phone as pii-contact and id as non-sensitive-reviewed."
+sources:
+- title: About documentation
+  url: https://docs.getdbt.com/docs/build/documentation
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: column-level documentation and metadata live with the model definition
+- title: About dbt models
+  url: https://docs.getdbt.com/docs/build/models
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: models declare structure that contracts and metadata attach to
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,80 @@
+id: gov/least-privilege-grants
+title: Roles and credentials get least privilege, separated by job and environment
+domain: gov
+modes: [build, change, assure]
+applies_to: [any, postgres, snowflake, bigquery]
+statement: >
+  Privileges granted to non-owner roles name exactly the privileges needed
+  (for example SELECT on a table, USAGE on a schema); GRANT ALL PRIVILEGES
+  to application, analyst, or shared roles is not permitted in reviewed SQL.
+  Ingestion writers, transformation executors and read consumers each use a
+  distinct role with only their job's grants, so no single shared role
+  spans write and broad-read access to governed tables. Each environment's
+  warehouse credential (dev, CI, prod adapter profiles and service
+  accounts) is scoped to its workload: read-only where nothing is written,
+  writes limited to its own schemas, no admin role attached to CI, and
+  production roles narrower in human access than development roles.
+rationale: >
+  Over-broad grants turn every downstream credential into a de facto owner.
+  A compromised BI user that also holds DELETE and TRUNCATE can destroy or
+  exfiltrate data far beyond its job; a shared super-role means a dashboard
+  compromise can write to raw tables and an ingestion bug can read PII
+  marts; an admin-level CI token turns a buggy DROP into production data
+  loss. Scoped, separated roles bound the blast radius in both directions
+  and make audit logs attributable.
+failure_example: >
+  GRANT ALL ON ALL TABLES IN SCHEMA marts TO analyst_role lets a stolen
+  dashboard credential truncate production marts. In another team, one
+  analytics_rw role runs dbt and serves dashboards, and a SQL injection in
+  a dashboard filter issues DELETE against a raw table. In a third, CI uses
+  an admin credential and a test script's unqualified DROP TABLE deletes a
+  production table.
+enforcement: detector
+detection_sketch: >
+  Detector (code files only): scan reviewed SQL and infrastructure-as-code
+  for GRANT ALL (with or without PRIVILEGES) and GRANT ... ON ALL TABLES IN
+  SCHEMA to non-admin roles; scan adapter profiles (profiles.yml, CI job
+  configs) for one credential or role shared across dev, CI and prod, and
+  for admin or owner roles attached to CI. Contract-dependent extension
+  (optional): with a declared role inventory mapping jobs to roles, flag
+  jobs sharing one role across write and consumer duties, or roles holding
+  both INSERT and broad SELECT. Grants managed outside the repo (SSO group
+  mappings, console grants) are invisible to the detector and need runtime
+  inspection of the warehouse. False positives: grants scoped to a
+  dedicated sandbox schema (allowlist sandbox schemas); small single-team
+  setups documented as accepting a shared role with compensating review.
+severity_suggestion: warning
+examples:
+  bad: |
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA marts TO analyst_role;
+    -- one role analytics_rw owns dbt runs, manual writes and dashboard reads;
+    -- the same admin credential appears in the dev, CI and prod profiles
+  good: |
+    GRANT SELECT ON marts.orders TO reporting_reader;
+    -- loader_writer, dbt_executor and reporting_reader each hold only their job's grants;
+    -- the CI role can write only CI schemas; the prod role is deploy-only
+sources:
+- title: GRANT (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/sql-grant.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: GRANT syntax enumerates per-privilege grants on tables, schemas, and other objects
+- title: Privileges (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/ddl-priv.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: Objects default to owner-only access; distinct privilege kinds (SELECT vs INSERT/UPDATE/DELETE) map to job duties and need explicit grants
+- title: Role Membership (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/role-membership.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: Grouping users into roles so privileges are managed per job function
+- title: Continuous integration jobs in dbt
+  url: https://docs.getdbt.com/docs/deploy/ci-jobs
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: CI jobs build into isolated schemas, which separate, scoped credentials per environment support.
+confidence: high
+conflicts_with: []
+see_also: [gov/no-public-privileges, gov/no-bypassrls-roles]
+status: draft

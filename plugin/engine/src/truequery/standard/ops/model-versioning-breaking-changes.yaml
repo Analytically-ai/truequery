@@ -1,0 +1,83 @@
+id: ops/model-versioning-breaking-changes
+title: Ship breaking model and metric changes as new versions with a deprecation window
+domain: ops
+modes: [change, assure]
+applies_to: [dbt, any]
+statement: >
+  A change that breaks a shared model's or governed metric's guarantees
+  ships as a new version alongside the old one instead of being edited in
+  place. For models this covers dropping or renaming columns, changing or
+  narrowing types, tightening constraints, and changing grain or semantics.
+  For governed metrics it covers changes to logic, grain, filters or name;
+  these ship as a new version or a renamed metric with a deprecation alias,
+  are reviewed by the metric owner, and are announced to registered
+  consumers. Consumers migrate by explicitly pinning to the new version. The
+  prior version keeps building until every pinned consumer has migrated or
+  an announced sunset date passes; removing it early is a violation.
+rationale: >
+  In-place breaking changes force a flag day: every consumer must update at
+  once or break, with no rollback. Dashboards fail, vendor syncs drop
+  columns silently, privacy guarantees negotiated on the old shape
+  disappear, and a silently redefined metric rewrites history for every
+  dashboard, target and bonus with no audit trail. Versioning plus a
+  guaranteed overlap window lets producers and consumers migrate on
+  independent schedules.
+failure_example: >
+  A column type changes from string to integer in place, and three
+  downstream dashboards start erroring at refresh. In another team, orders
+  v2 ships on Monday and v1 is deleted on Tuesday "to save cost"; the
+  finance reconciliation job still pinned to v1 fails at month-end close.
+  Elsewhere, active_user is quietly redefined from "logged in" to "any
+  event" and DAU jumps 60% overnight with no changelog to explain it.
+enforcement: detector
+detection_sketch: >
+  Detector (code and git history only): diff model contracts, schema YAML
+  and semantic-layer definitions between the base and head revision. Flag,
+  on public or contracted models, removed or renamed columns, changed or
+  narrowed types, and newly added not-null or unique constraints made
+  without a new version; flag changes to a governed metric's expression,
+  filter, grain or name made without a new version or deprecation alias;
+  flag deletion of a model version whose declared deprecation_date has not
+  passed, or that versioned refs in the repo still pin. Judgment, not
+  checked: whether a semantic change (same columns, different meaning) is
+  breaking, owner sign-off, and consumer announcements; see
+  ops/breaking-change-categorization. Consumers outside the repo are
+  visible only through registered exposures. False positives: additive-only
+  changes (new column, new description, new saved query); pre-release
+  models explicitly marked unstable.
+severity_suggestion: warning
+examples:
+  bad: |
+    # orders v1 changes a column type in place; v1 deleted the day after v2 ships;
+    # active_user redefined in place under the same name.
+  good: |
+    models:
+      - name: orders
+        latest_version: 2
+        versions:
+          - v: 2            # new type for amount
+          - v: 1
+            deprecation_date: 2027-01-31   # keeps building until consumers migrate
+    metrics:
+      - name: active_user_v2
+        description: Supersedes active_user (login-only); v1 removal 2027-01.
+sources:
+- title: Model versions (dbt Mesh governance)
+  url: https://docs.getdbt.com/docs/mesh/govern/model-versions
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Versioned models let authors release breaking changes while consumers pin a prior version and migrate on their own schedule; old versions remain available until removed.
+- title: SQLMesh documentation
+  url: https://sqlmesh.readthedocs.io/en/stable/
+  publisher: Tobiko Data
+  accessed: 2026-10-12
+  supports: Plan/apply impact analysis and a breaking vs non-breaking change workflow for model changes.
+- title: Add Exposures to your DAG
+  url: https://docs.getdbt.com/docs/build/exposures
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Exposures register the downstream consumers affected by definition changes.
+confidence: high
+conflicts_with: []
+see_also: [ops/breaking-change-categorization, gov/exposures-registered, model/dbt-contract-enforced]
+status: draft

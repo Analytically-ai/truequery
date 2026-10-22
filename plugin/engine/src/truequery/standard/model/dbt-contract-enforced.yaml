@@ -1,0 +1,50 @@
+id: model/dbt-contract-enforced
+title: Public marts declare enforced column-name and type contracts
+domain: model
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  Every model exposed to other teams or projects (public marts) must declare
+  an enforced contract listing each output column name and data type, so a
+  breaking shape change fails the build before data ships.
+rationale: >
+  An unannounced renamed or retyped column breaks every downstream query and
+  dashboard at read time. Contracts convert that runtime breakage into a
+  build-time failure at the source.
+failure_example: >
+  A mart renames user_id to account_user_id; three downstream teams' morning
+  dashboards fail because nothing checked the output shape.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Read the model contract declaration (column names plus data types, enforced
+  flag) and verify the built relation matches it on each run. Flag public
+  models without enforced contracts. False positives: private staging models
+  consumed only inside the same project.
+severity_suggestion: advisory
+examples:
+  bad: |
+    # schema.yml — no contract
+    models:
+      - name: fct_orders
+        description: orders mart
+  good: |
+    models:
+      - name: fct_orders
+        config:
+          contract: { enforced: true }
+        columns:
+          - name: order_id
+            data_type: int
+          - name: total
+            data_type: numeric
+sources:
+  - title: Model contracts
+    url: https://docs.getdbt.com/docs/mesh/govern/model-contracts
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: contracts guarantee a model shape and fail the build on mismatch
+confidence: high
+conflicts_with: []
+see_also: [dq/validity-enforce-model-contracts, ops/model-versioning-breaking-changes]
+status: draft

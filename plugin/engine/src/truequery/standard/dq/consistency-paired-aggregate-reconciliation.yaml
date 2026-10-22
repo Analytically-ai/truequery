@@ -1,0 +1,48 @@
+id: dq/consistency-paired-aggregate-reconciliation
+title: Derived tables reconcile agreed aggregates against their source
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each derived table declares at least one reconciliation pair (row count or
+  a summed measure) against its source, and the build fails when the drift
+  exceeds the declared tolerance.
+rationale: >
+  Transforms can lose or duplicate rows while every row-level check passes:
+  a dropped partition or a double-counted file changes totals without
+  violating any single-row rule. Aggregate reconciliation is the only
+  deterministic net catching loss and duplication at the table level.
+failure_example: >
+  An incremental filter drops the last hour of each day; all row checks
+  pass, but daily revenue drifts 4% below the source-of-truth total until an
+  analyst spots it in a board pack.
+enforcement: runtime
+detection_sketch: >
+  Run paired aggregate queries on source and derived tables in the same run
+  and compare within tolerance; both inputs must be queryable together.
+  False positives: expected drift from documented business filters (fraud
+  exclusions) until the tolerance or the filter predicate is declared.
+severity_suggestion: error
+examples:
+  bad: |-
+    -- mart built; nobody compares its totals to the source
+  good: |-
+    SELECT (SELECT SUM(amount) FROM staging_payments) AS source_total,
+           (SELECT SUM(amount) FROM mart_payments) AS mart_total;
+    -- build fails unless the two match within tolerance
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: SodaCL check types include reconciliation checks comparing
+      datasets against each other
+  - title: Reference checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/reference.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: reference checks validate column contents match between
+      datasets in the same source
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,63 @@
+id: sql/unguarded-update-delete
+title: UPDATE and DELETE always carry a filter or an explicit full-table guard
+domain: sql
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every UPDATE or DELETE has a WHERE clause (or WHERE CURRENT OF), or carries
+  an explicit full-table marker such as a deliberate TRUNCATE or a
+  reviewed full_refresh flag; unguarded whole-table mutations are rejected.
+rationale: >
+  A missing filter applies the mutation to every row. In a warehouse this is
+  large-scale data loss or corruption, recoverable only through time travel
+  or rebuild, and the statement itself reports success.
+failure_example: >
+  UPDATE orders SET status = 'shipped' without the intended WHERE id = ...
+  marks every order shipped; fulfillment and refunds cascade from one missing
+  line.
+enforcement: detector
+detection_sketch: >
+  Match Delete/Update nodes with no Where child or a constant-true Where
+  (WHERE true, WHERE 1 = 1). Exempt temp or staging
+  targets created in the same script and explicit TRUNCATE statements.
+  False positives: deliberate full-table refreshes, which pass by carrying
+  the explicit guard marker.
+severity_suggestion: error
+examples:
+  bad: UPDATE acct SET bal = 0;
+  good: UPDATE acct SET bal = 0 WHERE id = 1;
+sources:
+- title: DELETE (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-delete.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: If the WHERE clause is absent, the effect is to delete all rows in the table; TRUNCATE is the faster deliberate mechanism for that.
+- title: UPDATE (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-update.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: UPDATE changes the specified columns in all rows that satisfy the condition, so an absent condition means every row.
+- title: DML syntax (BigQuery)
+  url: https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax
+  publisher: Google Cloud
+  accessed: 2026-10-11
+  supports: The WHERE keyword is mandatory for any BigQuery DELETE statement.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE acct(id INT, bal INT);
+    INSERT INTO acct VALUES (1, 100), (2, 200);
+  bad: "UPDATE acct SET bal = 0; SELECT id, bal FROM acct ORDER BY id"
+  bad_result: "[(1, 0), (2, 0)]"
+  good: "UPDATE acct SET bal = 0 WHERE id = 1; SELECT id, bal FROM acct ORDER BY id"
+  good_result: "[(1, 0), (2, 200)]"
+  note: >
+    DML proof: each query is the UPDATE followed by a SELECT, and the result
+    is the fetchall of the final SELECT. Without WHERE, account 2's balance
+    is destroyed too, and the UPDATE reports success. DELETE behaves the same
+    way (all rows removed). Standard SQL; identical in Postgres, Snowflake,
+    SQL Server and MySQL. BigQuery makes the WHERE keyword mandatory on
+    DELETE, which blocks the bare form, but WHERE true still deletes every
+    row, so the detector also flags constant-true predicates.

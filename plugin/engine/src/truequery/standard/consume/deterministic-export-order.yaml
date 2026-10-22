@@ -1,0 +1,44 @@
+id: consume/deterministic-export-order
+title: Exports and paginated extracts specify a total ORDER BY
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every bulk export and every paginated extract query ends in an ORDER BY
+  over a unique key combination, so repeated runs and resumed pages produce
+  a deterministic row sequence.
+rationale: >
+  Without a total order, warehouse parallelism returns rows in arbitrary
+  sequence: diffing two extracts flags phantom changes, resumed exports
+  duplicate or skip rows, and auditors cannot reproduce a delivered file.
+failure_example: >
+  A compliance extract re-run for the same date range yields a differently
+  ordered file with different page boundaries; reconciliation reports 12k
+  phantom row diffs.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the unique key (or grain) of each exported relation,
+  from the contract file. With it, check that every export or paginated
+  extract query ends in an ORDER BY whose columns cover a declared unique
+  key (or end in a unique tiebreaker). Without declared keys a static parser
+  can only flag a missing ORDER BY (a code-only check that
+  sql/limit-requires-order-by already covers); it cannot prove the ORDER BY
+  columns are unique, so it must not claim the order is total. False
+  positives: hash- or bucket-distributed unload utilities where the tool,
+  not SQL text, controls ordering.
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT order_id, amount FROM mart_orders WHERE dt = '2026-10-01'
+  good: |
+    SELECT order_id, amount FROM mart_orders WHERE dt = '2026-10-01' ORDER BY order_id
+sources:
+  - title: SELECT
+    url: https://www.postgresql.org/docs/current/sql-select.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: Documents that without ORDER BY the result order is unspecified and implementation-dependent.
+confidence: high
+conflicts_with: []
+status: draft

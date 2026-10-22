@@ -1,0 +1,54 @@
+id: consume/explore-freshness-and-coverage-checked
+title: Check data freshness and coverage of the window before concluding
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  Before drawing a conclusion about a time window, the analysis checks and
+  records, for each source table used: the maximum event or load timestamp
+  (freshness), the minimum and maximum dates actually present inside the
+  window, and the row count per day (or per period of the answer's grain)
+  across the window. Periods with missing data, a visible drop-off at the
+  end of the window, or counts outside the normal range are either excluded
+  and reported as excluded, or named as a caveat in the answer.
+rationale: >
+  Late-arriving and partially loaded data make the most recent days look
+  like a decline, and a gap in a source looks like a change in behaviour.
+  Checking freshness and per-day volume is quick and separates "the business
+  changed" from "the pipeline is behind".
+failure_example: >
+  An analyst reports that weekly sign-ups fell 30 percent. The events table
+  was last loaded 41 hours earlier and the final two days of the week were
+  half empty; once loaded, the week was flat.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT COUNT(*) FROM signups
+    WHERE created_at >= CURRENT_DATE - 7
+  good: |
+    SELECT MAX(created_at), MAX(_loaded_at) FROM signups;           -- freshness
+    SELECT CAST(created_at AS DATE) d, COUNT(*) FROM signups
+    WHERE created_at >= DATE '2026-10-01' AND created_at < DATE '2026-10-08'
+    GROUP BY 1 ORDER BY 1;                                          -- coverage per day
+sources:
+  - title: Source freshness
+    url: https://docs.getdbt.com/docs/deploy/source-freshness
+    publisher: dbt Labs
+    accessed: 2026-10-11
+    supports: Freshness checks measure how recently source data was loaded against an SLA, so out-of-date sources can be detected before relying on downstream results.
+  - title: About microbatch incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-microbatch
+    publisher: dbt Labs
+    accessed: 2026-10-11
+    supports: Documents late-arriving records as a normal condition, handled with a lookback window that reprocesses recent periods.
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Recommends slicing by time units such as days to catch data breakages and checking what should not change before interpreting a result.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [ingest/declare-source-freshness, consume/explore-day-boundaries-and-partial-periods]

@@ -1,0 +1,63 @@
+id: sql/average-of-ratios
+title: Aggregate a ratio as SUM(numerator) / SUM(denominator), not AVG of row ratios
+domain: sql
+modes: [explore, build, change]
+applies_to: [any]
+statement: >
+  When a query reports a ratio (rate, share, conversion, margin) over more
+  than one row, it divides the summed numerator by the summed denominator.
+  It does not AVG a column or expression that is already a per-row ratio,
+  unless the unweighted mean of row ratios is explicitly what is wanted and
+  is labelled as such.
+rationale: >
+  AVG(rate) gives every row equal weight regardless of its denominator, so a
+  day with 2 visits counts as much as a day with 100. The result is a
+  different number from the overall rate, often by a large margin, and
+  nothing in the query looks wrong. This is the plain-SQL form of the rule
+  sem/ratio-metrics-divide-after-aggregation enforces for governed metrics.
+failure_example: >
+  A weekly conversion rate computed as AVG(daily_cvr) reports 30 percent
+  because one low-traffic day converted 1 of 2 visits; the true weekly rate
+  is 11 of 102 visits, about 11 percent.
+enforcement: detector
+detection_sketch: >
+  Match AVG (and MEDIAN/percentile) over a division expression, or over a
+  column whose name or contract marks it as a ratio (*_rate, *_pct, *_ratio,
+  cvr, ctr, margin). Suggest SUM(num) / SUM(den) when the numerator and
+  denominator are available. Heuristic, hence warning. False positives:
+  deliberate unweighted means across entities (e.g. average of per-store
+  margins as a fairness metric), which pass once labelled.
+severity_suggestion: warning
+examples:
+  bad: SELECT AVG(conversions / visits) AS cvr FROM daily_funnel;
+  good: SELECT SUM(conversions) / SUM(visits) AS cvr FROM daily_funnel;
+sources:
+- title: Aggregate Functions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-aggregate.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: avg computes the arithmetic mean of the non-null input values (each input row weighted equally); sum computes the sum of the non-null input values.
+- title: Aggregate Functions (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/functions/aggregates
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: avg(arg) calculates the average of all non-null values in arg.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sem/ratio-metrics-divide-after-aggregation, sql/integer-division-truncation, consume/explore-rates-not-counts-across-segments]
+proof:
+  setup: |
+    CREATE TABLE daily_funnel(day INT, conversions INT, visits INT);
+    INSERT INTO daily_funnel VALUES (1, 1, 2), (2, 10, 100);
+  bad: "SELECT round(AVG(conversions / visits), 4) AS cvr FROM daily_funnel"
+  bad_result: "[(0.3,)]"
+  good: "SELECT round(SUM(conversions) / SUM(visits), 4) AS cvr FROM daily_funnel"
+  good_result: "[(0.1078,)]"
+  note: >
+    The overall conversion rate is 11 / 102 = 0.1078. Averaging the two daily
+    rates (0.5 and 0.1) gives 0.3, almost three times too high, because the
+    2-visit day weighs as much as the 100-visit day. DuckDB's / returns a
+    DOUBLE for integers; in Postgres, SQL Server and SQLite cast before
+    dividing (see sql/integer-division-truncation), or both forms collapse to
+    integer results. Rounded to 4 places to keep the float repr stable.

@@ -1,0 +1,50 @@
+id: consume/explore-null-aware-negative-filters
+title: Negative filters and NULL comparisons state how NULLs are treated
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  In an ad-hoc query, a predicate of the form col <> value, col != value,
+  col NOT IN (literal list), or col NOT LIKE pattern is accompanied, in the
+  same query, by an explicit NULL decision for that column: an
+  "OR col IS NULL", an "AND col IS NOT NULL", a COALESCE/IFNULL on the
+  column, or IS DISTINCT FROM in place of <>. Comparisons written as
+  "= NULL" or "<> NULL" never appear.
+rationale: >
+  Ordinary comparisons with NULL yield unknown, so WHERE status <> 'refunded'
+  silently drops every row whose status is NULL, and "= NULL" matches
+  nothing. Aggregates skip NULLs too (COUNT(col) is not COUNT(*), AVG ignores
+  NULL rows), so an unconsidered NULL changes both filters and denominators
+  without any error.
+failure_example: >
+  An analyst excludes internal traffic with WHERE account_type <> 'internal'.
+  account_type is NULL for 22 percent of anonymous sessions, which are also
+  dropped; the reported bounce rate covers only logged-in users.
+enforcement: judgment
+detection_sketch: >
+  Judgment in explore mode. Mechanical detection is owned by
+  sql/null-equality-comparison and sql/negative-filter-drops-nulls, so a
+  finding is reported once, by those records.
+severity_suggestion: advisory
+examples:
+  bad: |
+    SELECT COUNT(*) FROM sessions
+    WHERE account_type <> 'internal'
+  good: |
+    SELECT COUNT(*) FROM sessions
+    WHERE account_type IS DISTINCT FROM 'internal'   -- NULL (anonymous) kept on purpose
+sources:
+  - title: Comparison Functions and Operators
+    url: https://www.postgresql.org/docs/current/functions-comparison.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-11
+    supports: Ordinary comparison operators yield null when either input is null; IS DISTINCT FROM treats null as a comparable value; "= NULL" should not be written.
+  - title: Aggregate Functions
+    url: https://www.postgresql.org/docs/current/functions-aggregate.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-11
+    supports: count(expression), sum and avg operate only on non-null inputs, and sum of no rows returns null rather than zero.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/null-equality-comparison, sql/negative-filter-drops-nulls, sql/not-in-nullable-subquery, sql/left-join-null-rejecting-where]

@@ -1,0 +1,56 @@
+id: ingest/quarantine-invalid-rows-at-intake
+title: Invalid rows are quarantined at intake, not dropped silently
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every intake path MUST declare what happens to rows that fail validation:
+  either reject the batch or route failing rows to a quarantine location
+  with the failure reason attached. A loader that silently discards invalid
+  rows fails review.
+rationale: >
+  Silent drops turn data-quality problems into wrong numbers: row counts
+  stop reconciling, metrics drift, and nobody can enumerate what was lost.
+  A quarantine table preserves evidence and makes the loss measurable and
+  recoverable.
+failure_example: >
+  A CSV loader skips malformed lines with a warning buried in logs. Three
+  percent of a month's transactions vanish; revenue is understated until
+  finance reconciles against the payment processor quarters later.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Requires the intake contract to declare an invalid-row policy (reject vs
+  quarantine target). A detector can flag loaders with no error-handling or
+  quarantine branch; only the declared contract makes the outcome checkable.
+  False positives: intentionally lossy sampling intakes, which must declare
+  sampling explicitly.
+severity_suggestion: warning
+examples:
+  bad: |
+    # loader skips bad rows with no record
+    for row in reader:
+        try:
+            load(row)
+        except ValueError:
+            continue
+  good: |
+    checks for raw_orders:
+      - schema:
+          fail: when wrong column type
+      - row_count > 0
+    # failing rows routed to raw_orders_quarantine with reason
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: SodaCL expresses schema and row-count checks that fail a scan; failed-row sampling preserves offending rows
+  - title: CSV Import
+    url: https://duckdb.org/docs/current/data/csv/overview
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: CSV readers expose explicit handling paths for faulty rows rather than silent skipping
+confidence: high
+conflicts_with: []
+status: draft

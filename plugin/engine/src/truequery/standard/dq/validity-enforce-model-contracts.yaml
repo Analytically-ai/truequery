@@ -1,0 +1,51 @@
+id: dq/validity-enforce-model-contracts
+title: Breaking schema changes are blocked by enforced model contracts
+domain: dq
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  Models that feed other teams or marts enable enforced contracts naming
+  every column with its data type, so a renamed, dropped, or retyped column
+  fails the build instead of propagating.
+rationale: >
+  Schema drift is the highest-blast-radius data failure: one renamed column
+  breaks every downstream model and consumer at once. A contract turns that
+  coordinated outage into a single early build failure with the culprit
+  named.
+failure_example: >
+  A developer renames user_id to end_user_id in staging; twelve downstream
+  models compile against the old name and fail in production simultaneously,
+  with no single message identifying the rename.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Statically confirm contracted models list every selected column with a
+  data type and that enforcement is on; the build itself performs the
+  mismatch check. False positives: intentional renames fail until the
+  contract is versioned alongside the model change, which is the intended
+  coordination point.
+severity_suggestion: warning
+examples:
+  bad: |-
+    models:
+      - name: stg_customers   # no contract; renames flow downstream
+  good: |-
+    models:
+      - name: stg_customers
+        config:
+          contract: {enforced: true}
+        columns:
+          - name: customer_id
+            data_type: int
+            constraints: [{type: not_null}]
+sources:
+  - title: Model contracts
+    url: https://docs.getdbt.com/docs/mesh/govern/model-contracts
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt documents enforced contracts guaranteeing a model's
+      returned dataset matches the declared column names and types
+confidence: high
+conflicts_with: []
+see_also: [model/dbt-contract-enforced]
+status: draft

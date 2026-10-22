@@ -1,0 +1,65 @@
+id: sql/null-equality-comparison
+title: Test for NULL with IS NULL, never with = NULL or <> NULL
+domain: sql
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  A comparison against the NULL literal is written IS NULL / IS NOT NULL (or
+  IS [NOT] DISTINCT FROM for a nullable value); the forms = NULL, <> NULL and
+  != NULL never appear in a predicate.
+rationale: >
+  An ordinary comparison with NULL yields NULL (unknown), never true, so
+  WHERE x = NULL and WHERE x <> NULL both filter out every row. The query
+  runs without error and silently returns nothing; a JOIN ON a.x = NULL
+  matches nothing either.
+failure_example: >
+  A data-quality query SELECT COUNT(*) FROM customers WHERE email = NULL
+  reports 0 missing emails; the check passes every night while 8 percent of
+  customers have no email.
+enforcement: detector
+detection_sketch: >
+  Match binary comparison nodes (=, <>, !=) where either operand is the NULL
+  literal, in WHERE, ON, HAVING, QUALIFY, CASE WHEN and filter clauses.
+  Suggest IS NULL / IS NOT NULL. False positives: none in practice; the only
+  engine-level escape hatch is Postgres transform_null_equals (off by
+  default), which rewrites x = NULL to x IS NULL, and SQL Server with
+  ANSI_NULLS OFF (deprecated). Code should not rely on either.
+severity_suggestion: error
+examples:
+  bad: SELECT id FROM customers WHERE email = NULL;
+  good: SELECT id FROM customers WHERE email IS NULL;
+sources:
+- title: Comparison Functions and Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-comparison.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Ordinary comparison operators yield null when either input is null (7 = NULL and 7 <> NULL both yield null); "Do not write expression = NULL"; transform_null_equals is a compatibility setting that converts x = NULL to x IS NULL.
+- title: NULL Values (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/data_types/nulls
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: Any comparison with a NULL value returns NULL, including NULL = NULL; use IS [NOT] NULL or IS NOT DISTINCT FROM instead.
+- title: SET ANSI_NULLS (Transact-SQL)
+  url: https://learn.microsoft.com/en-us/sql/t-sql/statements/set-ansi-nulls-transact-sql
+  publisher: Microsoft
+  accessed: 2026-10-11
+  supports: With ANSI_NULLS ON, WHERE column_name = NULL returns zero rows even if there are NULL values, and WHERE column_name <> NULL returns zero rows even if there are non-NULL values; ANSI_NULLS OFF is deprecated.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/negative-filter-drops-nulls, sql/not-in-nullable-subquery, consume/explore-null-aware-negative-filters]
+proof:
+  setup: |
+    CREATE TABLE customers(id INT, email VARCHAR);
+    INSERT INTO customers VALUES (1, 'a@x.com'), (2, NULL), (3, 'c@x.com');
+  bad: "SELECT (SELECT COUNT(*) FROM customers WHERE email = NULL), (SELECT COUNT(*) FROM customers WHERE email <> NULL)"
+  bad_result: "[(0, 0)]"
+  good: "SELECT (SELECT COUNT(*) FROM customers WHERE email IS NULL), (SELECT COUNT(*) FROM customers WHERE email IS NOT NULL)"
+  good_result: "[(1, 2)]"
+  note: >
+    The bad query asks "how many customers have no email" and "how many have
+    one" and gets 0 for both, because email = NULL and email <> NULL are
+    unknown for every row, including the row whose email is NULL. Standard
+    SQL three-valued logic; the same in Postgres (unless transform_null_equals
+    is on), BigQuery, Snowflake, MySQL, and SQL Server with the default
+    ANSI_NULLS ON.

@@ -1,0 +1,49 @@
+id: sem/ratio-metrics-divide-after-aggregation
+title: Ratios divide aggregates, never average precomputed ratios
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Any metric that is a ratio, rate, or percentage is defined as numerator
+  metric divided by denominator metric (ratio/derived type), so the layer
+  aggregates first and divides second. Defining a ratio as an average of
+  row-level or day-level ratios is prohibited.
+rationale: >
+  Averaging ratios weights tiny and huge denominators equally: a 100%
+  conversion day with 2 visitors outweighs a 1% day with 20,000 visitors.
+  Divide-after-aggregation is the only weighting-correct order of operations.
+failure_example: >
+  Weekly conversion reported as the average of daily conversion rates shows
+  34% while true orders/visitors is 2.1%; marketing doubles spend on a
+  "winning" week that actually lost money.
+enforcement: detector
+detection_sketch: >
+  Flag ratio metrics whose expression averages a ratio column (AVG of a field
+  named rate/ratio/pct, or AVG over an expression containing division), and
+  require ratio-type metrics with explicit numerator/denominator refs.
+  False positives: genuinely unweighted index averages (rare, documented) —
+  allow with an explicit override comment.
+severity_suggestion: error
+examples:
+  bad: |-
+    SELECT AVG(daily_conversion_rate) AS weekly_conversion FROM daily_kpis
+  good: |-
+    - name: conversion_rate
+      type: ratio
+      type_params:
+        numerator: orders_count
+        denominator: visitors_count
+sources:
+  - title: Ratio metrics
+    url: https://docs.getdbt.com/docs/build/ratio
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Ratio metrics reference numerator and denominator metrics
+  - title: Creating metrics
+    url: https://docs.getdbt.com/docs/build/metrics-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Derived metric types compose from base metrics
+confidence: high
+conflicts_with: []
+status: draft

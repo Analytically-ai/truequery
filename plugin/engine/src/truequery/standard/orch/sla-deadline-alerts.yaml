@@ -1,0 +1,76 @@
+id: orch/sla-deadline-alerts
+title: Pipelines with a freshness commitment alert on lateness, not just failure
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+- dagster
+- dbt
+statement: >
+  A pipeline with a downstream freshness commitment MUST declare a
+  machine-readable lateness check with an alert destination, because a late
+  run that eventually succeeds raises no failure alert. Use the mechanism of
+  the version in use: Airflow 3.1+ Deadline Alerts (the `deadline` DAG
+  argument; experimental in 3.1); Airflow 2.x `sla` / `sla_miss_callback`
+  (removed in Airflow 3.0, so do not write new code against it); Dagster
+  freshness policies with a freshness alert; dbt source freshness
+  (`warn_after` / `error_after`) for source-fed models.
+rationale: >
+  Silent lateness is easy to miss: dashboards render, the run succeeds hours
+  later, and nobody is paged. Each tool has a native lateness signal, but
+  they differ by version and two of them are new or in preview, which is
+  why the declaration and the threshold belong in a reviewed contract.
+failure_example: >
+  A 07:00 executive-report DAG runs four hours late after a source delay; the
+  task succeeds at 11:00, no alert fires, and leadership presents stale
+  numbers.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Contract: pipelines tagged with a freshness commitment declare a threshold
+  and an alert destination. Static check: Airflow 3.1+ DAGs carry a
+  deadline=DeadlineAlert(...) (flag sla=/sla_miss_callback on Airflow 3,
+  where they no longer work); Dagster assets carry a freshness policy and
+  the deployment has a freshness alert; dbt sources feeding them declare
+  freshness with a loaded_at_field or metadata-based freshness. A reviewer
+  confirms the threshold matches the business commitment. Exempt pipelines
+  tagged non-critical.
+severity_suggestion: warning
+examples:
+  bad: |
+    DAG("exec_report", schedule="0 6 * * *")  # no lateness signal
+    DAG("exec_report", sla_miss_callback=page)  # Airflow 3: SLA feature removed
+  good: |
+    DAG("exec_report", schedule="0 6 * * *",
+        deadline=DeadlineAlert(reference=DeadlineReference.DAGRUN_QUEUED_AT,
+                               interval=timedelta(hours=1),
+                               callback=AsyncCallback(SlackWebhookNotifier, kwargs={...})))
+sources:
+- title: Deadline Alerts (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/howto/deadline-alerts.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: DeadlineAlert on the DAG deadline parameter with reference, interval and callback; new in 3.1
+    and marked experimental.
+- title: Tasks (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: The Airflow 2 SLA feature was removed in 3.0 and replaced in 3.1 by Deadline Alerts.
+- title: Asset freshness policies (Dagster docs)
+  url: https://dagster.io/docs/guides/observe/asset-freshness-policies
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Time-window and cron freshness policies with fail/warn windows and freshness alerts; under
+    active development, not enabled by default in OSS, superseding freshness checks since 1.12.
+- title: Add sources to your DAG (dbt docs)
+  url: https://docs.getdbt.com/docs/build/sources
+  publisher: dbt Labs
+  accessed: '2026-10-11'
+  supports: Source freshness with warn_after/error_after and loaded_at_field, described as a component of
+    defining SLAs for the warehouse.
+confidence: medium
+conflicts_with: []
+status: draft

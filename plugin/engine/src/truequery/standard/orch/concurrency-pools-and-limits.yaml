@@ -1,0 +1,63 @@
+id: orch/concurrency-pools-and-limits
+title: Fan-out against shared systems declares a concurrency cap
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+- dagster
+statement: >
+  Tasks that fan out against a shared, capacity-limited system (warehouse,
+  source database, rate-limited API) MUST declare an explicit concurrency
+  cap scoped to that system: in Airflow a named pool and/or
+  max_active_tis_per_dag / max_active_tasks; in Dagster a concurrency pool,
+  run tag limit, or run queue limit. They should not rely only on the
+  deployment-wide default (in Airflow, every unassigned task shares
+  default_pool, which starts at 128 slots).
+rationale: >
+  Both Airflow and Dagster document these limits specifically for protecting
+  external systems that are overwhelmed by simultaneous work. Without a
+  per-system cap, one wide mapped task can consume the shared slots and the
+  external system's connections, so neighbouring pipelines queue or fail.
+failure_example: >
+  A mapped load fans out to 500 parallel COPY jobs in default_pool; the
+  warehouse queues them, connection limits are hit, and unrelated DAGs in
+  the same deployment wait for slots.
+enforcement: detector
+detection_sketch: >
+  Airflow: flag tasks created with .expand()/.expand_kwargs() or with known
+  database/warehouse/HTTP operators that set none of pool,
+  max_active_tis_per_dag, or a DAG-level max_active_tasks. Dagster: flag
+  assets/ops using a database or API resource in projects with no pool,
+  tag concurrency limit, or run queue configuration. False positives:
+  light control-flow tasks and small fixed fan-outs; caps set in
+  deployment config the scanner cannot see (allow a config-path override).
+severity_suggestion: warning
+examples:
+  bad: |
+    load.expand(file=files)  # 500-way fan-out, default_pool only
+  good: |
+    load.partial(pool="warehouse_load", max_active_tis_per_dag=16).expand(file=files)
+sources:
+- title: Pools (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/pools.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Pools limit execution parallelism on arbitrary sets of tasks to avoid overwhelming systems;
+    unassigned tasks use default_pool, which starts with 128 slots; tasks join a pool via the pool parameter.
+- title: Scaling Airflow to optimize performance
+  url: https://www.astronomer.io/docs/learn/airflow-scaling-workers
+  publisher: Astronomer
+  accessed: '2026-10-11'
+  supports: Defines max_active_tis_per_dag, max_active_tasks and max_active_runs as DAG/task-level
+    concurrency limits, and pools as limits on arbitrary task groups.
+- title: Managing concurrency (Dagster docs)
+  url: https://dagster.io/docs/guides/operate/managing-concurrency
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Dagster concurrency pools, run queue limits and run tag limits exist to protect rate-limited
+    APIs, shared databases and resource-constrained systems.
+confidence: medium
+conflicts_with: []
+status: draft

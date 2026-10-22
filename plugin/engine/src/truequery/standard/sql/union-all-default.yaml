@@ -1,0 +1,70 @@
+id: sql/union-all-default
+title: Bare UNION states its dedup intent; UNION ALL is the default for appends
+domain: sql
+modes: [build, change, explore]
+applies_to: [any]
+statement: >
+  UNION and UNION ALL answer different questions, and which one is right
+  depends on intent. UNION (DISTINCT) is correct when the author wants the
+  set of distinct rows across branches; UNION ALL is correct when appending
+  rows that can legitimately repeat (events, transactions, log lines). A
+  bare UNION is flagged until the author records that dedup is intended;
+  appends use UNION ALL.
+rationale: >
+  UNION silently removes duplicate rows across and within branches. When the
+  rows are separate real-world facts that happen to be identical (two
+  identical payments, two webhook deliveries), that removal is data loss and
+  every downstream count and sum is low. The linter cannot know the intent,
+  so it asks for it rather than declaring UNION wrong.
+failure_example: >
+  Daily event appends combined with UNION drop same-day duplicate webhook
+  deliveries; reconciliation never balances and the loss looks like missing
+  source data.
+enforcement: detector
+detection_sketch: >
+  Match Union nodes with dedup enabled (UNION or UNION DISTINCT) that carry
+  no recorded intent (an inline justification comment or a contract flag).
+  Message asks whether dedup is intended and suggests UNION ALL for appends.
+  False positives: genuinely overlapping branches where dedup is the point;
+  those pass once the intent is recorded.
+severity_suggestion: warning
+examples:
+  bad: SELECT payment_id, amount FROM card_payments UNION SELECT payment_id, amount FROM wallet_payments;
+  good: SELECT payment_id, amount FROM card_payments UNION ALL SELECT payment_id, amount FROM wallet_payments;
+sources:
+- title: Combining Queries (UNION, INTERSECT, EXCEPT) (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/queries-union.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: UNION eliminates duplicate rows from its result, in the same way as DISTINCT, unless UNION ALL is used.
+- title: Set Operations (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/query_syntax/setops
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: Documents UNION (duplicates removed) and UNION ALL (duplicates kept) as distinct set operations.
+- title: Query syntax, Set operators (BigQuery)
+  url: https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax
+  publisher: Google Cloud
+  accessed: 2026-10-11
+  supports: BigQuery's set operator grammar is UNION { ALL | DISTINCT }, so the dedup choice is always spelled out there.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE e1(amount INT);
+    INSERT INTO e1 VALUES (10), (20);
+    CREATE TABLE e2(amount INT);
+    INSERT INTO e2 VALUES (20), (30);
+  bad: "SELECT SUM(amount) FROM (SELECT amount FROM e1 UNION SELECT amount FROM e2)"
+  bad_result: "[(60,)]"
+  good: "SELECT SUM(amount) FROM (SELECT amount FROM e1 UNION ALL SELECT amount FROM e2)"
+  good_result: "[(80,)]"
+  note: >
+    The intent here is "total of all payments from both channels", and the
+    two 20.00 payments are separate payments. UNION treats them as one row
+    and reports 60 instead of 80. If the intent were "distinct amounts seen",
+    UNION would be correct, which is why this is a warning that asks for the
+    intent, not an error. Standard SQL; identical in Postgres, Snowflake and
+    SQL Server; BigQuery requires the explicit UNION DISTINCT / UNION ALL
+    keyword.

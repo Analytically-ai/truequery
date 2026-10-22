@@ -1,0 +1,100 @@
+id: orch/failure-alert-routing
+title: Production pipelines have an owner, routed failure alerts, and a runbook
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+- dagster
+- dbt
+statement: >
+  Every production pipeline (Airflow DAG, Dagster job/asset group, dbt Cloud
+  job) MUST declare (1) a real owning team or rotation, not a placeholder;
+  (2) a failure notification wired to that owner's channel, carrying enough
+  context to start triage (pipeline, run id, logical date or partition,
+  error, link to the run/logs); and (3) a link to a runbook covering triage,
+  rerun/rollback, and who to tell downstream.
+rationale: >
+  Failures in unowned pipelines sit unnoticed or bounce between teams while
+  stale data is read as fresh; alerts without context make on-call start
+  from zero. All three tools provide the hooks: Airflow failure callbacks and
+  notifiers at DAG or task level plus owner/owner_links; Dagster asset owners
+  and run-failure sensors whose messages include job name, run id and a
+  deep link; dbt job notifications on failure. Google's SRE book reports that
+  recording the response in a playbook in advance gives roughly a 3x
+  improvement in mean time to repair over improvising.
+failure_example: >
+  A legacy DAG with owner "airflow" fails over a holiday weekend; its only
+  alert goes to an unmonitored mailing list with the text "Task failed" and
+  no run id. Monday's executive review presents three-day-old numbers as
+  current, and on-call spends an hour finding which partition broke.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Contract: the pipeline's declaration names an owner, an alert destination
+  and a runbook URL. Static checks that back it: Airflow DAGs have a
+  non-placeholder owner (flag "airflow", empty, or names not in a declared
+  team list) and an on_failure_callback at DAG level or in default_args;
+  Dagster assets in production code locations carry owners and the
+  deployment defines a run-failure sensor or alert policy covering them;
+  dbt Cloud jobs have failure notifications. A runbook link is looked for
+  in doc_md, tags, or asset metadata. Limits: alert rules held in an
+  external incident platform are invisible to the scan (accept a declared
+  pointer); callbacks do not fire for state changes made through the UI or
+  CLI. Exempt dev/sandbox environments by tag.
+severity_suggestion: warning
+examples:
+  bad: |
+    DAG("x", default_args={"owner": "airflow"})  # placeholder owner, no failure callback, no runbook
+  good: |
+    DAG("x",
+        default_args={"owner": "data-platform"},
+        owner_links={"data-platform": "https://wiki.example.com/runbooks/x"},
+        on_failure_callback=SlackNotifier(channel="#data-platform-alerts",
+            text="{{ dag.dag_id }} {{ run_id }} failed: {{ ti.log_url }}"))
+    # Dagster: @asset(owners=["team:data-platform"]) + make_slack_on_run_failure_sensor(
+    #   channel="#data-platform-alerts", webserver_base_url=...)
+sources:
+- title: Callbacks (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/callbacks.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: on_failure_callback can be set at DAG level, via default_args, or per task, receives the
+    run context, and accepts Notifiers; callbacks fire only when a worker changes state, not for UI/CLI
+    changes.
+- title: Add Owner Links to DAG (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/howto/add-owner-links.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: owner_links on a DAG maps owner names to an HTTP or mailto link shown in the DAGs view.
+- title: Asset metadata and tags (Dagster docs)
+  url: https://dagster.io/docs/guides/build/assets/metadata-and-tags
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Assets declare owners as an email address or a team name with the "team" prefix; Dagster+ Pro
+    can use owners for alerts.
+- title: dagster-slack API reference
+  url: https://dagster.io/docs/api/libraries/dagster-slack
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: make_slack_on_run_failure_sensor messages a channel on job failure, by default with error
+    message, job name and run id, and deep links when webserver_base_url is set.
+- title: Monitor jobs and alerts (dbt docs)
+  url: https://docs.getdbt.com/docs/deploy/monitor-jobs
+  publisher: dbt Labs
+  accessed: '2026-10-11'
+  supports: dbt jobs can send email, Slack or Teams notifications when a run fails, to alert the right
+    people or team.
+- title: Introduction (Site Reliability Engineering, Google)
+  url: https://sre.google/sre-book/introduction/
+  publisher: Google
+  accessed: '2026-10-11'
+  supports: Recording response steps in a playbook in advance produces roughly a 3x improvement in MTTR
+    versus improvising. This supports the runbook requirement in general SRE terms, not from a data-tool
+    source.
+confidence: medium
+conflicts_with: []
+see_also:
+- gov/declared-model-owner
+status: draft

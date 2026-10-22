@@ -1,0 +1,44 @@
+id: consume/freshness-displayed
+title: Dashboards and extracts surface data freshness to viewers
+domain: consume
+modes: [build, assure]
+applies_to: [dbt, any]
+statement: >
+  Each production dashboard and scheduled extract displays the maximum data
+  timestamp (or pipeline run time) of its inputs, and tiles backed by stale
+  inputs beyond the declared SLA show a stale badge instead of silent
+  numbers.
+rationale: >
+  Numbers without a timestamp read as current; decisions get made on
+  yesterday's partial load presented as this morning's truth.
+failure_example: >
+  An executive pauses ad spend based on a dashboard showing a 30 percent
+  demand drop that was actually a failed 6 AM load rendering partial data
+  with no freshness indicator.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: per-dashboard freshness SLA and the freshness query.
+  Check: dashboard definition includes a freshness tile bound to the max
+  loaded timestamp, plus a stale rule. False positives: real-time tiles
+  where per-query freshness adds noise, waived by declaring real-time mode.
+severity_suggestion: warning
+examples:
+  bad: |
+    dashboards:
+      - name: demand_overview
+        tiles: [revenue, orders]   # no freshness tile
+  good: |
+    dashboards:
+      - name: demand_overview
+        tiles: [revenue, orders, data_as_of]
+        freshness_sla_hours: 26
+sources:
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Documents source freshness checks, the pipeline-side signal the display badge consumes.
+confidence: medium
+conflicts_with: []
+status: draft

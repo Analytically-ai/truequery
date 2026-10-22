@@ -1,0 +1,48 @@
+id: sql/explore-profile-filter-columns
+title: Profile a column's NULLs and distinct values before filtering or grouping on it
+domain: sql
+modes: [explore]
+applies_to: [any]
+statement: >
+  Before an ad-hoc query filters or groups on a column of an unfamiliar
+  table, the analyst checks that column's NULL count and its distinct values
+  (or top values with counts), and keeps that check with the analysis.
+  The filter is then written against the values that actually occur,
+  including NULL.
+rationale: >
+  Most silent wrong answers in exploration come from filters written against
+  assumed values: <> 'x' dropping NULL rows, = 'Cancelled' missing
+  'cancelled' and 'CANCELLED', IN ('web', 'app') missing 'ios'. A one-line
+  profile (COUNT(*) - COUNT(col), and GROUP BY col ORDER BY count) shows
+  these before they shape the answer, and costs one query.
+failure_example: >
+  An analyst filters WHERE country = 'US' without profiling; the column also
+  holds 'USA' and 'us' from a second source, and the reported US revenue is
+  a third too low.
+enforcement: judgment
+detection_sketch: >
+  Judgment, not enforced: whether a profile was run is outside the query
+  text. The analyze command can offer the profile query (DuckDB SUMMARIZE,
+  or SELECT col, COUNT(*) FROM t GROUP BY col ORDER BY 2 DESC) for every
+  column it sees in a WHERE or GROUP BY of an explore session. The NULL half
+  of the problem is also caught statically by sql/negative-filter-drops-nulls.
+  No proof: the defect is an unchecked assumption, not a specific query.
+severity_suggestion: advisory
+examples:
+  bad: SELECT SUM(amount) FROM orders WHERE country = 'US';
+  good: "SELECT country, COUNT(*), COUNT(*) - COUNT(country) AS nulls FROM orders GROUP BY country ORDER BY 2 DESC; -- then filter on the values found"
+sources:
+- title: Summarize (DuckDB documentation)
+  url: https://duckdb.org/docs/current/guides/meta/summarize
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: SUMMARIZE computes min, max, approx_unique, quantiles and count for every column of a table or query and reports the percentage of NULL values per column.
+- title: Aggregate Functions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-aggregate.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: count(*) counts input rows while count(value) counts only non-null values, so their difference is the column's NULL count.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [sql/negative-filter-drops-nulls, consume/explore-null-aware-negative-filters, consume/explore-inspect-distributions-and-examples]

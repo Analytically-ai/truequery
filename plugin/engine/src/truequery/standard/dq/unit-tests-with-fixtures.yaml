@@ -1,0 +1,52 @@
+id: dq/unit-tests-with-fixtures
+title: Transform logic is unit-tested against fixed input fixtures
+domain: dq
+modes: [build, change]
+applies_to: [dbt, sqlmesh, any]
+statement: >
+  Models with non-trivial logic carry unit tests that feed fixed input rows
+  (fixtures) through the model SQL and assert exact expected output rows,
+  run in CI without warehouse data.
+rationale: >
+  Data tests only observe outputs after production runs; a logic error ships
+  bad data first and is caught later. Fixture unit tests catch the error
+  before merge, on edge cases (empty inputs, boundary values, tie handling)
+  that production data may not currently exhibit.
+failure_example: >
+  A window-function refactor silently changes tie-breaking on ranked
+  transactions; no production partition exhibits ties this week, so
+  output-level tests stay green while the logic is wrong for next month's
+  data.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Confirm models flagged complex in the contract have a unit-test file with
+  declared inputs and expected outputs, and that CI runs them; content
+  quality of fixtures remains reviewer judgment. False positives: trivial
+  pass-through models flagged by coverage gates until exempted by a
+  simplicity marker.
+severity_suggestion: warning
+examples:
+  bad: |-
+    -- only production-output tests exist; logic change merges untested
+  good: |-
+    test_rank_ties:
+      model: mart_ranked_txns
+      inputs: {staging_txns: [{rows: [...ties...]}]}
+      outputs: {query: [{rows: [...expected winners...]}]}
+sources:
+  - title: Unit tests
+    url: https://docs.getdbt.com/docs/build/unit-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt documents unit tests evaluating model logic against
+      predefined inputs with expected outputs
+  - title: Testing
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/tests/
+    publisher: Tobiko
+    accessed: 2026-10-12
+    supports: SQLMesh tests verify model output against fixture inputs and
+      expected query results, including per-CTE assertions
+confidence: high
+conflicts_with: []
+status: draft

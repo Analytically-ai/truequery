@@ -1,0 +1,57 @@
+id: sem/null-handling-in-aggregations
+title: Measures declare null and missing-value handling explicitly
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every measure definition states how nulls and missing values are treated
+  (ignored, counted as zero, or excluded with a companion validity metric),
+  and COUNT DISTINCT measures never silently mix nulls into the distinct set.
+rationale: >
+  Databases disagree on null semantics (COUNT(x) skips nulls, COUNT(*) does
+  not), so an undeclared choice flips between warehouses and migrations:
+  a backfill of null emails quietly drops 200K users from an engagement
+  metric with no code change at all.
+failure_example: >
+  After a warehouse migration, COUNT(DISTINCT email) drops 12% because the
+  new engine counts empty-string defaults differently; the metric definition
+  never said which behavior was intended, so no check fires.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: column nullability (enforced NOT NULL constraints,
+  not_null tests or contract columns) and a null-handling annotation per
+  measure. With them, flag measures over columns declared nullable that
+  carry no null-handling annotation, and COUNT DISTINCT over columns with no
+  non-null guarantee or filter. Without nullability facts the checker cannot
+  tell which measures are at risk. False positives: columns with enforced
+  not-null constraints, exempt once declared and tested.
+severity_suggestion: warning
+examples:
+  bad: |-
+    measures:
+      - name: engaged_users
+        sql: email
+        type: count_distinct   # nullable column; null treatment undeclared
+  good: |-
+    measures:
+      - name: engaged_users
+        sql: email
+        type: count_distinct
+        filters:
+          - email IS NOT NULL
+        description: 'Null emails excluded; see dq validity check on users.email.'
+sources:
+  - title: Getting started data modeling
+    url: https://docs.cube.dev/docs/data-modeling/overview
+    publisher: Cube
+    accessed: 2026-10-12
+    supports: Measures defined with explicit SQL over chosen columns
+  - title: Creating metrics
+    url: https://docs.getdbt.com/docs/build/metrics-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Simple metrics aggregate a single measure with explicit params
+confidence: medium
+conflicts_with: []
+status: draft

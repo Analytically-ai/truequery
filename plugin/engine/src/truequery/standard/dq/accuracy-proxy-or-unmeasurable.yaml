@@ -1,0 +1,45 @@
+id: dq/accuracy-proxy-or-unmeasurable
+title: Accuracy is measured against a declared reference or reported unmeasurable
+domain: dq
+modes: [assure]
+applies_to: [any]
+statement: >
+  No accuracy score is computed from the dataset alone. Either a reference
+  source of truth is declared and drift against it is measured, or the
+  dimension reports UNMEASURABLE with the reason stated.
+rationale: >
+  "Matches reality" cannot be derived from the data being judged; any score
+  computed without ground truth is a fabrication that borrows the authority
+  of the other five dimensions. Fake accuracy scores are worse than none
+  because they suppress the reconciliation work that would actually catch
+  error.
+failure_example: >
+  A synthetic "accuracy: 98%" badge computed from internal distribution fit
+  reassures stakeholders while customer addresses diverge from the postal
+  reference file for months.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: |-
+    {dimension: accuracy, score: 0.98, verdict: PASS}
+    # no reference declared; score invented from internal statistics
+  good: |-
+    {dimension: accuracy, verdict: UNMEASURABLE,
+     reason: "no source of truth declared; see reconciliation config"}
+sources:
+  - title: Introduction to GX Core
+    url: https://docs.greatexpectations.io/docs/core/introduction/
+    publisher: Great Expectations
+    accessed: 2026-10-12
+    supports: GX Core validates data against declared expectations rather
+      than judging truth against reality
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: Soda measures cross-dataset reconciliation and anomaly signals
+      as proxies rather than direct reality matching
+confidence: medium
+conflicts_with: []
+status: draft

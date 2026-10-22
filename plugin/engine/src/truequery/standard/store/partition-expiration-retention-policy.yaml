@@ -1,0 +1,43 @@
+id: store/partition-expiration-retention-policy
+title: Bound partition lifetime with expiration or lifecycle policy
+domain: store
+modes: [build, assure]
+applies_to: [bigquery, snowflake, databricks, delta, iceberg]
+statement: >
+  Append-only event or log tables must declare a bounded lifetime — BigQuery
+  partition_expiration_days, a Snowflake storage lifecycle policy, or a scheduled
+  DELETE/VACUUM of aged partitions — consistent with the privacy and cost policy;
+  unbounded perpetual retention of raw events is a violation.
+rationale: >
+  Raw events accumulate forever by default: storage cost grows linearly, stale
+  PII outlives its legal basis, and every future scan pays for data nobody
+  queries. An explicit expiry turns retention into a reviewed decision.
+failure_example: >
+  A clickstream table with no expiry reaches 40 PB in four years; 99% of queries
+  touch the last 30 days, but every table-level operation lists the full history
+  and the privacy team flags multi-year raw identifiers.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check the contract-declared retention class against DDL options (BigQuery
+  partition expiration, lifecycle policies) or a scheduled purge job in the repo;
+  flag event/log tables with neither. Cannot verify the warehouse actually
+  enforces it — that is runtime. False positives: tables under an explicit legal-hold class.
+severity_suggestion: warning
+examples:
+  bad: "CREATE TABLE events (...) PARTITION BY DATE(ts); -- no expiry, retained forever"
+  good: "CREATE TABLE events (...) PARTITION BY DATE(ts) OPTIONS (partition_expiration_days = 400);"
+sources:
+  - title: BigQuery — Manage partitioned tables
+    url: https://docs.cloud.google.com/bigquery/docs/managing-partitioned-tables
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Partitioned tables support management operations including setting partition expiration.
+  - title: Snowflake — Temporary and Transient Tables (table-type retention choices)
+    url: https://docs.snowflake.com/en/user-guide/tables-temp-transient
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Snowflake distinguishes permanent, transient, and temporary lifetimes with different retention and fail-safe behavior.
+confidence: medium
+conflicts_with: []
+status: draft

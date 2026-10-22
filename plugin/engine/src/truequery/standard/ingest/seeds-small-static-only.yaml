@@ -1,0 +1,43 @@
+id: ingest/seeds-small-static-only
+title: Seeds carry small static reference data only
+domain: ingest
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  dbt seeds MUST be limited to small, slowly-changing reference datasets
+  (size and change-frequency limits set by the project), version-controlled
+  as CSVs. Fact data, large dimensions, or frequently-updated files MUST
+  enter through a proper loader, not seeds. An oversized or volatile seed
+  fails review.
+rationale: >
+  Seeds load from version control on every run: large seeds bloat run time,
+  churn diffs, and bypass every intake guard (freshness, quarantine,
+  lineage). Teams that seed fact extracts get slow runs and unreviewable
+  thousand-line CSV diffs.
+failure_example: >
+  A 400MB clickstream extract is committed as a seed. Every CI run parses
+  it, repo clones balloon, and a mid-file corruption silently loads partial
+  data with no quarantine path.
+enforcement: detector
+detection_sketch: >
+  Flag seed files over the project's row/byte limit or changing more often
+  than the allowed cadence (git history). False positives: genuinely small
+  volatile mappings the team accepts; raise the limit explicitly instead.
+severity_suggestion: warning
+examples:
+  bad: |
+    seeds:
+      +post-hook: "select 1"
+    # data/seeds/clickstream_2026_10.csv (412 MB) committed as a seed
+  good: |
+    # data/seeds/country_codes.csv (248 rows, changes yearly)
+    # clickstream arrives via the events connector, not version control
+sources:
+  - title: Add Seeds to your DAG
+    url: https://docs.getdbt.com/docs/build/seeds
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt seeds are documented as version-controlled CSV reference data in the project DAG
+confidence: high
+conflicts_with: []
+status: draft

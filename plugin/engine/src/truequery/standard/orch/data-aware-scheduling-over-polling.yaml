@@ -1,0 +1,62 @@
+id: orch/data-aware-scheduling-over-polling
+title: Prefer data-aware triggers over chained cron offsets
+domain: orch
+modes:
+- explore
+- build
+applies_to:
+- airflow
+- dagster
+statement: >
+  When one pipeline consumes another pipeline's output on the same platform,
+  ordering SHOULD use the platform's data-aware trigger (Airflow asset-aware
+  scheduling, named Datasets before Airflow 3; Dagster declarative
+  automation or asset sensors) rather than a downstream cron offset that
+  assumes the upstream has finished. Note that an Airflow asset event means
+  the producing task succeeded, not that the data passed any check.
+rationale: >
+  A cron offset encodes an assumed upstream duration. When the upstream
+  slips, the downstream still runs and publishes on time from stale inputs,
+  which looks healthy. Asset-aware triggers run the consumer when the
+  producer reports an update instead.
+failure_example: >
+  A mart DAG runs at 03:00 assuming its upstream finishes by 02:30; the
+  upstream slips to 03:15 and the mart publishes yesterday's snapshot as
+  today's.
+enforcement: judgment
+detection_sketch: >
+  Not a reliable static check: two schedules a few minutes apart may be
+  genuinely independent, and the dependency between them is usually only
+  visible in table names inside SQL. Reviewer prompt: for each cron-scheduled
+  DAG/job, does it read a table another scheduled pipeline writes? If so, is
+  the ordering declared (asset schedule, asset sensor, automation condition)
+  or only implied by clock times? A tool may surface candidate pairs
+  (consumer reads a table that another pipeline declares as an outlet/asset)
+  for the reviewer, but must not emit a finding on its own.
+severity_suggestion: advisory
+examples:
+  bad: |
+    schedule="0 3 * * *"  # assumes upstream is done by 02:30
+  good: |
+    schedule=[Asset("warehouse.staging_orders")]  # Airflow 3; Dagster: AutomationCondition.eager()
+sources:
+- title: Asset-aware scheduling (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/asset-scheduling.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: DAGs can be scheduled when a task updates an asset (producer declares outlets, consumer lists
+    the asset in schedule), added in 2.4; an asset is marked updated only when the task completes successfully.
+- title: Upgrading to Airflow 3
+  url: https://airflow.apache.org/docs/apache-airflow/stable/installation/upgrading_to_airflow3.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Datasets were renamed to Assets in Airflow 3 (airflow.datasets.Dataset becomes airflow.sdk.Asset).
+- title: Declarative Automation (Dagster docs)
+  url: https://dagster.io/docs/guides/automate/declarative-automation
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: AutomationCondition.eager() updates an asset when its dependencies update; on_cron() runs once
+    per tick only after upstream dependencies have updated.
+confidence: medium
+conflicts_with: []
+status: draft

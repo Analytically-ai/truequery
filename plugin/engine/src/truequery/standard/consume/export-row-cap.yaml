@@ -1,0 +1,45 @@
+id: consume/export-row-cap
+title: Every bulk export declares a maximum row bound
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each scheduled extract or bulk export declares a maximum row count; an
+  export whose result exceeds the bound fails loudly instead of delivering a
+  truncated or ballooning file.
+rationale: >
+  Unbounded exports grow silently with the business until a 50 GB CSV
+  breaks the SFTP drop, the vendor parser, or the egress bill; an explicit
+  cap converts silent breakage into an actionable alert.
+failure_example: >
+  A nightly customer-list export grows from 2M to 40M rows after a filter
+  regression; the vendor ingests a partial file and mails offers to
+  unsubscribed addresses.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: per-export row caps. Check: export definition
+  carries max_rows and the runner enforces fail-closed above it. False
+  positives: legitimately growing tables whose caps were set once and never
+  reviewed, handled by periodic cap review, not by removing the check.
+severity_suggestion: warning
+examples:
+  bad: |
+    exports:
+      - name: nightly_customer_list
+        query: ./customer_list.sql   # no bound declared
+  good: |
+    exports:
+      - name: nightly_customer_list
+        query: ./customer_list.sql
+        max_rows: 5000000
+        on_overflow: fail
+sources:
+  - title: Run a query
+    url: https://docs.cloud.google.com/bigquery/docs/running-queries
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Documents result-size handling and limits when running and retrieving large query results.
+confidence: medium
+conflicts_with: []
+status: draft

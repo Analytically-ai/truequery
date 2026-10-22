@@ -1,0 +1,43 @@
+id: ingest/reconcile-row-counts-per-load
+title: Each load reconciles source counts against landed counts
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every batch load MUST compare the source-side record count (or a control
+  total) against the landed count and fail or alert past a declared
+  tolerance. A loader that lands rows without a count reconciliation fails
+  review.
+rationale: >
+  Counts are the cheapest completeness signal: truncation, partial files,
+  and connector pagination bugs all show up as count gaps long before
+  anyone spots wrong analytics. Without reconciliation, partial loads pass
+  as complete and every downstream aggregate is quietly short.
+failure_example: >
+  A connector paginates 10k rows per call and stops after the first page
+  due to a cursor bug. 9.2M of 10M events never land; weekly active-user
+  metrics drop 8% and the team blames seasonality.
+enforcement: runtime
+detection_sketch: >
+  Needs live counts from both sides per batch; static review can only
+  confirm the reconciliation step exists in the pipeline. False positives:
+  legitimately filtered loads must reconcile against the post-filter
+  expectation, not the raw source count.
+severity_suggestion: warning
+examples:
+  bad: |
+    # lands whatever arrived; no comparison
+    load_batch(file); mark_success(batch_id)
+  good: |
+    checks for raw_events_daily:
+      - row_count between 9_500_000 and 10_500_000
+    # batch fails to quarantine when outside tolerance
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: SodaCL row-count checks with thresholds are the standard per-scan completeness gate
+confidence: high
+conflicts_with: []
+status: draft

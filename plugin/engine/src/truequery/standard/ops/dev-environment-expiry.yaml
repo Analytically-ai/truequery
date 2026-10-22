@@ -1,0 +1,42 @@
+id: ops/dev-environment-expiry
+title: Disposable environments expire and are torn down automatically
+domain: ops
+modes: [change, assure]
+applies_to: [any]
+statement: >
+  Every non-production environment must have a defined expiry or
+  teardown trigger (branch merge, age limit, explicit destroy step) so
+  that stale dev schemas and datasets cannot accumulate indefinitely.
+rationale: >
+  Orphaned dev schemas confuse consumers, leak storage spend, and can
+  be mistaken for production truth months later. Automatic teardown
+  keeps the warehouse namespace legible and the bill bounded.
+failure_example: >
+  After a year of feature branches, the warehouse holds 600 stale
+  dev schemas. An executive bookmarks one, quotes its numbers in a
+  board meeting, and nobody can say which schema was authoritative.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check orchestration or CI configuration for environment destroy steps
+  tied to merge/close events or age-based cleanup jobs.
+  False positives: manual-teardown teams with a documented checklist the
+  detector cannot see.
+severity_suggestion: warning
+examples:
+  bad: Dev schemas persist forever after their branches are merged.
+  good: Merging the branch triggers a job that drops its dev schema; schemas older than 30 days are flagged for removal.
+sources:
+- title: Environments (SQLMesh concepts)
+  url: https://sqlmesh.readthedocs.io/en/stable/concepts/environments/
+  publisher: SQLMesh (Tobiko)
+  accessed: 2026-10-12
+  supports: Environments are lightweight clones meant to be created per change and discarded after apply.
+- title: The DataOps Manifesto
+  url: https://dataopsmanifesto.org/en/
+  publisher: DataKitchen (DataOps manifesto authors)
+  accessed: 2026-10-12
+  supports: Disposable environments should be easy to create, isolated, safe, and disposable.
+confidence: medium
+conflicts_with: []
+status: draft

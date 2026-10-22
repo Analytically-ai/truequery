@@ -1,0 +1,38 @@
+id: consume/no-deep-offset
+title: Consumer pagination uses keyset seeks, not deep OFFSET
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Persisted consumer queries (dashboard pagination, extract loops, API
+  backing queries) paginate with keyset conditions on an ordered unique key
+  rather than OFFSET values beyond a small declared bound (default 1000
+  rows); OFFSET past that bound is rejected.
+rationale: >
+  OFFSET forces the engine to produce and discard every skipped row, so page
+  latency and scanned bytes grow linearly with depth; keyset pagination
+  keeps every page constant-cost and stable under concurrent inserts.
+failure_example: >
+  An export loop fetching 2M rows in OFFSET pages of 10k takes hours and
+  returns duplicated and missing rows as new orders land mid-export.
+enforcement: detector
+detection_sketch: >
+  Parse consumer queries; flag OFFSET literals, parameters, or expressions
+  exceeding the bound, and flag export loops without an ordered-key
+  predicate. False positives: small fixed OFFSETs for top-N previews and
+  dialects where the client library injects OFFSET transparently.
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT order_id, amount FROM mart_orders ORDER BY ordered_at LIMIT 10000 OFFSET 1500000
+  good: |
+    SELECT order_id, amount FROM mart_orders WHERE (ordered_at, order_id) > ('2026-09-01', 0) ORDER BY ordered_at, order_id LIMIT 10000
+sources:
+  - title: SELECT
+    url: https://www.postgresql.org/docs/current/sql-select.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: Documents OFFSET/LIMIT semantics, including that skipped rows are still produced by the plan.
+confidence: high
+conflicts_with: []
+status: draft

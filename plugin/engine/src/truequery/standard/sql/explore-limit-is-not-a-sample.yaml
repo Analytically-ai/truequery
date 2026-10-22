@@ -1,0 +1,56 @@
+id: sql/explore-limit-is-not-a-sample
+title: Do not judge a table from its first LIMIT n rows; sample it
+domain: sql
+modes: [explore]
+applies_to: [any]
+statement: >
+  When an analyst looks at example rows to understand a table (value
+  formats, typical values, which columns are populated), the rows come from
+  the engine's sampling clause (TABLESAMPLE / USING SAMPLE) or from an
+  ORDER BY that is chosen on purpose, not from a bare SELECT * ... LIMIT n.
+  Conclusions about "what the data looks like" are not drawn from the first
+  n rows.
+rationale: >
+  A bare LIMIT returns whichever rows the engine reaches first. In practice
+  that is often the oldest load, one file, or one partition (DuckDB, for
+  example, preserves insertion order for this query shape), so the rows
+  shown can be systematically unrepresentative: a column that was added
+  last year looks always NULL, a newer status code never appears. The
+  analyst then writes filters and assumptions based on a skewed view.
+failure_example: >
+  SELECT * FROM events LIMIT 20 shows only 2019 rows, in which
+  device_type is always NULL; the analyst concludes the column is unused and
+  drops it from a segmentation that would have explained the result.
+enforcement: judgment
+detection_sketch: >
+  Judgment, not enforced: the tool cannot tell an eyeballing query from a
+  deliberate top-N. An analyze-mode prompt can suggest the dialect's
+  sampling clause when it sees SELECT * ... LIMIT without ORDER BY in an
+  explore session. Complements consume/adhoc-limit-required, which asks for
+  a LIMIT for cost; this record is about what the limited rows can be
+  trusted to show. No proof: the defect is a misleading impression, not a
+  wrong query result.
+severity_suggestion: advisory
+examples:
+  bad: SELECT * FROM events LIMIT 20;
+  good: SELECT * FROM events USING SAMPLE 20 ROWS;
+sources:
+- title: SELECT (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-select.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Without an ORDER BY that constrains the order, LIMIT returns an unpredictable subset of the query's rows; TABLESAMPLE retrieves a random subset of a table.
+- title: Order Preservation (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/dialect/order_preservation
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: DuckDB preserves the original (insertion) row order for LIMIT over a single table, so a bare LIMIT shows the earliest-loaded rows.
+- title: Samples (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/samples
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: USING SAMPLE selects a random subset of a dataset; a fixed row count uses reservoir sampling.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [consume/adhoc-limit-required, consume/explore-inspect-distributions-and-examples, sql/limit-requires-order-by, sql/random-sampling-no-sort]

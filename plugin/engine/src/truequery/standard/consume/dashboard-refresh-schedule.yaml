@@ -1,0 +1,47 @@
+id: consume/dashboard-refresh-schedule
+title: Dashboards declare refresh cadence matched to data latency
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each scheduled dashboard or cached report declares a refresh cadence no
+  faster than its slowest upstream mart, with concurrent-refresh limits so
+  overlapping refreshes cannot stack.
+rationale: >
+  Dashboards refreshing every 5 minutes on hourly marts burn 12x the compute
+  for identical numbers and stampede the warehouse at the top of each hour;
+  cadence matched to latency removes the waste.
+failure_example: >
+  Forty tiles refresh every 10 minutes against a daily mart; Monday spend
+  spikes 8x with zero new information delivered to viewers.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: per-dashboard cadence and upstream mart freshness.
+  Check: cadence interval >= slowest upstream latency; max-concurrent set.
+  False positives: event-triggered refreshes misread as fixed fast cadences.
+severity_suggestion: warning
+examples:
+  bad: |
+    dashboards:
+      - name: exec_overview
+        refresh: every 5 minutes   # upstream mart builds hourly
+  good: |
+    dashboards:
+      - name: exec_overview
+        refresh: hourly at :15
+        max_concurrent_refreshes: 1
+sources:
+  - title: Databricks documentation
+    url: https://docs.databricks.com/aws/en/
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Indexes the AI/BI dashboards and SQL warehouse surfaces whose refresh behavior this practice governs.
+  - title: Working with Materialized Views
+    url: https://docs.snowflake.com/en/user-guide/views-materialized
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Documents automatic refresh cost behavior behind cached serving objects, the warehouse-side analogue.
+confidence: medium
+conflicts_with: []
+status: draft

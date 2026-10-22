@@ -1,0 +1,70 @@
+id: sql/negative-filter-drops-nulls
+title: Negative filters on nullable columns state what happens to NULLs
+domain: sql
+modes: [explore, build, change]
+applies_to: [any]
+statement: >
+  A negative predicate on a nullable column (col <> 'x', col != 'x',
+  col NOT LIKE 'p%', col NOT IN ('a', 'b')) makes an explicit NULL decision
+  in the same query: IS DISTINCT FROM 'x', OR col IS NULL, AND col IS NOT
+  NULL, or a COALESCE. This is a heuristic: excluding NULLs may be intended,
+  and the rule only asks that the choice be visible.
+rationale: >
+  "Not cancelled" reads as including rows with an unknown status, but under
+  three-valued logic NULL <> 'cancelled' is unknown, so those rows are
+  dropped. The query runs, the count looks plausible, and the NULL rows
+  vanish from the answer with no error. Analysts write these filters
+  constantly during exploration.
+failure_example: >
+  WHERE account_type <> 'internal' is meant to drop internal traffic but
+  also drops every anonymous session whose account_type is NULL; the
+  reported conversion rate covers only logged-in users.
+enforcement: detector
+detection_sketch: >
+  Match <>, !=, NOT LIKE, NOT ILIKE, and NOT IN (literal list) predicates in
+  WHERE/HAVING/QUALIFY whose column has no IS [NOT] NULL, IS [NOT] DISTINCT
+  FROM, or COALESCE/IFNULL/NVL reference elsewhere in the same query block.
+  Suppress when the contract declares the column NOT NULL. NOT IN with a
+  subquery is sql/not-in-nullable-subquery. False positives: deliberate NULL
+  exclusion, which passes once written as AND col IS NOT NULL.
+severity_suggestion: warning
+examples:
+  bad: SELECT COUNT(*) FROM orders WHERE status <> 'cancelled';
+  good: SELECT COUNT(*) FROM orders WHERE status IS DISTINCT FROM 'cancelled';
+sources:
+- title: Comparison Functions and Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-comparison.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Ordinary comparison operators yield null (unknown), not true or false, when either input is null (7 <> NULL yields null); IS DISTINCT FROM treats null as a comparable value.
+- title: Pattern Matching (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-matching.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: NOT LIKE is equivalent to NOT (string LIKE pattern), so it inherits LIKE's null result for a null string.
+- title: NULL Values (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/data_types/nulls
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: Any comparison with a NULL value returns NULL; IN and NOT IN behave differently when NULLs are involved.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/null-equality-comparison, sql/not-in-nullable-subquery, sql/left-join-null-rejecting-where, consume/explore-null-aware-negative-filters]
+proof:
+  setup: |
+    CREATE TABLE orders(id INT, status VARCHAR, channel VARCHAR);
+    INSERT INTO orders VALUES (1, 'done', 'web'), (2, 'cancelled', 'web'), (3, NULL, NULL), (4, 'done', 'store');
+  bad: "SELECT (SELECT COUNT(*) FROM orders WHERE status <> 'cancelled'), (SELECT COUNT(*) FROM orders WHERE status NOT LIKE 'cancel%'), (SELECT COUNT(*) FROM orders WHERE channel NOT IN ('store'))"
+  bad_result: "[(2, 2, 2)]"
+  good: "SELECT (SELECT COUNT(*) FROM orders WHERE status IS DISTINCT FROM 'cancelled'), (SELECT COUNT(*) FROM orders WHERE status NOT LIKE 'cancel%' OR status IS NULL), (SELECT COUNT(*) FROM orders WHERE channel NOT IN ('store') OR channel IS NULL)"
+  good_result: "[(3, 3, 3)]"
+  note: >
+    Order 3 has NULL status and channel. The intent is "orders that are not
+    cancelled" and "orders not from the store"; each negative form returns
+    2 because order 3's predicate is unknown, not true. If excluding unknown
+    rows is intended, write AND col IS NOT NULL so the choice is visible.
+    Standard SQL; the same in Postgres, BigQuery, Snowflake, SQL Server and
+    MySQL. IS DISTINCT FROM is the SQL-standard null-safe form (documented
+    by Postgres and DuckDB); where a dialect lacks it, use the explicit
+    OR col IS NULL form.

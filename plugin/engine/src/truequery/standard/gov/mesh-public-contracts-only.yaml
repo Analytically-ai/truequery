@@ -1,0 +1,41 @@
+id: gov/mesh-public-contracts-only
+title: Cross-project dependencies use public contracted models only
+domain: gov
+modes: [build, change, assure]
+applies_to: [dbt]
+statement: >
+  In a multi-project setup, a project may depend only on another project's
+  models that are both public and governed by an enforced contract; private
+  or uncontracted upstream models must not be referenced.
+rationale: >
+  Cross-project links to uncontracted models export one team's internal
+  decisions (including which PII columns exist) to another team's runtime
+  with no enforcement point, so privacy and breaking-change controls cannot
+  hold at the boundary.
+failure_example: >
+  Project B refs project A's internal int_emails model; A renames the
+  table and B's run fails, while B's logs retain raw emails from the old path.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Resolve cross-project refs; flag targets lacking public access plus an
+  enforced contract. False positives: none expected where contracts are
+  declared; missing contract metadata reads as uncontracted.
+severity_suggestion: warning
+examples:
+  bad: "ref to upstream int_emails model where int_emails is private."
+  good: "ref to upstream marts_customers which is public with an enforced contract."
+sources:
+- title: About dbt Mesh
+  url: https://docs.getdbt.com/docs/mesh/about-mesh
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: cross-project references governed through public models and contracts
+- title: Add data tests to your DAG
+  url: https://docs.getdbt.com/docs/build/data-tests
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: contracts and tests as enforceable model guarantees
+confidence: high
+conflicts_with: []
+status: draft

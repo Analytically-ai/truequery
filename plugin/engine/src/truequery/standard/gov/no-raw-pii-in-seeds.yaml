@@ -1,0 +1,41 @@
+id: gov/no-raw-pii-in-seeds
+title: Seed files contain no raw PII
+domain: gov
+modes: [build, change, assure]
+applies_to: [dbt, any]
+statement: >
+  Static seed files committed to the repository contain no raw emails,
+  phone numbers, government IDs, or other direct identifiers; examples use
+  clearly synthetic values (for example example.com addresses).
+rationale: >
+  Seeds are copied to every clone, CI run, and dev database; raw PII in a
+  seed becomes an unrevocable, unaudited distribution of personal data to
+  everyone with repo access, including future forks.
+failure_example: >
+  seeds/test_users.csv carries 200 real customer emails; a contractor
+  cloning the repo for a styling task receives them all with no access
+  decision ever made.
+enforcement: detector
+detection_sketch: >
+  Scan seed CSVs for email patterns outside example/test domains, phone
+  digit runs, and SSN-like patterns. Fully checkable from code alone.
+  False positives: synthetic fixtures that look real; allowlist documented
+  fixture files or require example domains.
+severity_suggestion: error
+examples:
+  bad: "seeds/users.csv row: 42, maria.garcia@example.com, +1-415-555-0132."
+  good: "seeds/users.csv row: 42, user42@example.com, +1-555-010-0042 (documented fixture range)."
+sources:
+- title: Add data tests to your DAG
+  url: https://docs.getdbt.com/docs/build/data-tests
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: seeds as versioned test fixtures whose content is reviewable in the repo
+- title: Data Mesh Principles and Logical Architecture
+  url: https://martinfowler.com/articles/data-mesh-principles.html
+  publisher: martinfowler.com (Zhamak Dehghani)
+  accessed: 2026-10-12
+  supports: data products must meet trustworthiness and privacy expectations of consumers
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,45 @@
+id: ingest/choose-batch-vs-streaming-deliberately
+title: Batch vs streaming is chosen from latency need, not fashion
+domain: ingest
+modes: [explore, build]
+applies_to: [any]
+statement: >
+  The choice of batch vs streaming intake MUST be recorded with the
+  latency requirement that drives it (e.g. "needed within 15 minutes for
+  fraud review" vs "next-day reporting tolerates daily batch"). Streaming
+  with no stated sub-hour consumer, or batch missing a stated daily need,
+  fails review.
+rationale: >
+  Streaming costs more in every dimension - operations, state management,
+  exactly-once machinery, debugging - and buys nothing when the consumer
+  reads daily. Unjustified streaming is the most expensive kind of
+  over-engineering; unjustified batching silently misses the SLA the
+  business assumed.
+failure_example: >
+  A team streams click events end-to-end at high operational cost; the
+  only consumer is a next-morning dashboard. A daily batch would deliver
+  identical value with a tenth of the moving parts.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: |
+    # real-time pipeline; consumer: "daily KPI email, mornings"
+    architecture: kafka -> flink -> warehouse (no latency note)
+  good: |
+    # latency note: fraud queue needs <15min; KPI email uses daily batch
+    fraud signals: streaming (15min SLA); reporting marts: daily batch
+sources:
+  - title: Debezium Architecture
+    url: https://debezium.io/documentation/reference/stable/architecture.html
+    publisher: Debezium
+    accessed: 2026-10-12
+    supports: CDC streaming architecture serves low-latency consumers; its machinery is only justified by such consumers
+  - title: Introduction to loading data
+    url: https://docs.cloud.google.com/bigquery/docs/loading-data
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Batch load paths remain the documented default for bulk data, with streaming as the latency-driven alternative
+confidence: low
+conflicts_with: []
+status: draft

@@ -1,0 +1,45 @@
+id: dq/completeness-fill-rate-thresholds
+title: Fill-rate thresholds are explicit per column instead of all-or-nothing
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Columns that are legitimately sparse declare an explicit minimum fill rate
+  (for example missing_percent below 5%); key and required columns keep a
+  100% default. No column is left without a stated threshold.
+rationale: >
+  A single all-or-nothing null rule forces teams to either exempt sparse
+  columns entirely (losing all signal) or drown in failures on legitimately
+  optional data. Explicit per-column rates keep the suite green while still
+  catching a sudden collapse in optional-field population.
+failure_example: >
+  An optional phone_number column drops from 60% to 2% populated after an
+  app release; with no threshold the regression is invisible until a
+  marketing campaign mistargets millions.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check that every column in the contract carries either a not-null check or
+  a numeric fill-rate threshold, and that the threshold value is within
+  0-100%. False positives: a threshold copied from another column that does
+  not match the column's natural sparsity until tuned.
+severity_suggestion: warning
+examples:
+  bad: |-
+    checks for customers:
+      - missing_count(phone_number) = 0
+    # fails every run; team deletes the check instead of tuning it
+  good: |-
+    checks for customers:
+      - missing_percent(phone_number) < 45
+      - missing_count(customer_id) = 0
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: Soda scan summaries show missing and duplicate percent metrics
+      evaluated against thresholds, with pass, fail, and warn states
+confidence: medium
+conflicts_with: []
+status: draft

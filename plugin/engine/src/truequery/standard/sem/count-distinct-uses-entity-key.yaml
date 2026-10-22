@@ -1,0 +1,52 @@
+id: sem/count-distinct-uses-entity-key
+title: Distinct-count metrics aggregate the entity key, not a nullable attribute
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  COUNT DISTINCT metrics (users, orders, customers) aggregate the entity's
+  primary key or another non-null unique identifier — never a nullable
+  descriptive attribute — and the key choice is visible in the definition.
+rationale: >
+  Counting distinct emails instead of user IDs silently merges users sharing
+  an address and drops users with null emails: the "user" count becomes a
+  "non-null distinct email" count wearing a user label, wrong on both ends.
+failure_example: >
+  Active users as COUNT(DISTINCT email) undercounts by 200K null-email app
+  users and merges 30K shared family-plan addresses; both errors hide inside
+  one plausible-looking number.
+enforcement: detector
+detection_sketch: >
+  Flag COUNT DISTINCT measures whose target column is not a declared entity
+  key or lacks a not-null guarantee; suggest the model's primary entity.
+  False positives: legitimate distinct-attribute metrics (distinct countries
+  served) — pass when the metric name and description state the attribute,
+  not an entity.
+severity_suggestion: warning
+examples:
+  bad: |-
+    measures:
+      - name: active_users
+        sql: email
+        type: count_distinct
+  good: |-
+    measures:
+      - name: active_users
+        sql: user_id
+        type: count_distinct
+        filters:
+          - email IS NOT NULL  # or activity-based filter, declared
+sources:
+  - title: Entities
+    url: https://docs.getdbt.com/docs/build/entities
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Entities identify the unique subject a measure counts
+  - title: Getting started data modeling
+    url: https://docs.cube.dev/docs/data-modeling/overview
+    publisher: Cube
+    accessed: 2026-10-12
+    supports: Count measures aggregate identifier columns
+confidence: high
+conflicts_with: []
+status: draft

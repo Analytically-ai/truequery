@@ -1,0 +1,42 @@
+id: gov/retention-declared
+title: Personal-data tables declare a retention window
+domain: gov
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every table classified as holding personal data declares a retention
+  window (how long rows and history are kept) and the mechanism that
+  enforces it (partition expiry, snapshot pruning, table VACUUM/retention
+  settings, or a scheduled delete job).
+rationale: >
+  Data kept forever is breached forever: without a declared window, stale
+  PII accumulates in snapshots and history far past its purpose, and every
+  incident's scope — and regulatory exposure — grows with age.
+failure_example: >
+  clickstream keeps seven years of device IDs with no expiry; a breach
+  exposes identifiers the team had no purpose holding since year one.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Join PII classification against declared retention metadata and snapshot
+  or table-property configs; flag classified tables with neither.
+  Whether expiry actually runs is runtime. False positives: legal-hold
+  tables documented as exempt with hold reference and review date.
+severity_suggestion: warning
+examples:
+  bad: "events table holds device_id with no retention note and unbounded snapshot history."
+  good: "events declares retention: 400 days via monthly partition drop plus snapshot history pruned to 13 months."
+sources:
+- title: Introduction (Apache Iceberg documentation)
+  url: https://iceberg.apache.org/docs/latest/
+  publisher: Apache Software Foundation
+  accessed: 2026-10-12
+  supports: Iceberg snapshot maintenance, branching/tagging, and history management concepts
+- title: Welcome to the Delta Lake documentation
+  url: https://docs.delta.io/
+  publisher: Delta Lake (Linux Foundation)
+  accessed: 2026-10-12
+  supports: time travel versioning and table utility commands for managing table history
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,53 @@
+id: py/dagster-resources-for-external-clients
+title: External clients must be injected as Dagster resources, not built inline
+domain: py
+modes: [build, change, assure]
+applies_to: [dagster]
+statement: >
+  Connections to databases, warehouses, and APIs inside assets and ops must
+  be obtained from declared Dagster Resources (constructor-injected,
+  environment-configured), never instantiated from inline credentials,
+  module-level globals, or per-call constructors inside the compute body.
+rationale: >
+  Inline clients hardcode environment bindings into code: the same asset
+  cannot run against dev/staging/prod without edits, credentials leak
+  into logs and code history, and tests cannot substitute fakes, so every
+  environment promotion becomes a manual, error-prone patch.
+failure_example: >
+  An asset calls psycopg2.connect(host="prod-db", password="s3cret")
+  inline; a developer runs it locally to debug and accidentally deletes
+  rows from the production warehouse.
+enforcement: detector
+detection_sketch: >
+  Flag client constructors and connect/auth calls with literal credential
+  arguments or module-level client singletons inside asset/op files, and
+  flag compute bodies that construct clients instead of taking a Resource
+  parameter. False positives: resource definition modules themselves,
+  which legitimately construct clients from config; scope the rule to
+  @asset/@op bodies.
+severity_suggestion: warning
+examples:
+  bad: |
+    @asset
+    def users():
+        conn = psycopg2.connect(host="prod-db", password="s3cret")
+        return pd.read_sql("SELECT * FROM users", conn)
+  good: |
+    class WarehouseResource(ConfigurableResource):
+        host: str
+        password: SecretStr
+        def get_conn(self): ...
+    @asset
+    def users(warehouse: WarehouseResource):
+        return pd.read_sql("SELECT * FROM users", warehouse.get_conn())
+sources:
+  - title: "External resources | Dagster Docs"
+    url: https://dagster.io/docs/guides/build/external-resources
+    publisher: Dagster
+    accessed: 2026-10-12
+    supports: External systems are accessed through declared, configured
+      resources (including database connections) rather than inline setup
+      (partially verified, page body truncated in fetch).
+confidence: medium
+conflicts_with: []
+status: draft

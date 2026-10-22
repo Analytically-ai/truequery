@@ -1,0 +1,63 @@
+id: consume/explore-experiment-readout-follows-plan
+title: Experiment readouts follow the pre-registered metrics and analysis plan
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  An A/B test readout reports the success, guardrail, and decision
+  criteria that were recorded before the experiment started, over the
+  pre-specified analysis window and population, and states the decision
+  those criteria give. Before reporting effects, it reports the sample ratio
+  mismatch (SRM) check; if the check fails, effects are not presented as a
+  result. Any metric, segment, or window not in the plan is labelled
+  exploratory and does not change the decision. If no plan was recorded,
+  the readout says so and labels all findings exploratory.
+rationale: >
+  Choosing metrics, segments, or windows after seeing the data lets the
+  analyst gravitate to whichever looks best, inflating false positives (the
+  "garden of forking paths"). A sample ratio mismatch signals a data-quality
+  problem in assignment or logging that invalidates the comparison until its
+  cause is found.
+failure_example: >
+  A test planned on checkout conversion shows no effect; the readout
+  instead headlines a significant lift in "add-to-cart, mobile, week 2", one
+  of 40 slices examined, and the feature ships. The lift does not replicate.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    Result: treatment wins! +4.2% add-to-cart on mobile in week 2 (p=0.03).
+  good: |
+    Plan (registered 2026-09-01): success = checkout conversion; guardrails =
+      page latency p95, refund rate; window 14 days; ship if success
+      significant and guardrails non-inferior.
+    SRM: 50.1/49.9, chi-square p=0.41, passed.
+    Success: +0.3% (95% CI -0.9% to +1.5%), not significant. Guardrails passed.
+    Decision per plan: do not ship.
+    Exploratory (not decision-relevant): add-to-cart mobile week 2 +4.2%, 1 of 40 slices.
+sources:
+  - title: Risk-Aware Product Decisions in A/B Tests with Multiple Metrics
+    url: https://engineering.atspotify.com/2024/3/risk-aware-product-decisions-in-a-b-tests-with-multiple-metrics
+    publisher: Spotify Engineering
+    accessed: 2026-10-11
+    supports: The decision rule must be explicit and the experiment designed and analyzed with it in mind, sticking to the preplanned analysis; describes success and guardrail metrics.
+  - title: What is an Experiment Design?
+    url: https://confidence.spotify.com/glossary/experiment-design
+    publisher: Spotify Confidence
+    accessed: 2026-10-11
+    supports: Pre-registration records hypothesis, metrics, analysis plan and decision criteria; post-hoc choice of metrics, windows or segments inflates false positives.
+  - title: Diagnosing Sample Ratio Mismatch in A/B Testing
+    url: https://www.microsoft.com/en-us/research/articles/diagnosing-sample-ratio-mismatch-in-a-b-testing/
+    publisher: Microsoft Research (Experimentation Platform)
+    accessed: 2026-10-11
+    supports: Every A/B test must pass an SRM check before its effects are analyzed; results with an SRM should not be trusted until the root cause is diagnosed.
+  - title: "Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing"
+    url: https://experimentguide.com/
+    publisher: Cambridge University Press (Kohavi, Tang, Xu, 2020)
+    accessed: 2026-10-11
+    supports: Book on running and reading online controlled experiments with an emphasis on trustworthy results and an agreed evaluation criterion (summarized in our own words; cited via the book's site).
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [consume/explore-caveats-and-unchecked-stated]

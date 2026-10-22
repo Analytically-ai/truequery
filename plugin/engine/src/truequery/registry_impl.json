@@ -1,0 +1,127 @@
+{
+ "dq/uniqueness-key-no-duplicates": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "ingest/declare-source-freshness": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "model/unique-key-merge-key": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "orch/explicit-catchup-policy": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/accidental-cross-join": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/average-of-ratios": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/between-date-on-timestamp": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/case-without-else-in-aggregate": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/count-star-after-left-join": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/distinct-dedup-bandaid": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/group-by-bare-column": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/insert-explicit-column-list": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/integer-division-truncation": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/keyset-pagination": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/left-join-null-rejecting-where": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "immediate"
+ },
+ "sql/limit-requires-order-by": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/natural-join-explicit-keys": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/negative-filter-drops-nulls": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/nondeterministic-merge-keys": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/not-in-nullable-subquery": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/null-equality-comparison": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "immediate"
+ },
+ "sql/row-number-dedupe-tiebreaker": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/set-operation-column-position": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sql/unguarded-update-delete": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "immediate"
+ },
+ "sql/union-all-default": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ }
+}

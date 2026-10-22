@@ -1,0 +1,94 @@
+id: sql/integer-division-truncation
+title: Divide integers only after casting to a non-integer type
+domain: sql
+modes: [explore, build, change]
+applies_to: [postgres, sqlserver, sqlite, duckdb]
+statement: >
+  In dialects where integer / integer yields an integer (Postgres, SQL
+  Server, SQLite), a division whose operands are both integer-typed casts
+  one operand to NUMERIC/DECIMAL/DOUBLE (or multiplies by 1.0) before
+  dividing. In DuckDB, the integer-division operator // (and divide()) is
+  used only when truncation is intended.
+rationale: >
+  Postgres, SQL Server and SQLite truncate integer division toward zero, so
+  a ratio of counts (conversions / visits) is silently 0 for every row where
+  the numerator is smaller than the denominator. Dashboards show 0 percent
+  and nothing errors. Portable SQL that is correct on BigQuery, Snowflake,
+  MySQL or DuckDB (where / returns a fractional result) becomes wrong when
+  moved to Postgres or SQL Server.
+failure_example: >
+  SELECT conversions / visits AS cvr FROM daily_funnel in Postgres returns 0
+  for every day (e.g. 37 / 1200); a conversion-rate chart is a flat line at
+  zero.
+enforcement: detector
+detection_sketch: >
+  For target dialects postgres, sqlserver, sqlite: match Divide nodes whose
+  operands both resolve to integer types (integer literals, COUNT(*),
+  COUNT(col), integer-declared columns from the catalog or contract, or
+  integer casts). For duckdb: match // and divide() and ask for confirmation
+  that truncation is intended. Not applicable to BigQuery (INT64 / INT64 is
+  FLOAT64), Snowflake (division returns a fractional NUMBER) or MySQL (/
+  returns a decimal; DIV is the explicit integer operator). False positives:
+  deliberate integer bucketing (e.g. id / 1000), which should be written with
+  an explicit FLOOR or the dialect's integer-division operator.
+severity_suggestion: warning
+examples:
+  bad: SELECT conversions / visits AS cvr FROM daily_funnel;  -- Postgres, SQL Server, SQLite
+  good: SELECT conversions::numeric / visits AS cvr FROM daily_funnel;
+sources:
+- title: Mathematical Functions and Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-math.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Division of integral types truncates the result towards zero; 5 / 2 is 2 and (-5) / 2 is -2.
+- title: / (Division) (Transact-SQL)
+  url: https://learn.microsoft.com/en-us/sql/t-sql/language-elements/divide-transact-sql
+  publisher: Microsoft
+  accessed: 2026-10-11
+  supports: If an integer dividend is divided by an integer divisor, the result is an integer with any fractional part truncated.
+- title: SQL Language Expressions (SQLite)
+  url: https://www.sqlite.org/lang_expr.html
+  publisher: SQLite
+  accessed: 2026-10-11
+  supports: Integer divide yields an integer result, truncated toward zero.
+- title: Numeric Functions (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/functions/numeric
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: When both operands are integers, / performs floating-point division (5 / 2 = 2.5); // performs integer division (5 // 2 = 2).
+- title: Arithmetic operators (Snowflake)
+  url: https://docs.snowflake.com/en/sql-reference/operators-arithmetic
+  publisher: Snowflake
+  accessed: 2026-10-11
+  supports: Snowflake division of integers returns a fractional result whose scale is the numerator's scale plus 6 (2 / 7 returns 0.285714), so Snowflake does not truncate.
+- title: Operators (BigQuery)
+  url: https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/operators
+  publisher: Google Cloud
+  accessed: 2026-10-11
+  supports: The result type of INT64 / INT64 is FLOAT64, so BigQuery does not truncate.
+- title: Arithmetic Operators (MySQL 8.4 Reference Manual)
+  url: https://dev.mysql.com/doc/refman/8.4/en/arithmetic-functions.html
+  publisher: Oracle
+  accessed: 2026-10-11
+  supports: MySQL / returns a decimal result (3/5 = 0.60); DIV is the separate integer-division operator.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/average-of-ratios]
+proof:
+  setup: |
+    CREATE TABLE daily_funnel(day INT, conversions INT, visits INT);
+    INSERT INTO daily_funnel VALUES (1, 37, 1200), (2, 45, 900);
+  bad: "SELECT day, conversions // visits AS cvr FROM daily_funnel ORDER BY day"
+  bad_result: "[(1, 0), (2, 0)]"
+  good: "SELECT day, round(CAST(conversions AS DOUBLE) / visits, 4) AS cvr FROM daily_funnel ORDER BY day"
+  good_result: "[(1, 0.0308), (2, 0.05)]"
+  note: >
+    DuckDB's / returns a DOUBLE even for two integers, so DuckDB cannot show
+    the Postgres/SQL Server bug with /. The proof uses DuckDB's // operator,
+    which is integer division, to reproduce exactly what conversions /
+    visits returns in Postgres, SQL Server and SQLite (truncated toward zero,
+    so both days read 0). The same bad query written with / in Postgres
+    returns 0 for both rows, per the Postgres docs (5 / 2 = 2). The good query
+    casts before dividing, which is correct in every dialect. Rounding to 4
+    places keeps the float repr stable.

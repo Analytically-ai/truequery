@@ -1,0 +1,48 @@
+id: model/incremental-watermark-filter
+title: Incremental models filter source rows on a monotonic watermark
+domain: model
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  Every incremental model must declare a monotonic watermark column (event or
+  updated timestamp) and, when running incrementally, filter source rows to
+  watermark values newer than the current table maximum, using the
+  incremental-run guard of the framework.
+rationale: >
+  Without a watermark filter each incremental run rescans and reprocesses the
+  full source history, causing runaway cost and run times; worse, a missing
+  filter can silently reprocess nothing or everything depending on strategy.
+failure_example: >
+  An events model omits the watermark predicate; nightly runs scan three
+  years of history, slot hours spike, and the job starts missing its SLA.
+enforcement: detector
+detection_sketch: >
+  Parse model SQL for an incremental-run guard referencing the configured
+  watermark column against the target table maximum. Flag incremental models
+  with no guard or no watermark predicate. False positives: microbatch models
+  where the framework injects the filter automatically.
+severity_suggestion: warning
+examples:
+  bad: |
+    {{ config(materialized='incremental', unique_key='event_id') }}
+    SELECT event_id, occurred_at, payload FROM raw_events;
+  good: |
+    {{ config(materialized='incremental', unique_key='event_id') }}
+    SELECT event_id, occurred_at, payload FROM raw_events
+    {% if is_incremental() %}
+    WHERE occurred_at > (SELECT MAX(occurred_at) FROM {{ this }})
+    {% endif %};
+sources:
+  - title: Configure incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: incremental runs should process only rows added or updated since the last run
+  - title: About incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-models-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: incremental materialization avoids rebuilding the full table on each run
+confidence: high
+conflicts_with: []
+status: draft

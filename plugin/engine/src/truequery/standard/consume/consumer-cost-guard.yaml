@@ -1,0 +1,44 @@
+id: consume/consumer-cost-guard
+title: Consumer queries pass a pre-execution cost estimate before running
+domain: consume
+modes: [explore, assure]
+applies_to: [bigquery, snowflake, databricks]
+statement: >
+  Ad-hoc and BI-issued queries above a trivial size pass a pre-execution
+  estimate (dry run bytes, optimizer plan scan, or budget check); queries
+  exceeding the team byte or dollar threshold require explicit confirmation.
+rationale: >
+  One careless cartesian or full-history scan can cost more than a month of
+  normal analysis; a free pre-check catches it before the meter runs.
+failure_example: >
+  A dashboard author tests a new tile with a missing join condition over two
+  5B-row tables; the accidental cross join scans 40 TB on an on-demand
+  project.
+enforcement: runtime
+detection_sketch: >
+  Needs warehouse execution: run the free estimate primitive and compare
+  against thresholds. Not statically decidable: actual bytes depend on
+  partitions pruned at runtime. Guardrail degrades to warn-only where no
+  exact estimate primitive exists.
+severity_suggestion: warning
+examples:
+  bad: |
+    -- issued directly with no estimate
+    SELECT * FROM events_2019 CROSS JOIN events_2024
+  good: |
+    -- dry run first: estimated 41 TB, exceeds 1 TB threshold -> blocked for review
+    DRY_RUN SELECT ...  -- confirmed before execution
+sources:
+  - title: Run a query
+    url: https://docs.cloud.google.com/bigquery/docs/running-queries
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Documents dry-run estimation of bytes processed before a query executes.
+  - title: Introduction to optimizing query performance
+    url: https://docs.cloud.google.com/bigquery/docs/best-practices-performance-overview
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Advises estimating and controlling query cost before running large queries.
+confidence: high
+conflicts_with: []
+status: draft

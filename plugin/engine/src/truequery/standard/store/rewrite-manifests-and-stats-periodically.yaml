@@ -1,0 +1,37 @@
+id: store/rewrite-manifests-and-stats-periodically
+title: Rewrite manifests and refresh statistics on churned Iceberg tables
+domain: store
+modes: [assure]
+applies_to: [iceberg]
+statement: >
+  Iceberg tables with frequent writes, deletes, or partition evolution must run
+  scheduled manifest rewrites (rewrite_manifests) and statistics refreshes
+  (compute table/partition statistics) so planning stays metadata-only.
+rationale: >
+  Each commit adds manifest entries; without rewrites, query planning lists
+  thousands of tiny manifests and file-level stats go stale, so pruning degrades
+  into full scans even though the data layout is fine.
+failure_example: >
+  A table with 40k un-merged manifests takes 90 seconds to plan a query that
+  executes in 4 seconds; one manifest rewrite restores planning to under a
+  second.
+enforcement: runtime
+detection_sketch: >
+  Needs table metadata: manifest count, manifest-entry-per-file ratio, and stats
+  freshness from the catalog; flag tables past thresholds with no recent rewrite
+  procedure in job history. Static code alone cannot see manifest counts, so a
+  static-only "no job declared" signal is warn-only. False positives: low-churn
+  tables below thresholds.
+severity_suggestion: warning
+examples:
+  bad: "-- 2 years of MERGE workload, zero maintenance procedures scheduled"
+  good: "CALL catalog.system.rewrite_manifests('db.events'); -- weekly job"
+sources:
+  - title: Iceberg — Maintenance (rewrite manifests, compute statistics)
+    url: https://iceberg.apache.org/docs/latest/maintenance/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Manifest rewrites and statistics computation are documented optional maintenance for planning performance.
+confidence: medium
+conflicts_with: []
+status: draft

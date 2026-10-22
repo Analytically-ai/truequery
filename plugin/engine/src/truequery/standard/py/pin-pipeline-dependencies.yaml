@@ -1,0 +1,82 @@
+id: py/pin-pipeline-dependencies
+title: Pin and lock the runtime environment of pipeline code
+domain: py
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every deployable pipeline unit (Airflow DAG folder and its task images,
+  Dagster code location, dbt Python model, SQLMesh project) must run in a
+  pinned environment: exact versions (==) or a lockfile for Python
+  dependencies, Airflow installed against its release constraints file,
+  dbt Python model `packages` pinned with ==, and container images referenced
+  by immutable tag or digest. Rebuilds, retries and backfills install from
+  that pin, never from floating specifiers.
+rationale: >
+  Floating specifiers let identical code resolve to different libraries on a
+  new worker, a retry, or a backfill months later, so the same commit can
+  produce different data with no diff to inspect. pip defines pinning as ==
+  to a specific version; Airflow keeps its own dependencies open and
+  publishes per-release constraint files precisely so installs are
+  repeatable; dbt asks Python models to declare package versions so they are
+  tracked in project metadata; Airflow recommends pre-built immutable
+  environments (ExternalPythonOperator, container operators) over creating
+  virtualenvs per run.
+failure_example: >
+  requirements.txt lists pandas with no pin. A March backfill worker resolves
+  a newer major version than the January run used; date parsing and
+  assignment semantics differ, and restated partitions disagree with
+  adjacent untouched days although nothing in the repo changed.
+enforcement: detector
+detection_sketch: >
+  Parse requirements*.txt, pyproject.toml, setup.cfg, Pipfile, dbt Python
+  model dbt.config(packages=...) and YAML packages lists, and Dockerfiles /
+  KubernetesPodOperator image arguments. Flag bare names, open ranges
+  (>= without upper bound, *, ~= on deployables), Airflow installs without
+  --constraint, images tagged :latest or untagged, and deployables with no
+  lockfile (pip-tools/uv/poetry lock or pip freeze output). False positives:
+  libraries published for others may declare compatible ranges; the rule
+  applies to deployed environments only. Pure-SQL tasks with no Python
+  surface are out of scope.
+severity_suggestion: warning
+examples:
+  bad: |
+    # requirements.txt
+    pandas
+    dbt-snowflake>=1.5
+    # KubernetesPodOperator(image="registry/etl:latest")
+  good: |
+    # requirements.txt (compiled from requirements.in by pip-tools / uv)
+    pandas==2.2.3
+    dbt-snowflake==1.8.2
+    # KubernetesPodOperator(image="registry/etl@sha256:<digest>")
+    # dbt.config(packages=["numpy==1.23.1"])
+sources:
+- title: Repeatable Installs (pip documentation)
+  url: https://pip.pypa.io/en/stable/topics/repeatable-installs/
+  publisher: Python Packaging Authority
+  accessed: '2026-10-11'
+  supports: Pinning means using == to require a specific version, which shields installs from newer
+    releases; hash-checking additionally detects changed files.
+- title: Installation from PyPI (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/installation/installing-from-pypi.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Airflow keeps dependencies open, so it publishes fixed per-release constraint files for
+    repeatable installs; recommends pinning apache-airflow and using pip freeze to build your own
+    constraints.
+- title: Python models (dbt docs)
+  url: https://docs.getdbt.com/docs/build/python-models
+  publisher: dbt Labs
+  accessed: '2026-10-11'
+  supports: Encourages configuring required packages and versions (e.g. "numpy==1.23.1") so dbt tracks them
+    in project metadata.
+- title: Best Practices (Airflow 3.3.2 documentation), Handling conflicting/complex Python dependencies
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Prefers pre-existing immutable environments (ExternalPythonOperator) or container operators
+    over per-run virtualenvs, which risk a too-dynamic environment. Image digests are our recommendation;
+    no fetched source mandates them.
+confidence: high
+conflicts_with: []
+status: draft

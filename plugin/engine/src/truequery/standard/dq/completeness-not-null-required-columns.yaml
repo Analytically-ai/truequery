@@ -1,0 +1,60 @@
+id: dq/completeness-not-null-required-columns
+title: Every required column has a not-null completeness check
+domain: dq
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  For each table, the columns declared required in its contract carry an
+  explicit not-null check (NULL count equals zero), and the check runs on
+  every build that writes the table.
+rationale: >
+  Missing keys and measures propagate silently: joins drop rows, aggregates
+  undercount, and downstream consumers cannot distinguish "zero" from
+  "unknown". An explicit per-column check turns a silent wrong-number failure
+  into a loud build failure at the point of introduction.
+failure_example: >
+  An orders mart ships with 4% NULL customer_id after an upstream join change;
+  revenue-by-customer reports undercount for weeks because no check names
+  customer_id as required.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Join the declared required-column list from the contract file against the
+  set of columns covered by not-null checks; report required columns with no
+  covering check. False positives: columns required only conditionally (e.g.
+  end_at nullable for open subscriptions) flag until the contract marks them
+  conditional.
+severity_suggestion: warning
+examples:
+  bad: |-
+    models:
+      - name: fct_orders
+        columns:
+          - name: customer_id
+    # no test on customer_id; NULLs pass silently
+  good: |-
+    models:
+      - name: fct_orders
+        columns:
+          - name: customer_id
+            data_tests:
+              - not_null
+              - relationships:
+                  to: ref('dim_customers')
+                  field: customer_id
+sources:
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt documents not_null as a built-in data test with severity
+      configuration and failure storage for debugging
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: missing-count checks appear in Soda scan summaries as a standard
+      completeness check family
+confidence: high
+conflicts_with: []
+status: draft

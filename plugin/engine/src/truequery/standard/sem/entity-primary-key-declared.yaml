@@ -1,0 +1,54 @@
+id: sem/entity-primary-key-declared
+title: Each semantic model declares its entities with uniqueness evidence
+domain: sem
+modes: [build, assure]
+applies_to: [dbt]
+statement: >
+  Every semantic model declares at least one primary entity (the unique row
+  identifier) with an expression, plus natural entities for joinable concepts,
+  and each primary entity has a passing uniqueness/not-null test on the
+  underlying model.
+rationale: >
+  Entities are the join keys of the whole metric layer; an untested entity
+  that is not actually unique turns every cross-model query into silent
+  fanout. Declaring plus testing closes the loop between assumption and fact.
+failure_example: >
+  `user_id` declared primary on an events model that actually contains one row
+  per event, not per user; user counts joined through it inflate 40x.
+enforcement: detector
+detection_sketch: >
+  Parse semantic models for entities blocks; flag models with no primary
+  entity, entities with no expr, and primary entities lacking a corresponding
+  unique/not-null test in the project. False positives: models intentionally
+  without joins (single-model metrics) — downgrade to advisory when the model
+  has no joinable consumers.
+severity_suggestion: warning
+examples:
+  bad: |-
+    semantic_models:
+      - name: orders
+        model: ref('orders')
+        entities: []   # no entity; joins against this model are unanchored
+  good: |-
+    semantic_models:
+      - name: orders
+        model: ref('orders')
+        entities:
+          - name: order_id
+            type: primary
+            expr: order_id
+    # plus: unique + not_null tests on orders.order_id
+sources:
+  - title: Entities
+    url: https://docs.getdbt.com/docs/build/entities
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Entities declared per model as primary or natural with expressions
+  - title: Semantic models
+    url: https://docs.getdbt.com/docs/build/semantic-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Semantic models group measures, dimensions, and entities per model
+confidence: high
+conflicts_with: []
+status: draft

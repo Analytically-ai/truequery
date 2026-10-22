@@ -1,0 +1,53 @@
+id: orch/explicit-catchup-policy
+title: Scheduled DAGs set catchup explicitly
+domain: orch
+modes:
+- build
+- change
+applies_to:
+- airflow
+statement: >
+  Every scheduled Airflow DAG MUST pass `catchup` explicitly (False, or True
+  with a bounded start_date and rerun-safe logic) instead of inheriting
+  `[scheduler] catchup_by_default`. The inherited value is version- and
+  config-dependent: it defaulted to True in Airflow 2.x and defaults to False
+  from Airflow 3.0, and any deployment can override it.
+rationale: >
+  With catchup on, unpausing or first deploying a DAG creates a run for every
+  missed interval since start_date. The same DAG file therefore behaves
+  differently across Airflow 2 and 3 or across deployments with different
+  config; writing the value in the DAG makes the replay behaviour reviewable
+  and stable through upgrades.
+failure_example: >
+  A DAG written on Airflow 3 relies on the new False default. It is deployed
+  to a team instance still on Airflow 2.x, is unpaused, and immediately
+  launches 45 historical runs that saturate warehouse concurrency and
+  re-append rows to an INSERT-only target.
+enforcement: detector
+detection_sketch: >
+  AST-scan DAG(...) constructors and @dag decorators; flag those with a
+  non-None schedule and no catchup keyword argument. Exempt schedule=None
+  (manual/externally triggered) DAGs. Low false-positive rate; the only
+  judgment is whether True is safe, which this check does not assess.
+severity_suggestion: warning
+examples:
+  bad: |
+    DAG("x", schedule="@daily", start_date=pendulum.datetime(2024, 1, 1, tz="UTC"))
+  good: |
+    DAG("x", schedule="@daily", start_date=pendulum.datetime(2024, 1, 1, tz="UTC"), catchup=False)
+sources:
+- title: Upgrading to Airflow 3
+  url: https://airflow.apache.org/docs/apache-airflow/stable/installation/upgrading_to_airflow3.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: States that catchup_by_default is now False by default in Airflow 3 (a changed default from
+    2.x).
+- title: Dag Runs (Airflow 3.3.2 documentation), Catchup
+  url: https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dag-run.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Catchup behaviour is governed by scheduler.catchup_by_default unless catchup is set on the DAG;
+    with catchup=True the scheduler creates runs for past intervals not yet run or cleared.
+confidence: high
+conflicts_with: []
+status: draft

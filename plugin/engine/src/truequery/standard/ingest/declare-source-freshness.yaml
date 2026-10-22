@@ -1,0 +1,80 @@
+id: ingest/declare-source-freshness
+title: Every ingested source declares a freshness threshold
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every source consumed by a pipeline MUST declare the timestamp column that
+  defines its freshness (a loaded-at or event-time field) and a maximum
+  acceptable data age with a warn and an error limit, and the pipeline MUST
+  evaluate that threshold on each run, reporting the run time, the newest
+  data timestamp and the resulting lag. Static reference tables that never
+  change are marked frozen instead. Sources that feed critical outputs
+  additionally declare a criticality tier, an owner and an alert route, so
+  a breach pages a person rather than landing in an unmonitored channel;
+  non-critical sources need the thresholds only.
+rationale: >
+  Without a declared freshness limit, a silently stalled connector looks
+  identical to a healthy one: downstream models keep building on
+  increasingly stale data and nobody is paged. Declared thresholds turn
+  "is this data fresh?" from tribal knowledge into a checkable property and
+  draw the line between "late" and "fine". A freshness check nobody owns
+  fires into a void, so critical sources need an owner and a paging path.
+failure_example: >
+  An orders API connector silently stops paginating after an auth rotation.
+  No freshness check exists, so the daily revenue mart builds on 11-day-old
+  orders for over a week before an analyst notices the numbers froze. In a
+  second case the payments freshness check does fail over a holiday
+  weekend, but the alert goes to an unmonitored channel and Monday's board
+  pack cites three-day-old payment totals.
+enforcement: detector
+detection_sketch: >
+  Detector (code files only): parse source declarations (dbt sources
+  blocks, Dagster freshness policies, connector configs) and flag any
+  source with no freshness block, no warn/error limit, or no loaded-at /
+  timestamp field, unless it is explicitly marked frozen. Also flag
+  sources tagged critical (tier-1) that lack an owner or alert route.
+  Evaluating the threshold itself (MAX(ts) against the run clock) is a
+  runtime step that dbt source freshness or the orchestrator performs; this
+  record checks only that it is declared and wired into the run. False
+  positives: planned pauses (holiday source freezes) until a calendar
+  exception is declared; timezone-naive timestamp columns until the zone is
+  pinned; mislabelled tiers (fix the tier, not the rule).
+severity_suggestion: warning
+examples:
+  bad: |
+    sources:
+      - name: shopify
+        tables:
+          - name: orders   # no freshness block; staleness is invisible
+      - name: payments     # feeds the board pack; check but no owner or route
+        freshness: {error_after: {count: 24, period: hour}}
+  good: |
+    sources:
+      - name: shopify
+        loaded_at_field: _etl_loaded_at
+        tables:
+          - name: orders
+            freshness:
+              warn_after: {count: 12, period: hour}
+              error_after: {count: 24, period: hour}
+      - name: payments
+        loaded_at_field: _etl_loaded_at
+        freshness:
+          warn_after: {count: 6, period: hour}
+          error_after: {count: 24, period: hour}
+        meta: {criticality: tier-1, owner: payments-data, alert_route: pagerduty://data-oncall}
+sources:
+  - title: Add sources to your DAG
+    url: https://docs.getdbt.com/docs/build/sources
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt sources support freshness blocks with warn/error limits on a loaded-at field, evaluated by dbt source freshness
+  - title: Asset freshness policies
+    url: https://dagster.io/docs/guides/observe/asset-freshness-policies
+    publisher: Dagster Labs
+    accessed: 2026-10-12
+    supports: Dagster documents freshness policies as the mechanism declaring how current an asset must be
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,52 @@
+id: model/grain-preserved-joins
+title: Joins preserve the declared grain of the model
+domain: model
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every multi-table model must declare its grain (the columns that make one
+  row unique) and every join in the model must preserve that grain: each
+  many-side input is pre-aggregated or deduplicated to one row per join key
+  before joining, unless the grain change is intentional and documented.
+rationale: >
+  A join against an un-deduplicated many-side input silently multiplies rows
+  (fanout), inflating measures such as revenue or counts. Wrong numbers from
+  fanout are among the costliest warehouse failures because downstream
+  consumers trust them.
+failure_example: >
+  An orders model joins order_lines (many rows per order) to orders without
+  pre-aggregation; order-level revenue triples and finance reports an
+  impossible quarter.
+enforcement: runtime
+detection_sketch: >
+  Compare row count of the model to row count of its declared grain key
+  grouped count; flag when COUNT(*) exceeds COUNT(DISTINCT grain_key) or when
+  a summed measure changes after adding a join. False positives: intentional
+  many-side explosions (e.g. unnesting line items) documented as grain changes.
+severity_suggestion: error
+examples:
+  bad: |
+    SELECT o.order_id, o.total, l.sku
+    FROM orders o JOIN order_lines l ON l.order_id = o.order_id;
+    -- grain was one row per order; now one row per line, total double-counts
+  good: |
+    WITH lines AS (
+      SELECT order_id, COUNT(*) AS line_cnt, SUM(amount) AS lines_total
+      FROM order_lines GROUP BY order_id
+    )
+    SELECT o.order_id, o.total, lines.line_cnt
+    FROM orders o LEFT JOIN lines ON lines.order_id = o.order_id;
+sources:
+  - title: How we structure our dbt projects
+    url: https://docs.getdbt.com/best-practices/how-we-structure/1-guide-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: layered modeling where marts define business entities with a stable grain
+  - title: Design Tip 81 Fact Table Surrogate Key
+    url: https://www.kimballgroup.com/2006/07/design-tip-81-fact-table-surrogate-key/
+    publisher: Kimball Group
+    accessed: 2026-10-12
+    supports: fact rows identified by a composite of dimension keys, which is the declared grain
+confidence: high
+conflicts_with: []
+status: draft

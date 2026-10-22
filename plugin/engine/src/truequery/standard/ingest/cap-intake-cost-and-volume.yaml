@@ -1,0 +1,46 @@
+id: ingest/cap-intake-cost-and-volume
+title: Intake paths declare volume and cost ceilings with shutoff behavior
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every intake MUST declare an expected volume band and a cost ceiling
+  (bytes scanned, rows per hour, dollars per day - whichever the platform
+  bills), plus what happens past the ceiling: alert, throttle, or halt.
+  An uncapped intake on a metered platform fails review.
+rationale: >
+  Intake is where runaway bills start: a debug-log stream pointed at the
+  warehouse, a backfill with no end date, a sensor-driven full scan per
+  poke. Without ceilings, the first sign of trouble is the invoice.
+failure_example: >
+  A file-watch stream is pointed at a bucket containing historical
+  archives "temporarily". The initial backfill scans 400TB and the
+  month's data-platform bill triples before anyone checks the job.
+enforcement: runtime
+detection_sketch: >
+  Needs live metering: compare observed volume/cost against the declared
+  band and trigger the declared action. Static review confirms ceilings
+  exist per intake. False positives: genuinely bursty sources need wide
+  bands plus anomaly-relative alerting, not tight fixed caps.
+severity_suggestion: warning
+examples:
+  bad: |
+    # no volume expectation, no ceiling, backfill unbounded
+    load everything under s3://archive/ into events_raw
+  good: |
+    intake events_raw: expected 50-80 GB/day; halt + page past 200 GB/day;
+    backfills require explicit row cap and expiry
+sources:
+  - title: Introduction to loading data
+    url: https://docs.cloud.google.com/bigquery/docs/loading-data
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Bulk load paths and their quotas are the cost-bounded alternative to per-row streaming inserts
+  - title: What is Auto Loader?
+    url: https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Auto Loader scales to millions of files per hour - throughput that needs an explicit ceiling to stay safe
+confidence: medium
+conflicts_with: []
+status: draft

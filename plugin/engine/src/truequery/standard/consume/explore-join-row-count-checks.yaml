@@ -1,0 +1,53 @@
+id: consume/explore-join-row-count-checks
+title: Check row counts and key uniqueness at each join before aggregating
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  For every join in a query whose result feeds a SUM, COUNT, or AVG, the
+  analysis checks, before trusting the aggregate, that the row count after
+  the join equals the row count of the table at the intended grain (or
+  differs by an explained amount), or that the join key is unique on the
+  side that should be "one". The counts or the uniqueness check are kept in
+  the notebook or answer. A join that changes the row count unexpectedly is
+  resolved (pre-aggregate, deduplicate on a stated key, or change the join)
+  before the result is reported.
+rationale: >
+  A one-to-many join silently repeats the "one" side's measures, so sums and
+  counts come out inflated with no error or warning. A before-and-after count
+  is the cheapest test that catches it, and it also catches the opposite
+  problem: inner joins quietly dropping unmatched rows.
+failure_example: >
+  Orders are joined to order_items to filter by product category, then
+  SUM(orders.total) is reported. Orders with three items are counted three
+  times and revenue is overstated by 40 percent.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT SUM(o.total)
+    FROM orders o JOIN order_items i ON i.order_id = o.order_id
+    WHERE i.category = 'books'
+  good: |
+    -- check: orders = 120,431 rows; after join = 120,431? -> no, 301,877 (fanout)
+    SELECT SUM(o.total)
+    FROM orders o
+    WHERE EXISTS (SELECT 1 FROM order_items i
+                  WHERE i.order_id = o.order_id AND i.category = 'books')
+    -- check after rewrite: 48,210 orders, matches COUNT(DISTINCT order_id)
+sources:
+  - title: Understanding symmetric aggregates
+    url: https://docs.cloud.google.com/looker/docs/best-practices/understanding-symmetric-aggregates
+    publisher: Google Cloud (Looker)
+    accessed: 2026-10-11
+    supports: Worked example where joining orders to order items repeats each order total and SUM(total) returns the wrong answer.
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Advises inspecting raw examples for any new analysis code and counting how much data each filtering step removes.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [sql/fanout-join-pre-aggregation, sem/no-fanout-double-counting]

@@ -1,0 +1,48 @@
+id: sql/random-sampling-no-sort
+title: Sample large tables without sorting them by RANDOM()
+domain: sql
+modes: [explore, build]
+applies_to: [any]
+statement: >
+  This is a performance practice, not a correctness rule. ORDER BY RANDOM()
+  LIMIT n returns a valid uniform random sample of exactly n rows; it is
+  correct. On large tables, prefer the engine's sampling clause
+  (TABLESAMPLE / USING SAMPLE) or a single-pass random filter, because the
+  ORDER BY form generates a key for and sorts every row to keep n of them.
+rationale: >
+  The ORDER BY RANDOM() form costs a full scan plus a sort of the whole
+  table, so cost scales with table size, not sample size. Engine sampling
+  clauses avoid the sort. They have different statistical properties
+  (system/block sampling is clustered; Bernoulli and filter forms return an
+  approximate count), so the faster form is a trade-off, not a fix.
+failure_example: >
+  SELECT * FROM events ORDER BY RANDOM() LIMIT 100 on a billion-row table
+  sorts a billion random keys nightly to keep 100 rows; the sample is
+  correct but the job is slow and expensive.
+enforcement: detector
+detection_sketch: >
+  Match Order nodes whose expressions contain RAND, RANDOM, NEWID, or UUID
+  calls together with a LIMIT. Suggest the dialect's sampling clause
+  (DuckDB USING SAMPLE n ROWS with reservoir sampling for an exact count;
+  Postgres TABLESAMPLE BERNOULLI/SYSTEM with REPEATABLE for a seed). Advisory
+  only, and only useful with a table-size hint: on small tables the sort is
+  trivial. No proof: both forms are correct, so there is no wrong answer to
+  demonstrate; the difference is cost.
+severity_suggestion: advisory
+examples:
+  bad: "SELECT id FROM big_events ORDER BY random() LIMIT 100; -- a correct uniform sample, but it sorts every row of a large table"
+  good: "SELECT id FROM big_events USING SAMPLE 100 ROWS; -- DuckDB reservoir sample of exactly 100 rows, no full sort"
+sources:
+- title: Samples (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/samples
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: USING SAMPLE selects a random subset; reservoir sampling gives an exact row count, while percentage-based system sampling is approximate and vector-clustered.
+- title: SELECT (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-select.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: TABLESAMPLE sampling_method (argument) [REPEATABLE (seed)] retrieves a subset of a table's rows, applied before other filters such as WHERE.
+confidence: medium
+conflicts_with: []
+status: draft

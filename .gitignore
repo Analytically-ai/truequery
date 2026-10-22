@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# TrueQuery's own per-project state
+.truequery/
+
+# Generated demo data (each folder documents how to rebuild it)
+*.duckdb
+*.duckdb.wal
+
+# Local working notes, never published
+internal/
+
+.DS_Store

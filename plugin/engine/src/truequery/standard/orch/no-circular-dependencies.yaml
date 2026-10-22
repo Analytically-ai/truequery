@@ -1,0 +1,67 @@
+id: orch/no-circular-dependencies
+title: Task graphs are acyclic and stable from one parse to the next
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+statement: >
+  Pipeline graphs MUST be acyclic, and their structure (task ids, edges,
+  number of tasks) MUST be the same on every parse of unchanged code. Task
+  ids and edges must not be derived from wall-clock time, random values,
+  unordered iteration (sets, unsorted directory listings), or external
+  queries at parse time. Fan-out whose width depends on upstream results
+  uses the platform's runtime mechanism (Airflow dynamic task mapping),
+  not parse-time generation.
+rationale: >
+  Airflow rejects cycles when a DAG is loaded (AirflowDagCycleException), so
+  a cycle surfaces as an import error that the CI load test catches (see
+  orch/dag-ci-parse-and-unit-tests). The subtler failure is a graph that
+  changes between parses: Airflow's dynamic DAG guidance asks for tasks
+  generated in a consistent order and a task count that does not change
+  between runs, and points to dynamic task mapping when the count depends on
+  upstream output. A shifting graph orphans task history and makes reruns
+  and clears target different tasks than the run that failed.
+failure_example: >
+  A DAG builds one task per table from a live information_schema query at
+  parse time. A table is dropped mid-day; the next parse removes that task,
+  its failed instance can no longer be cleared from the current graph, and
+  the day's backfill silently skips it.
+enforcement: detector
+detection_sketch: >
+  Cycles: rely on the definition-load test; the tool can additionally run
+  cycle detection over a statically extracted edge list. Instability: flag
+  task_id/group_id values or loop iterables in DAG files that are built
+  from datetime.now/today, random, uuid, set iteration or os.listdir
+  without sorted(), Variable/Hook/HTTP calls at parse time. False positives:
+  loops over literal lists or sorted config files shipped with the DAG (the
+  documented pattern); .expand() mapping is the correct alternative and
+  must not be flagged.
+severity_suggestion: warning
+examples:
+  bad: |
+    for t in set(hook.get_records("select table_name from information_schema.tables")):
+        PythonOperator(task_id=f"load_{t[0]}", ...)  # parse-time query, unordered
+  good: |
+    TABLES = sorted(json.load(open(Path(__file__).parent / "tables.json")))
+    for t in TABLES:
+        PythonOperator(task_id=f"load_{t}", ...)
+    # or: load.expand(table=list_tables())  # runtime fan-out via dynamic task mapping
+sources:
+- title: airflow.exceptions API reference (Airflow 3.0.2)
+  url: https://airflow.apache.org/docs/apache-airflow/3.0.2/_api/airflow/exceptions/index.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: AirflowDagCycleException is raised when there is a cycle in a DAG definition.
+- title: Dynamic Dag Generation (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/howto/dynamic-dag-generation.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Generated tasks should come out in a consistent order (use sorted()), with a task count that
+    does not change between runs; use metadata files rather than external data at parse time; use Dynamic
+    Task Mapping when the number of tasks depends on upstream results. The history/clear consequence in
+    the rationale is our inference.
+confidence: medium
+conflicts_with: []
+status: draft

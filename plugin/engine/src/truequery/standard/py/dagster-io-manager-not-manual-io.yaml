@@ -1,0 +1,47 @@
+id: py/dagster-io-manager-not-manual-io
+title: Dagster assets must return values via I/O managers, not manual writes
+domain: py
+modes: [build, change]
+applies_to: [dagster]
+statement: >
+  An @asset function must return its computed value (or yield an
+  Output/AssetMaterialization) and let the configured I/O manager persist
+  it; it must not perform its own persistence with to_csv/to_parquet/
+  to_sql/open(path, "w") calls inside the compute body.
+rationale: >
+  Manual writes split the asset's state in two: Dagster tracks one
+  location while downstream consumers read another, so re-materialization,
+  memoization, and environment swaps (dev vs prod storage) silently
+  diverge and backfills write to the wrong place.
+failure_example: >
+  An asset writes df.to_parquet("/prod/kpis.parquet") and also returns
+  df; in the dev environment the I/O manager stores a dev copy while the
+  hardcoded path overwrites the production file during a branch test.
+enforcement: detector
+detection_sketch: >
+  Flag persistence calls (to_csv, to_parquet, to_sql, open-for-write,
+  client upload/put calls) inside @asset function bodies. False
+  positives: writing explicitly declared side-artifacts (plots, debug
+  dumps) whose paths come from config and are not consumed downstream.
+severity_suggestion: warning
+examples:
+  bad: |
+    @asset
+    def kpis(orders: pd.DataFrame):
+        df = orders.groupby("ds").sum()
+        df.to_parquet("/data/kpis.parquet")  # bypasses I/O manager
+        return df
+  good: |
+    @asset(io_manager_key="warehouse_io")
+    def kpis(orders: pd.DataFrame):
+        return orders.groupby("ds").sum()
+sources:
+  - title: "I/O managers | Dagster Docs"
+    url: https://dagster.io/docs/guides/build/io-managers
+    publisher: Dagster
+    accessed: 2026-10-12
+    supports: I/O managers handle storing and loading asset outputs so
+      asset bodies return values instead of managing persistence.
+confidence: high
+conflicts_with: []
+status: draft

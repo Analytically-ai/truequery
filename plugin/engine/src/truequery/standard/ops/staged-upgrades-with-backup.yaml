@@ -1,0 +1,39 @@
+id: ops/staged-upgrades-with-backup
+title: Test platform and orchestrator upgrades in staging with a backup first
+domain: ops
+modes: [change, assure]
+applies_to: [airflow, dagster, any]
+statement: >
+  Upgrades to the orchestrator, warehouse platform behavior, or shared
+  pipeline libraries must first roll through a staging environment, and
+  stateful components (metadata database, state store) must be backed
+  up before the production upgrade begins.
+rationale: >
+  Upgrades change scheduling semantics, retry behavior, and SQL
+  dialects in ways unit tests cannot catch. An untested production
+  upgrade couples the blast radius of every pipeline into one event
+  with no restore point.
+failure_example: >
+  An Airflow major-version upgrade runs directly in prod with no
+  metadata backup. A migration script corrupts the job history table;
+  with no backup, run history and audit trail are unrecoverable.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check upgrade runbooks and deployment configuration for a staging
+  promotion step and pre-upgrade backup commands.
+  False positives: managed platforms that snapshot automatically with
+  no repo-visible step.
+severity_suggestion: warning
+examples:
+  bad: Upgrading the production orchestrator in place on a Friday with no backup.
+  good: Upgrade deploys to staging, integration-test DAGs run green, metadata DB is backed up, then prod upgrades.
+sources:
+- title: Best Practices (Airflow documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: 2026-10-12
+  supports: Airflow documents staging environments, database backup, and upgrade procedures as operational best practice.
+confidence: high
+conflicts_with: []
+status: draft

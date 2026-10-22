@@ -1,0 +1,59 @@
+id: sql/distinct-dedup-bandaid
+title: SELECT DISTINCT never stands in for a grain fix
+domain: sql
+modes: [build, change, explore]
+applies_to: [any]
+statement: >
+  SELECT DISTINCT over a join is rejected unless the author records the
+  business key it dedupes by and why duplicates are legitimate; the default
+  fix is correcting the join grain, pre-aggregating, or using EXISTS.
+rationale: >
+  DISTINCT dedupes whole rows, not business keys. Used to undo a fanout, it
+  also collapses legitimately identical rows (two orders of the same amount),
+  so totals computed over the "deduplicated" set are silently low; and it
+  hides the fanout that created the duplicates in the first place.
+failure_example: >
+  A join to a customer-tags table fans orders out; SELECT DISTINCT
+  customer_id, amount is added to remove the duplicates, and a customer's
+  two genuine 10.00 orders collapse into one, so revenue under-reports.
+enforcement: detector
+detection_sketch: >
+  Match Distinct projections in blocks that also contain a JOIN. Message
+  points at the join grain and suggests EXISTS or pre-aggregation. Downgrade
+  when the contract records the dedup key. False positives: genuinely
+  duplicate-producing unions of overlapping sources, justified per case.
+severity_suggestion: warning
+examples:
+  bad: SELECT SUM(amt) FROM (SELECT DISTINCT o.cid, o.amt FROM orders o JOIN tags t ON t.cid = o.cid);
+  good: SELECT SUM(amt) FROM orders o WHERE EXISTS (SELECT 1 FROM tags t WHERE t.cid = o.cid);
+sources:
+- title: SELECT (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-select.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: SELECT DISTINCT removes all duplicate rows from the result set, comparing whole rows rather than a chosen key.
+- title: Subquery Expressions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-subquery.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: EXISTS tests whether a subquery returns at least one row, so it filters without multiplying outer rows.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [sql/fanout-join-pre-aggregation]
+proof:
+  setup: |
+    CREATE TABLE orders(order_id INT, cid INT, amt INT);
+    INSERT INTO orders VALUES (1, 1, 10), (2, 1, 10), (3, 2, 30);
+    CREATE TABLE tags(cid INT, tag VARCHAR);
+    INSERT INTO tags VALUES (1, 'vip'), (1, 'eu'), (2, 'eu');
+  bad: "SELECT SUM(amt) FROM (SELECT DISTINCT o.cid, o.amt FROM orders o JOIN tags t ON t.cid = o.cid)"
+  bad_result: "[(40,)]"
+  good: "SELECT SUM(amt) FROM orders o WHERE EXISTS (SELECT 1 FROM tags t WHERE t.cid = o.cid)"
+  good_result: "[(50,)]"
+  note: >
+    The join fans customer 1's orders out by its two tags; DISTINCT then
+    removes the fanout copies but also merges orders 1 and 2, which are
+    distinct orders with the same (cid, amt). True revenue for tagged
+    customers is 50; the DISTINCT band-aid reports 40. Standard SQL; the
+    same result in Postgres, BigQuery, Snowflake and SQL Server.

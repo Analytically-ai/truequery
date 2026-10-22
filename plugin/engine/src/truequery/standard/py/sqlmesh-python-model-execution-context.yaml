@@ -1,0 +1,52 @@
+id: py/sqlmesh-python-model-execution-context
+title: SQLMesh Python models must declare columns and read upstream via context
+domain: py
+modes: [build, assure]
+applies_to: [sqlmesh]
+statement: >
+  A SQLMesh Python model must declare its output schema in the @model
+  columns argument, define execute(context, start, end, execution_time),
+  and fetch upstream data through the ExecutionContext (not through
+  separate connections or undeclared external reads) for every incremental
+  model run.
+rationale: >
+  Undeclared reads bypass SQLMesh's interval isolation: a backfill for one
+  time slice silently mixes in other slices' data, producing duplicate or
+  missing rows that virtual-update previews cannot catch because the
+  lineage graph does not contain the hidden dependency.
+failure_example: >
+  An INCREMENTAL_BY_TIME_RANGE Python model opens its own Snowflake
+  connection and selects the full orders table ignoring start/end; a
+  restatement of one day double-counts that day's revenue in the
+  production table.
+enforcement: detector
+detection_sketch: >
+  Parse the model file AST: require an execute function wrapped by @model
+  with a columns argument; flag connection constructors, raw client reads,
+  or SQL strings executed outside context methods. False positives:
+  documented external-source ingestion in a FULL-kind staging model where
+  no upstream exists; allow-list reads clearly marked as seeds.
+severity_suggestion: warning
+examples:
+  bad: |
+    import snowflake.connector
+    @model("marts.revenue", columns={"ds": "date", "rev": "double"})
+    def execute(context, start, end, execution_time, **kwargs):
+        conn = snowflake.connector.connect(**CREDS)  # ignores start/end
+        return conn.cursor().execute("SELECT * FROM orders").fetch_pandas_all()
+  good: |
+    @model("marts.revenue", columns={"ds": "date", "rev": "double"},
+           kind=dict(name=ModelKindName.INCREMENTAL_BY_TIME_RANGE,
+                     time_column="ds"))
+    def execute(context, start, end, execution_time, **kwargs):
+        return context.fetchdf("SELECT ds, rev FROM upstream_orders")
+sources:
+  - title: "Python models | SQLMesh docs"
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/models/python_models/
+    publisher: SQLMesh (Tobiko)
+    accessed: 2026-10-12
+    supports: Python models define execute with ExecutionContext, declare
+      output schema via columns, and fetch upstream data through context.
+confidence: high
+conflicts_with: []
+status: draft

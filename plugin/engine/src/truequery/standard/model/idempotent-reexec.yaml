@@ -1,0 +1,48 @@
+id: model/idempotent-reexec
+title: Models are idempotent under re-execution
+domain: model
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Re-running any model over the same input time range must produce the same
+  output rows: no append-without-dedupe, no non-deterministic functions in
+  keys or filters, and no reliance on run time as business time.
+failure_example: >
+  An append-only daily model re-runs after a failure and inserts the same day
+  twice; downstream revenue doubles until someone manually deletes the dupes.
+rationale: >
+  Non-idempotent models turn every retry, backfill, or failed run into data
+  duplication or loss. Pipeline retries are routine, so re-execution safety
+  prevents broken pipelines from becoming wrong numbers.
+enforcement: runtime
+detection_sketch: >
+  Run the model twice over the same input batch in an isolated environment
+  and compare full output row sets; flag any difference. False positives:
+  models intentionally recording run metadata columns (documented exemptions
+  compared with an ignore-list).
+severity_suggestion: error
+examples:
+  bad: |
+    {{ config(materialized='incremental', incremental_strategy='append') }}
+    SELECT *, CURRENT_TIMESTAMP AS loaded_at FROM raw_events;
+    -- rerun duplicates every row
+  good: |
+    {{ config(materialized='incremental', incremental_strategy='merge', unique_key='event_id') }}
+    SELECT event_id, occurred_at, payload FROM raw_events
+    {% if is_incremental() %}
+    WHERE occurred_at > (SELECT MAX(occurred_at) - INTERVAL '3 days' FROM {{ this }})
+    {% endif %};
+sources:
+  - title: Idempotence in dbt
+    url: https://docs.getdbt.com/best-practices/idempotence
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: transformations should be re-runnable with the same result
+  - title: About incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-models-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: incremental strategies determine what happens on reprocessing
+confidence: high
+conflicts_with: []
+status: draft

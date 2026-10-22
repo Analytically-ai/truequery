@@ -1,0 +1,42 @@
+id: ops/ci-slim-builds-only-changed
+title: CI builds only changed models and their downstream dependents
+domain: ops
+modes: [change, assure]
+applies_to: [dbt]
+statement: >
+  CI runs must select only the models changed in the pull request plus
+  their downstream dependents (state-based selection), rather than
+  rebuilding the whole project on every PR.
+rationale: >
+  Full-project rebuilds on every PR waste warehouse spend, slow the
+  feedback loop from minutes to hours, and teach developers to bypass
+  CI. Slim builds keep the gate fast enough that it is actually used.
+failure_example: >
+  A 400-model project rebuilds fully on each of 30 daily PRs. Monthly
+  CI spend exceeds the production refresh, PR feedback takes 90 minutes,
+  and developers start merging with admin overrides.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Inspect CI job commands for state selection flags (e.g. --select
+  state:modified+ or equivalent deferral to production state).
+  False positives: custom selection scripts that achieve the same effect
+  with different spelling.
+severity_suggestion: warning
+examples:
+  bad: ci-command rebuilds the entire project on every pull request.
+  good: ci-command builds state:modified+ with deferral to production state.
+sources:
+- title: About dbt State
+  url: https://docs.getdbt.com/docs/deploy/dbt-state-about
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: dbt State compares current project state to a prior manifest to select only changed artifacts.
+- title: Continuous integration jobs in dbt
+  url: https://docs.getdbt.com/docs/deploy/ci-jobs
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: CI jobs run against changed code in an isolated schema rather than full production rebuilds.
+confidence: high
+conflicts_with: []
+status: draft

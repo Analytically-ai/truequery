@@ -1,0 +1,44 @@
+id: dq/completeness-declare-missing-sentinels
+title: Missing-value sentinels are declared per column, not assumed to be NULL-only
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Each completeness check evaluates NULL plus an explicit per-column sentinel
+  list (such as empty string, 'N/A', '0000', or 1900-01-01 dates where the
+  domain uses them); a column with no declared sentinels documents that NULL
+  is its only missing representation.
+rationale: >
+  Source systems encode "unknown" as placeholder values far more often than
+  as NULL. A NULL-only check reports 100% complete while placeholder rows
+  corrupt filters, joins, and averages with wrong numbers.
+failure_example: >
+  A date_of_birth column filled with 1900-01-01 placeholders passes a
+  NULL-only check; age-banding analysis silently misclassifies thousands of
+  customers as centenarians.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Read the sentinel list from the contract file and confirm the compiled
+  completeness SQL tests NULL plus every listed sentinel; flag checks that
+  test bare IS NOT NULL on columns whose profile shows high-frequency
+  placeholder-like values. False positives: genuine values that resemble
+  sentinels (a real 'N/A' product code) until allow-listed.
+severity_suggestion: warning
+examples:
+  bad: |-
+    SELECT COUNT(*) - COUNT(email) AS missing FROM customers;
+    -- '' and 'N/A' count as present
+  good: |-
+    SELECT COUNT(*) - COUNT(NULLIF(NULLIF(TRIM(email), ''), 'N/A')) AS missing
+    FROM customers;
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: missing metrics are a standard check family shown in Soda scan
+      summaries
+confidence: medium
+conflicts_with: []
+status: draft

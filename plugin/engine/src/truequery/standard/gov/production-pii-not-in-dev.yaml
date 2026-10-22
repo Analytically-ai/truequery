@@ -1,0 +1,43 @@
+id: gov/production-pii-not-in-dev
+title: Development environments do not read production PII
+domain: gov
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Development and sandbox runs resolve sources classified as holding PII to
+  synthetic, sampled-and-redacted, or staging equivalents, never to the
+  production tables; the source-to-environment mapping is declared and
+  reviewable.
+rationale: >
+  Dev databases are copied to laptops, kept indefinitely, and rarely
+  audited; pointing them at production PII silently multiplies every
+  breach surface while bypassing the access controls placed on production.
+failure_example: >
+  dbt dev target reads prod.users directly for convenience; a lost laptop
+  with a week-old dev database becomes a reportable breach of 2M emails.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Requires declared environment-to-source mapping; flag dev profiles or
+  clones resolving to production datasets classified as PII-bearing.
+  Cannot observe where a developer actually pointed a local run
+  (runtime), only what the committed configuration declares. False
+  positives: staging datasets explicitly approved as production-like.
+severity_suggestion: error
+examples:
+  bad: "profiles.yml dev target: production database and schema with raw users table."
+  good: "dev target resolves users to seeds/synthetic or a redacted staging clone; mapping declared in the project."
+sources:
+- title: Add sources to your DAG
+  url: https://docs.getdbt.com/docs/build/sources
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: sources declare upstream tables so environment overlays are reviewable
+- title: SQLMesh documentation
+  url: https://sqlmesh.readthedocs.io/en/stable/
+  publisher: Tobiko Data
+  accessed: 2026-10-12
+  supports: isolated virtual data environments separate development data from production
+confidence: medium
+conflicts_with: []
+status: draft

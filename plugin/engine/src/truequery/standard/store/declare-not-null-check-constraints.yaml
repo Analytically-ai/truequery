@@ -1,0 +1,43 @@
+id: store/declare-not-null-check-constraints
+title: Declare NOT NULL and CHECK constraints where the format supports them
+domain: store
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Stored tables must declare NOT NULL on columns that are never legitimately
+  null (especially keys) and CHECK constraints for invariants the engine can
+  enforce (e.g. amount >= 0), on every platform/format that supports constraints
+  (Delta, Postgres-family, BigQuery PK/FK/NN); absence on a supported platform
+  is a violation.
+rationale: >
+  Constraints reject corrupt rows at write time instead of letting them poison
+  joins and aggregates; NOT NULL also documents the physical contract that
+  downstream join and deduplication logic relies on.
+failure_example: >
+  A nullable order_id column admits 3% nulls; a downstream inner join silently
+  drops those orders and revenue is understated for a quarter before anyone
+  notices.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: which columns are keys or never legitimately null,
+  and which invariants (e.g. amount >= 0) hold, from the contract file. With
+  them, parse CREATE/ALTER TABLE on dialects that support constraints and
+  flag declared-required columns without NOT NULL and declared invariants
+  without a CHECK. A parser alone cannot know which columns should be
+  non-null. Platforms without enforcement (plain Parquet) report
+  UNMEASURABLE, not pass. False positives: genuinely nullable business
+  fields, which the contract should not mark required.
+severity_suggestion: warning
+examples:
+  bad: "CREATE TABLE orders (order_id BIGINT, amount DECIMAL(18,2));"
+  good: "CREATE TABLE orders (order_id BIGINT NOT NULL, amount DECIMAL(18,2) CHECK (amount >= 0));"
+sources:
+  - title: Delta Lake — Constraints (NOT NULL and CHECK)
+    url: https://docs.delta.io/delta-constraints/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Delta supports NOT NULL and CHECK constraints that reject violating writes automatically.
+confidence: high
+conflicts_with: []
+status: draft

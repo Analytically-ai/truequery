@@ -1,0 +1,51 @@
+id: model/materialization-choice
+title: Materialization fits the model layer and refresh need
+domain: model
+modes: [explore, build]
+applies_to: [dbt]
+statement: >
+  Staging models default to views, intermediate models to views or ephemeral
+  where the warehouse supports them, and marts to tables or incremental
+  models; any deviation (e.g. a view mart, a table staging) must carry a
+  one-line justification, and ephemeral models must not be referenced by
+  snapshots or exposed outputs.
+rationale: >
+  Wrong materializations waste money (tables rebuilt for throwaway staging)
+  or break consumers (views recomputed on every dashboard load, ephemeral
+  models invisible to snapshots). Layer-appropriate defaults prevent both.
+failure_example: >
+  A 500M-row staging model materialized as a table doubles storage and build
+  time for data no one queries directly.
+enforcement: detector
+detection_sketch: >
+  Heuristic detector, advisory only, and a dbt-community convention rather
+  than a correctness rule. Code-only part: compare each model's
+  materialization config with its layer (path or tag) and flag mismatches
+  that carry no justification comment, plus ephemeral models referenced by
+  snapshots or exposures (the latter is a hard dbt limitation, not taste).
+  The right materialization depends on warehouse, size and query patterns,
+  which is judgment. Not enforced by the checker.
+severity_suggestion: advisory
+examples:
+  bad: |
+    -- models/staging/stg_orders.sql
+    {{ config(materialized='table') }}
+    SELECT id AS order_id FROM raw_orders;
+  good: |
+    -- models/staging/stg_orders.sql
+    {{ config(materialized='view') }}
+    SELECT id AS order_id FROM raw_orders;
+sources:
+  - title: Materializations
+    url: https://docs.getdbt.com/docs/build/materializations
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: view, table, incremental, and ephemeral options and their trade-offs
+  - title: Best practice guides
+    url: https://docs.getdbt.com/best-practices
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: materialization best-practice guidance for project layers
+confidence: medium
+conflicts_with: []
+status: draft

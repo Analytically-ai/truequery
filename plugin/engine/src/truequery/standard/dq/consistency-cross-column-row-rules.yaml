@@ -1,0 +1,49 @@
+id: dq/consistency-cross-column-row-rules
+title: Cross-column business rules within a row are checked as predicates
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Invariants spanning two or more columns in one row (for example end date
+  after start date, total equal to quantity times price) are written as row
+  predicates, and any violating row fails the check.
+rationale: >
+  Single-column checks all pass while the row as a whole is nonsense: a
+  subscription ending before it starts, or a total disagreeing with its
+  parts. These contradictions corrupt duration and money math downstream.
+failure_example: >
+  A backfill swaps start and end timestamps on 2M sessions; per-column
+  freshness and null checks stay green while every duration metric goes
+  negative.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Confirm each declared invariant compiles to a row predicate and evaluate
+  it over the table; violations are exact failing rows. False positives:
+  invariants with legitimate exceptions (trials with NULL end dates) until
+  the predicate encodes the exception explicitly.
+severity_suggestion: error
+examples:
+  bad: |-
+    -- each column checked alone; contradictory rows pass
+    SELECT * FROM subs WHERE end_at IS NULL OR start_at IS NULL;
+  good: |-
+    SELECT * FROM subs
+    WHERE NOT (end_at IS NULL OR end_at > start_at);
+    -- zero rows required
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: SodaCL check types include cross-dataset and user-defined
+      consistency checks beyond single-column metrics
+  - title: Constraints
+    url: https://docs.snowflake.com/en/sql-reference/constraints
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Snowflake documents check constraints as enforceable
+      consistency rules while other constraint types stay informational
+confidence: medium
+conflicts_with: []
+status: draft

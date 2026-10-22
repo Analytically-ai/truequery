@@ -1,0 +1,45 @@
+id: ingest/handle-schema-drift-explicitly
+title: File and stream intake declares a schema-evolution policy
+domain: ingest
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Every file/stream intake MUST declare how it handles new, renamed, or
+  mistyped columns: reject the batch, quarantine the extra fields (e.g. a
+  rescue column), or widen the schema under a named policy. An intake with
+  no evolution policy fails review.
+rationale: >
+  Upstream schemas change without notice. Without a declared policy, new
+  columns are silently dropped (lost data) or mistyped columns corrupt the
+  load (failed batches at 3am). An explicit policy makes each change a
+  visible decision.
+failure_example: >
+  A partner adds a currency column to the daily CSV. The loader's rigid
+  schema rejects every file; three days of sales fail to load before anyone
+  notices the error queue.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Requires the intake contract to name its evolution mode plus a rescue
+  destination if used. A detector can flag ingestion code with no schema
+  option set; only the declared policy is checkable. False positives:
+  strongly-versioned API sources where evolution is handled by versioning.
+severity_suggestion: warning
+examples:
+  bad: |
+    # no schema policy: new partner columns silently dropped
+    df = spark.read.csv("s3://landing/partner/")
+  good: |
+    # new columns rescued, batch still loads, team notified
+    spark.readStream.format("cloudFiles")
+      .option("cloudFiles.schemaEvolutionMode", "rescue")
+      .load("s3://landing/partner/")
+sources:
+  - title: What is Auto Loader?
+    url: https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Auto Loader documents schema inference, evolution modes, and rescued-data handling for file intake
+confidence: high
+conflicts_with: []
+status: draft

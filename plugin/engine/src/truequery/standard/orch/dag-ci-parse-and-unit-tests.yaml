@@ -1,0 +1,70 @@
+id: orch/dag-ci-parse-and-unit-tests
+title: Pipeline definitions pass a load test and unit tests in CI
+domain: orch
+modes:
+- build
+- change
+- assure
+applies_to:
+- airflow
+- dagster
+statement: >
+  Every change to pipeline definitions MUST pass, in CI before merge, (1) a
+  definition-load test that imports every DAG/definition file with no
+  scheduler, metadata database or live connections and fails on any import
+  error (Airflow DagBag import test or running each DAG file; Dagster
+  `dg check defs` or the older `dagster definitions validate`), and (2) unit
+  tests for task/asset logic touched by the change.
+rationale: >
+  A DAG file that fails to import does not fail a task; it disappears from
+  the scheduler, so nothing alerts. Airflow's best-practices page recommends
+  both a DAG loader test and unit tests, and Dagster's CLI provides a
+  definitions-validation command that exits non-zero on load errors, which
+  turns that silent disappearance into a CI failure before merge.
+failure_example: >
+  A refactor renames a helper module but misses one DAG file. CI has no
+  loader test, so the broken DAG deploys, vanishes from the UI for two days,
+  and the daily revenue export never runs; finance notices before any alert
+  does.
+enforcement: detector
+detection_sketch: >
+  Static check over the repository: (a) a test exists that instantiates
+  DagBag over the DAGs folder and asserts no import_errors, or imports every
+  .py under it (Airflow), or CI runs `dg check defs` / `dagster definitions
+  validate` (Dagster); and (b) CI config invokes that test on changes under
+  the DAG/definitions paths. Flag repositories with DAG/definition paths and
+  no such step. Unit-test coverage of changed logic is not judged by the
+  detector. False positives: DAGs living outside the configured roots; allow
+  configured DAG roots and docs-only path filters.
+severity_suggestion: warning
+examples:
+  bad: |
+    # CI: pytest tests/test_app.py   -- nothing imports dags/
+  good: |
+    def test_dag_bag_imports():
+        from airflow.models import DagBag
+        bag = DagBag(dag_folder="dags/", include_examples=False)
+        assert not bag.import_errors, bag.import_errors
+    # CI also runs tests/test_task_logic.py; Dagster projects run `dg check defs`
+sources:
+- title: Best Practices (Airflow 3.3.2 documentation), Testing a Dag
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Recommends a DAG loader test (the DAG file must load without uninstalled dependencies or syntax
+    errors) and unit tests, including a test that the DAG loads with no import errors.
+- title: dg CLI reference (Dagster docs)
+  url: https://dagster.io/docs/api/clis/dg-cli/dg-cli-reference
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: '`dg check defs` loads and validates Dagster definitions and exits 1 on errors, so it can gate
+    CI.'
+- title: Unit testing assets and ops (Dagster docs)
+  url: https://dagster.io/docs/guides/test/unit-testing-assets-and-ops
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Dagster recommends unit testing individual assets by direct invocation with mocked resources,
+    run with pytest.
+confidence: high
+conflicts_with: []
+status: draft

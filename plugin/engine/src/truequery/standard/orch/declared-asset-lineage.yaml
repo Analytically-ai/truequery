@@ -1,0 +1,66 @@
+id: orch/declared-asset-lineage
+title: Cross-pipeline data flow is declared, not hidden in code
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+- dagster
+- dbt
+statement: >
+  A dataset that one pipeline writes and another reads MUST be declared
+  through the tool's dependency surface, not exist only as a path or table
+  name inside task code: dbt `source()`/`ref()`, Dagster asset `deps` or
+  asset parameters, Airflow task `outlets` with Assets (and the consuming
+  DAG's asset schedule). Purely internal scratch objects are exempt.
+rationale: >
+  Declared dependencies are what each tool uses to order work and to show
+  upstream/downstream relationships: dbt's source() creates a dependency
+  between model and source, Dagster's deps make the edge explicit, and
+  Airflow schedules asset consumers from producer outlets. An edge that
+  exists only in a string is invisible to all of that, so an upstream rename
+  or rerun does not reach the consumer.
+failure_example: >
+  A task reads s3://events/raw/ directly in Python with no declared asset;
+  the producing pipeline is renamed and moves its output, and the consumer
+  keeps reading a frozen prefix with no dependency edge to show or trigger it.
+enforcement: detector
+detection_sketch: >
+  Heuristic: extract table names and storage URIs from SQL strings and I/O
+  calls in task/asset bodies; flag any that match an object another
+  pipeline in the repo produces (a declared outlet/asset/dbt model) but is
+  not declared as an input of the reading task/asset. Do not flag
+  references that match nothing else in the repo. False positives:
+  scratch/temp objects and log strings resembling table names (allowlist);
+  dynamically built names are missed (false negatives). Airflow's own hook
+  lineage collection is documented as experimental, so do not rely on it.
+severity_suggestion: warning
+examples:
+  bad: |
+    pd.read_parquet("s3://events/raw/")  # produced by another DAG, nothing declared
+  good: |
+    @task(inlets=[Asset("s3://events/raw/")], outlets=[Asset("warehouse.mart_orders")])
+    # Dagster: @asset(deps=[raw_events]); dbt: {{ source('events', 'raw') }}
+sources:
+- title: Add sources to your DAG (dbt docs)
+  url: https://docs.getdbt.com/docs/build/sources
+  publisher: dbt Labs
+  accessed: '2026-10-11'
+  supports: Selecting from sources with {{ source() }} defines lineage and creates a dependency between
+    the model and the source table.
+- title: Passing data between assets (Dagster docs)
+  url: https://dagster.io/docs/guides/build/assets/passing-data-between-assets
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: Asset dependencies are made explicit with the deps argument or via function parameters with
+    I/O managers.
+- title: Asset-aware scheduling (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/asset-scheduling.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Producer tasks declare assets in outlets and consumer DAGs schedule on them. (The separate
+    Airflow lineage page calls hook-level lineage "very experimental".)
+confidence: medium
+conflicts_with: []
+status: draft

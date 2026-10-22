@@ -1,0 +1,42 @@
+id: store/vacuum-expire-snapshots-with-retention-floor
+title: Expire snapshots and vacuum only above a declared retention floor
+domain: store
+modes: [assure, change]
+applies_to: [databricks, delta, iceberg]
+statement: >
+  Snapshot-expiration (Iceberg expire_snapshots) and file-removal (Delta VACUUM,
+  Iceberg delete-orphan-files) jobs must declare a retention floor of at least 7
+  days (168 hours), refuse to run below it, and run on a schedule — never as
+  ad-hoc zero-retention cleanups to reclaim space.
+rationale: >
+  VACUUM with RETAIN 0 or aggressive snapshot expiry permanently destroys the
+  only recovery path from a bad overwrite and breaks concurrent readers and time
+  travel; the disk savings are one-off while the data-loss risk is irreversible.
+failure_example: >
+  After a faulty backfill overwrites a partition, the team discovers a prior
+  VACUUM RETAIN 0 HOURS removed the previous files; the pre-backfill state is
+  unrecoverable and must be re-ingested from source.
+enforcement: detector
+detection_sketch: >
+  Scan job/DDL text for VACUUM ... RETAIN, expire_snapshots(... older_than ...),
+  and remove-orphan-files calls; flag retention arguments below 168 hours or
+  missing entirely. False positives: test/dev sandboxes explicitly labeled
+  ephemeral in the contract — downgrade to advisory there.
+severity_suggestion: error
+examples:
+  bad: "VACUUM events RETAIN 0 HOURS;"
+  good: "VACUUM events RETAIN 168 HOURS; -- weekly job, floor declared in contract"
+sources:
+  - title: Delta Lake — Table utility commands (VACUUM / history)
+    url: https://docs.delta.io/delta-utility/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: VACUUM removes files no longer referenced; history/restore commands define the recoverable window it destroys.
+  - title: Iceberg — Maintenance (expire snapshots, remove orphan files)
+    url: https://iceberg.apache.org/docs/latest/maintenance/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Snapshot expiration and orphan-file removal are the controlled mechanisms for reclaiming storage.
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,57 @@
+id: sql/not-in-nullable-subquery
+title: NOT IN is never used against a nullable subquery
+domain: sql
+modes: [build, change, assure, explore]
+applies_to: [any]
+statement: >
+  Any NOT IN whose subquery column is nullable is rewritten as NOT EXISTS
+  (correlated) or the subquery explicitly excludes NULLs.
+rationale: >
+  Three-valued logic poisons the whole predicate: a single NULL in the
+  subquery makes NOT IN unknown for every row that is not otherwise
+  matched, so the query returns zero rows. It runs fine and the answer is
+  silently empty.
+failure_example: >
+  WHERE id NOT IN (SELECT user_id FROM orders) returns nothing because one
+  historic row has NULL user_id; an allow-list that should hold thousands of
+  ids comes back empty.
+enforcement: detector
+detection_sketch: >
+  Match IN nodes with NOT set whose right side is a subquery. Static grade is
+  error; downgrade only when the contract declares the subquery column NOT
+  NULL. False positives: none when nullability is unknown, because the
+  NOT EXISTS rewrite returns the intended rows in both cases.
+severity_suggestion: error
+examples:
+  bad: SELECT id FROM users WHERE id NOT IN (SELECT user_id FROM banned);
+  good: SELECT id FROM users u WHERE NOT EXISTS (SELECT 1 FROM banned b WHERE b.user_id = u.id);
+sources:
+- title: Subquery Expressions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-subquery.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: NOT IN is true only if only unequal subquery rows are found; if the subquery yields a NULL and no equal row, the result is null, not true.
+- title: NULL Values (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/data_types/nulls
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: Any comparison with NULL returns NULL, and IN / NOT IN behave differently when the list contains a NULL.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/negative-filter-drops-nulls, sql/null-equality-comparison]
+proof:
+  setup: |
+    CREATE TABLE users(id INT);
+    INSERT INTO users VALUES (1), (2), (3);
+    CREATE TABLE banned(user_id INT);
+    INSERT INTO banned VALUES (2), (NULL);
+  bad: "SELECT id FROM users WHERE id NOT IN (SELECT user_id FROM banned) ORDER BY id"
+  bad_result: "[]"
+  good: "SELECT id FROM users u WHERE NOT EXISTS (SELECT 1 FROM banned b WHERE b.user_id = u.id) ORDER BY id"
+  good_result: "[(1,), (3,)]"
+  note: >
+    For users 1 and 3, the comparison against the NULL row is unknown, so
+    NOT IN is unknown rather than true and the row is filtered out. Only one
+    user is banned, but the query returns nobody. Standard SQL three-valued
+    logic; identical in Postgres, BigQuery, Snowflake, SQL Server and MySQL.

@@ -1,0 +1,1 @@
+SELECT id FROM a WHERE id NOT IN (SELECT a_id FROM b);

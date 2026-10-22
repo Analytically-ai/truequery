@@ -1,0 +1,57 @@
+id: sem/metric-filters-declared-not-hidden
+title: Metric filters live in the metric definition, not in hidden SQL
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every filter that defines what a metric counts (e.g. only paying users,
+  excluding test orders, refunds handling) is declared as a filter parameter
+  on the measure or metric itself, visible to consumers, rather than buried
+  in the underlying model's WHERE clause or a dashboard filter.
+rationale: >
+  Hidden filters make the "same" metric return different numbers depending on
+  which model or dashboard computed it, and nobody reading the metric name can
+  see the exclusion. Declared filters travel with the metric everywhere.
+failure_example: >
+  The orders model silently excludes test orders in its WHERE clause, so the
+  governed `order_count` undercounts by 3% versus finance's ledger and the
+  reconciliation takes a week because the filter was invisible.
+enforcement: detector
+detection_sketch: >
+  Compare each governed metric's declared filter list against filters in the
+  underlying model SQL and in saved-query definitions; flag model-level WHERE
+  conditions on business-status columns (test, refunded, cancelled, internal)
+  that are absent from the metric's declared filters. False positives:
+  structural filters (soft-delete flags, partition hygiene) that genuinely
+  define the table — allowlist by column naming convention.
+severity_suggestion: warning
+examples:
+  bad: |-
+    models:
+      - name: orders
+        # hidden business filter in model SQL:
+        # SELECT * FROM raw_orders WHERE is_test = false AND status != 'refunded'
+    metrics:
+      - name: order_count   # no declared filter; consumers cannot see exclusions
+  good: |-
+    measures:
+      - name: order_count
+        expr: order_id
+        agg: count_distinct
+        filters:
+          - is_test = false
+          - status != 'refunded'
+sources:
+  - title: Getting started data modeling
+    url: https://docs.cube.dev/docs/data-modeling/overview
+    publisher: Cube
+    accessed: 2026-10-12
+    supports: Measure-level filters declared on measures rather than hidden in SQL
+  - title: Semantic models
+    url: https://docs.getdbt.com/docs/build/semantic-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Measures and dimensions declared explicitly per semantic model
+confidence: high
+conflicts_with: []
+status: draft

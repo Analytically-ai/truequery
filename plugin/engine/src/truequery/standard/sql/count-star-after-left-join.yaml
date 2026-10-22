@@ -1,0 +1,67 @@
+id: sql/count-star-after-left-join
+title: Count child rows with COUNT(child.key), not COUNT(*), after a LEFT JOIN
+domain: sql
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  When a query LEFT JOINs a parent to a child table and counts children per
+  parent, it counts a non-null child column (COUNT(child.key)), never
+  COUNT(*) or COUNT(1).
+rationale: >
+  A LEFT JOIN keeps each unmatched parent as one row with NULLs on the child
+  side. COUNT(*) counts rows, so every parent with zero children is reported
+  as having one. Zero-activity cohorts disappear from the data with no
+  error.
+failure_example: >
+  SELECT c.id, COUNT(*) AS orders FROM customers c LEFT JOIN orders o ON
+  o.customer_id = c.id GROUP BY c.id reports 1 order for every customer who
+  never ordered; "customers with zero orders" is always empty.
+enforcement: detector
+detection_sketch: >
+  Match an aggregate block whose FROM contains a LEFT (or RIGHT/FULL) join
+  and whose GROUP BY keys come only from the preserved side, and that
+  projects COUNT(*) or COUNT(<constant>). Suggest COUNT(<nullable side>.<key
+  column>). Exact when the child key is declared NOT NULL; otherwise any
+  NOT NULL child column works. False positives: queries that intend to
+  count output rows (one per parent with no children), which should say so
+  or count the parent key instead.
+severity_suggestion: error
+examples:
+  bad: SELECT c.id, COUNT(*) FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.id;
+  good: SELECT c.id, COUNT(o.order_id) FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.id;
+sources:
+- title: Aggregate Functions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-aggregate.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: count(*) computes the number of input rows; count(value) computes the number of input rows in which the value is not null.
+- title: Aggregate Functions (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/functions/aggregates
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: count() returns the number of rows; count(arg) returns the number of rows where arg is not NULL.
+- title: Joins Between Tables (PostgreSQL tutorial)
+  url: https://www.postgresql.org/docs/current/tutorial-join.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: A left outer join keeps each unmatched left-table row once, with null values for the right-table columns.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/left-join-null-rejecting-where]
+proof:
+  setup: |
+    CREATE TABLE customers(id INT);
+    INSERT INTO customers VALUES (1), (2), (3);
+    CREATE TABLE orders(order_id INT, customer_id INT);
+    INSERT INTO orders VALUES (10, 1), (11, 1), (12, 2);
+  bad: "SELECT c.id, COUNT(*) AS n_orders FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.id ORDER BY c.id"
+  bad_result: "[(1, 2), (2, 1), (3, 1)]"
+  good: "SELECT c.id, COUNT(o.order_id) AS n_orders FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.id ORDER BY c.id"
+  good_result: "[(1, 2), (2, 1), (3, 0)]"
+  note: >
+    Customer 3 has no orders. The LEFT JOIN keeps it as one row with
+    o.order_id NULL; COUNT(*) counts that row and reports 1 order, while
+    COUNT(o.order_id) skips the NULL and reports 0. Standard aggregate
+    semantics; identical in Postgres, BigQuery, Snowflake, SQL Server and
+    MySQL.

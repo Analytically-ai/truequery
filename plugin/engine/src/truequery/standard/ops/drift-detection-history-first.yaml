@@ -1,0 +1,42 @@
+id: ops/drift-detection-history-first
+title: Detect pipeline drift from run history fingerprints before rescanning data
+domain: ops
+modes: [assure]
+applies_to: [any]
+statement: >
+  Drift detection must start from recorded run history (query
+  fingerprints, row counts, schema hashes over time) and only trigger
+  data rescans when history shows an unexplained deviation.
+rationale: >
+  Scan-first drift detection re-reads production tables on every check,
+  billing real compute for a question history usually answers for free.
+  History-first keeps monitoring cheap enough to run continuously,
+  which is what makes it catch drift early.
+failure_example: >
+  A nightly drift job full-scans the two largest tables to compare
+  distributions. It costs more than the pipeline it monitors and gets
+  turned off; three months later a silently changed upstream feed goes
+  unnoticed for six weeks.
+enforcement: runtime
+detection_sketch: >
+  Requires stored history: compare current run fingerprints and counts
+  against the trailing baseline and alert on deviation. Static code
+  alone cannot observe drift.
+severity_suggestion: warning
+examples:
+  bad: Full re-profile of every table on every schedule tick.
+  good: Row-count and schema-hash time series trigger a targeted re-profile only when the trend breaks.
+sources:
+- title: Monitor jobs and alerts (dbt)
+  url: https://docs.getdbt.com/docs/deploy/monitor-jobs
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Production monitoring centers on job outcomes, notifications, and run visibility over time.
+- title: Introduction (Apache Iceberg documentation)
+  url: https://iceberg.apache.org/docs/latest/
+  publisher: Apache Software Foundation
+  accessed: 2026-10-12
+  supports: Iceberg snapshot history gives cheap metadata-level lineage of how a table evolved without rescanning data.
+confidence: medium
+conflicts_with: []
+status: draft

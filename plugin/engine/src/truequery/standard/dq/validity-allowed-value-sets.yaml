@@ -1,0 +1,46 @@
+id: dq/validity-allowed-value-sets
+title: Categorical columns are checked against declared allowed-value sets
+domain: dq
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Each categorical column declares its allowed values in the contract, and a
+  check fails any row whose non-missing value falls outside the set.
+rationale: >
+  Undeclared domain drift (a new status code, a renamed plan tier) flows
+  into CASE WHEN logic that silently buckets unknown values as NULL or
+  "other", producing wrong segment numbers that look complete.
+failure_example: >
+  Upstream adds order status 'pending_fraud_review'; revenue recognition
+  logic only handles four statuses, so affected orders vanish from both
+  recognized and refunded totals for a month.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Diff the contract's allowed-value list against DISTINCT values observed in
+  profiling or against the check predicate; unlisted observed values fail at
+  runtime, while a static pass confirms every categorical column has a set
+  declared. False positives: legitimate new values fail until the set is
+  extended, which is the intended review gate, not noise.
+severity_suggestion: warning
+examples:
+  bad: |-
+    SELECT * FROM orders WHERE status NOT IN
+      ('pending','completed','cancelled','refunded');
+    -- ad-hoc query, runs nowhere automatically
+  good: |-
+    columns:
+      - name: status
+        data_tests:
+          - accepted_values:
+              values: ['pending','completed','cancelled','refunded']
+sources:
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: accepted_values is a built-in dbt data test asserting column
+      membership in a specified list
+confidence: high
+conflicts_with: []
+status: draft

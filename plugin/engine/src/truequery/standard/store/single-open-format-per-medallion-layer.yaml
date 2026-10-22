@@ -1,0 +1,37 @@
+id: store/single-open-format-per-medallion-layer
+title: Standardize one open table format per medallion layer
+domain: store
+modes: [build]
+applies_to: [databricks, iceberg, delta, snowflake, bigquery]
+statement: >
+  Each medallion layer (bronze/raw, silver, gold) in a lakehouse must use a
+  single declared open table format (all-Delta or all-Iceberg per layer) with
+  cross-format reads restricted to explicitly listed migration tables; a layer
+  mixing formats by accident is a violation.
+rationale: >
+  Mixed formats per layer double the maintenance surface (two VACUUM/OPTIMIZE
+  regimes, two time-travel semantics), break uniform governance and cloning, and
+  make every reader negotiate format per table instead of per layer.
+failure_example: >
+  Silver mixes Delta and Iceberg tables; the VACUUM job only covers Delta, so
+  Iceberg snapshots grow unbounded until storage alerts fire.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: "-- silver layer: 40 Delta tables + 12 Iceberg tables, no migration list"
+  good: "-- silver layer: all Iceberg; bronze→silver migration allowlist in contract tracks 2 remaining Delta tables"
+sources:
+  - title: Delta Lake — Best practices (overview)
+    url: https://docs.delta.io/best-practices/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Delta best practices assume a consistent Delta-table operational regime per deployment.
+  - title: Iceberg — Maintenance (overview)
+    url: https://iceberg.apache.org/docs/latest/maintenance/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Iceberg maintenance procedures assume Iceberg-managed tables under a catalog.
+confidence: low
+conflicts_with: []
+status: draft

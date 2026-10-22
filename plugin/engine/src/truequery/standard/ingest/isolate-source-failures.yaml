@@ -1,0 +1,50 @@
+id: ingest/isolate-source-failures
+title: One source's failure never blocks unrelated sources
+domain: ingest
+modes: [build, assure]
+applies_to: [airflow, dagster, dbt]
+statement: >
+  Pipeline structure MUST isolate per-source intake so a single source's
+  failure (stalled, malformed, late) fails only its own branch and pages
+  its own owner. A monolithic intake where one bad source blocks all
+  sources fails review.
+rationale: >
+  Coupled intake converts one partner's outage into a platform-wide data
+  freeze: every downstream model goes stale because one CSV was malformed.
+  Isolation keeps 90% of the platform fresh while the broken source is
+  fixed, and routes the page to the right owner.
+failure_example: >
+  A single DAG loads twelve sources sequentially and aborts on the third.
+  Nine healthy sources go stale for two days because one partner's file
+  had a bad header.
+enforcement: judgment
+detection_sketch: >
+  Judgment: taught, not checked. Whether sources are "independent" and
+  whether an all-or-nothing intake is intended is a design decision not
+  visible in DAG code; a single task touching several sources can be a
+  deliberate atomic snapshot. Reviewers check that each source has its own
+  failure boundary and owner, or that the contract declares all-or-nothing
+  semantics.
+severity_suggestion: advisory
+examples:
+  bad: |
+    # one task, twelve sources, first exception aborts all
+    def load_all(): for s in SOURCES: load(s)
+  good: |
+    # per-source assets/tasks with independent retries and owners
+    @asset(owners=["team-payments"]) def raw_payments(): ...
+    @asset(owners=["team-crm"]) def raw_crm(): ...
+sources:
+  - title: Overview | Dagster Docs
+    url: https://dagster.io/docs
+    publisher: Dagster
+    accessed: 2026-10-12
+    supports: Per-asset definitions with independent materialization and checks are the documented isolation unit
+  - title: Sensors
+    url: https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/sensors.html
+    publisher: Apache Airflow
+    accessed: 2026-10-12
+    supports: Per-arrival sensors gate each branch independently so one late arrival need not block others
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,44 @@
+id: consume/explicit-timezone-consumers
+title: Consumer datetime logic states its time zone explicitly
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Consumer queries that filter, bucket, or display datetimes state the time
+  zone in SQL (AT TIME ZONE, CONVERT_TZ, or timestamp-with-zone literals)
+  instead of relying on session or server defaults.
+rationale: >
+  Session time zones differ between the analyst laptop, the BI server, and
+  the warehouse default; implicit zones shift day boundaries and silently
+  move revenue between reporting periods.
+failure_example: >
+  A daily revenue tile buckets by DATE(event_ts) under a UTC warehouse
+  default while the business reports in America/Chicago; Black Friday
+  revenue splits across two days and mismatches Finance by 4 percent.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: column types (which columns are timestamp with time
+  zone vs naive timestamp) from the contract or catalog snapshot, plus the
+  team's declared display and bucketing zone. With them, flag DATE(),
+  DATE_TRUNC() or day-bucketing over zone-sensitive timestamp columns in
+  persisted consumer queries with no adjacent AT TIME ZONE / CONVERT_TZ /
+  zone-qualified literal. Without column types the parser cannot tell a
+  timestamptz from a date, so it reports UNMEASURABLE rather than pass.
+  False positives: UTC-native pipelines where UTC display is the declared
+  convention.
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT DATE(event_ts) AS day, SUM(amount) FROM mart_orders GROUP BY 1
+  good: |
+    SELECT DATE(event_ts AT TIME ZONE 'America/Chicago') AS day, SUM(amount) FROM mart_orders GROUP BY 1
+sources:
+  - title: SELECT Statement
+    url: https://duckdb.org/docs/current/sql/statements/select
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: Documents datetime expression and casting forms the detector inspects for missing zone handling.
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,52 @@
+id: dq/checks-versioned-with-code
+title: Checks live in versioned files beside the models they guard
+domain: dq
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Quality checks are declared in version-controlled files reviewed in the
+  same pull request as the model change (checks YAML, test blocks, or audit
+  files); console-only or click-created checks with no file representation
+  are not the system of record.
+rationale: >
+  Unversioned checks drift from the code they guard: a model changes, its
+  console check does not, and failures (or silence) reference rules nobody
+  can diff, blame, or roll back. Versioned checks make quality reviewable,
+  revertable, and portable across environments.
+failure_example: >
+  A threshold tuned in a web UI is overwritten by a teammate's conflicting
+  edit with no history; the team cannot reconstruct which value was live
+  when last week's bad data shipped.
+enforcement: runtime
+detection_sketch: >
+  Needs a runtime inventory: the list of checks that actually ran (warehouse
+  or orchestrator run history, Soda/GX/console-defined monitors). Compare it
+  to the check definitions in the repo; checks that ran but have no file in
+  the repo are findings. Code files alone show only the checks that exist in
+  the repo, never the click-created ones, so the orphan check cannot be done
+  statically. False positives: legacy console checks during a declared
+  migration window until they are imported into files.
+severity_suggestion: advisory
+examples:
+  bad: |-
+    # threshold exists only in a monitoring console; repo has no record
+  good: |-
+    checks for dim_customer:
+      - row_count > 0
+      - duplicate_count(customer_id) = 0
+    # reviewed, merged, and deployed with the model change
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: SodaCL checks are written in checks YAML files executed by scans
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt data tests are declared in project files with severity and
+      storage configuration
+confidence: high
+conflicts_with: []
+status: draft

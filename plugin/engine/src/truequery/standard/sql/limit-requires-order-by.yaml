@@ -1,0 +1,67 @@
+id: sql/limit-requires-order-by
+title: Every LIMIT carries an ORDER BY
+domain: sql
+modes: [build, change, assure, explore]
+applies_to: [any]
+statement: >
+  Any query block with LIMIT or FETCH FIRST also has an ORDER BY, unless the
+  limit is a bare existence probe (LIMIT 1 whose projected values are not
+  used). The ORDER BY must also be over a key that is unique in the result.
+  These are two separate checks: the detector flags only a MISSING ORDER BY;
+  proving that the ORDER BY keys are unique needs declared uniqueness facts
+  and is left to contract mode.
+rationale: >
+  Without ordering, which rows come back is unspecified and can change
+  between runs after reloads, compaction, or parallelism changes.
+  Dashboards, samples, and tests built on unordered limits flap. A
+  non-unique ORDER BY has the same problem at the cut-off row.
+failure_example: >
+  A top-customers extract with LIMIT 100 and no ORDER BY returns a different
+  100 rows after the table is reloaded; a downstream diff check pages the
+  team weekly.
+enforcement: detector
+detection_sketch: >
+  Detector: match Limit/Fetch nodes with no Order sibling in the same query
+  block. Exempt LIMIT 1 existence probes and queries whose outer block adds
+  the ordering. Contract (separate): when the contract declares a unique key
+  for the result, check the ORDER BY includes it; without that fact the
+  uniqueness half is not checked. False positives: deliberate any-row
+  sampling, which should be written as an explicit TABLESAMPLE instead.
+severity_suggestion: warning
+examples:
+  bad: SELECT id FROM t LIMIT 2;
+  good: SELECT id FROM t ORDER BY id LIMIT 2;
+sources:
+- title: SELECT (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-select.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: When using LIMIT, use an ORDER BY that constrains the result into a unique order; otherwise you get an unpredictable subset of the rows.
+- title: Order Preservation (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/dialect/order_preservation
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: DuckDB preserves insertion order for LIMIT over a single table, which is why the proof varies the insert order rather than relying on run-to-run variation.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/row-number-dedupe-tiebreaker, sql/keyset-pagination]
+proof:
+  setup: |
+    CREATE TABLE t5(id INT, v VARCHAR);
+    INSERT INTO t5 VALUES (3, 'c'), (1, 'a'), (2, 'b');
+  setup_alt: |
+    CREATE TABLE t5(id INT, v VARCHAR);
+    INSERT INTO t5 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+  bad: "SELECT id FROM t5 LIMIT 2"
+  bad_result: "[(3,), (1,)]"
+  bad_result_alt: "[(1,), (2,)]"
+  good: "SELECT id FROM t5 ORDER BY id LIMIT 2"
+  good_result: "[(1,), (2,)]"
+  note: >
+    setup and setup_alt hold identical rows loaded in a different order. The
+    unordered LIMIT returns different rows for the same data; the ordered
+    LIMIT does not. DuckDB preserves insertion order for this query shape, so
+    the difference is reproducible here; in Postgres, Snowflake, BigQuery and
+    SQL Server the returned subset is unspecified and can also vary with plan
+    and parallelism.

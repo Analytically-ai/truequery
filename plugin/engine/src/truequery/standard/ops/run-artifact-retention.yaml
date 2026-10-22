@@ -1,0 +1,41 @@
+id: ops/run-artifact-retention
+title: Retain run artifacts, manifests, and logs for every production run
+domain: ops
+modes: [assure]
+applies_to: [any]
+statement: >
+  Every production run must persist its artifacts (manifest, run
+  results, logs, and the exact code commit) for a defined retention
+  period so any past run is reproducible and auditable.
+rationale: >
+  Without retained artifacts, incidents are undebuggable ("what code
+  produced Tuesday's numbers?") and state-based CI has nothing to diff
+  against. Artifacts are the memory of the pipeline.
+failure_example: >
+  A restated metric is challenged by auditors. Logs expired after 7
+  days and no manifest was stored, so the team cannot prove which code
+  and data produced the published figure.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check deployment configuration for artifact upload and retention
+  settings (manifest, run results, logs) with a stated retention window.
+  False positives: externally archived artifacts the detector cannot see.
+severity_suggestion: warning
+examples:
+  bad: Production runs log to console only; nothing is stored after the container exits.
+  good: Each run stores manifest plus run results plus commit SHA for 90 days; any figure can be traced to its run.
+sources:
+- title: About dbt State
+  url: https://docs.getdbt.com/docs/deploy/dbt-state-about
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Persisted state artifacts (manifests) let later runs compare against prior production state.
+- title: The DataOps Manifesto
+  url: https://dataopsmanifesto.org/en/
+  publisher: DataKitchen (DataOps manifesto authors)
+  accessed: 2026-10-12
+  supports: Reproducible results require versioning everything, including code, config, and data artifacts.
+confidence: high
+conflicts_with: []
+status: draft

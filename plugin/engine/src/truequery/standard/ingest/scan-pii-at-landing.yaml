@@ -1,0 +1,45 @@
+id: ingest/scan-pii-at-landing
+title: Landing data is scanned for unexpected sensitive fields
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every intake contract MUST list the sensitivity classification of each
+  landed field, and each load MUST run a scan for undeclared sensitive
+  patterns (national ids, card numbers, emails) in free-text and new
+  columns. Unclassified new columns fail review until classified.
+rationale: >
+  Sensitive data enters through intake: partner file adds, free-text
+  fields, schema drift. Once PII spreads to logs, marts, and exports,
+  containment requires coordinated deletes across systems. Catching it at
+  the landing boundary is the cheapest containment point.
+failure_example: >
+  A support-notes field added to a CRM sync contains customer phone numbers
+  in free text. It flows into an analytics mart and from there into a
+  public dashboard export before anyone notices.
+enforcement: contract
+contract_required: true
+detection_sketch: >
+  Needs the declared classification in the contract: compare scanned
+  pattern hits against declared fields. A detector can flag new or
+  free-text columns with no classification entry. False positives:
+  synthetic/test datasets that intentionally contain fake PII-shaped data.
+severity_suggestion: error
+examples:
+  bad: |
+    # new notes column landed with no classification, no scan
+    landing tickets now includes agent_notes (free text)
+  good: |
+    # contract classifies the column; scan gates the load
+    - name: agent_notes
+      classification: confidential-free-text
+      scan: [phone, email, national-id]
+sources:
+  - title: SodaCL metrics and checks
+    url: https://docs.soda.io/soda-documentation/soda-v3/sodacl-reference/metrics-and-checks.md
+    publisher: Soda
+    accessed: 2026-10-12
+    supports: Soda scan output includes PII-detection style checks over datasets as part of routine scanning
+confidence: medium
+conflicts_with: []
+status: draft

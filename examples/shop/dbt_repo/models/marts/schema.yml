@@ -1,0 +1,51 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: One row per order with net revenue in USD. See HOUSE_DEFINITIONS D1/D4/D6/D7/D9/D10.
+    columns:
+      - name: order_id
+        description: Primary key.
+      - name: ordered_at
+        description: Business timestamp (UTC).
+      - name: status
+        description: Canonical status (completed/pending/cancelled/refunded/failed/other).
+      - name: gross_usd
+        description: Order total converted to USD at the order-day FX rate.
+      - name: refunded_usd
+        description: Processed refunds against the order, in USD.
+      - name: net_usd
+        description: gross_usd minus refunded_usd.
+      - name: is_revenue_eligible
+        description: True for completed, non-test orders with a succeeded payment.
+      - name: revenue_usd
+        description: net_usd when revenue-eligible, else 0.
+  - name: dim_customers
+    description: One row per customer with lifecycle flags. See D2/D3/D5/D8.
+    columns:
+      - name: customer_id
+        description: Primary key.
+      - name: is_active_customer
+        description: Non-test, non-deleted, with a completed order in the trailing 90d.
+      - name: is_churned
+        description: Ordered in the prior 90d window but not the trailing 90d.
+      - name: scd_current_rows
+        description: Count of is_current SCD rows; must be 1.
+  - name: fct_revenue_daily
+    description: One row per UTC day with revenue and ROAS. Refunds net on the order day.
+    columns:
+      - name: day_utc
+        description: UTC calendar day.
+      - name: revenue_usd
+        description: D1 revenue for the day.
+      - name: roas
+        description: revenue_usd / marketing_usd; null when no spend.
+  - name: fct_subscription_mrr
+    description: Monthly live MRR in USD with logo churn. Soft-deleted rows excluded.
+    columns:
+      - name: month_start
+        description: First day of the month.
+      - name: mrr_usd
+        description: Live non-test MRR in USD.
+      - name: logo_churn_rate
+        description: Churned logos over live + churned base.

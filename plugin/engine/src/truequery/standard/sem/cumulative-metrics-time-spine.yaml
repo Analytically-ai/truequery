@@ -1,0 +1,53 @@
+id: sem/cumulative-metrics-time-spine
+title: Cumulative metrics build on a complete time spine
+domain: sem
+modes: [build, assure]
+applies_to: [dbt]
+statement: >
+  Every cumulative metric declares its time granularity and grain period, and
+  the project provides a time-spine model covering the full reporting range so
+  cumulative values account for days with zero activity instead of skipping
+  them.
+rationale: >
+  Without a spine, cumulative totals only advance on active days: a quiet
+  holiday week renders as flat-then-jump, and running totals silently exclude
+  zero-activity periods that the business experienced as real zeros.
+failure_example: >
+  Month-to-date signups omit five zero-traffic days after a tracking outage,
+  so the cumulative curve hides the outage and growth looks smooth.
+enforcement: detector
+detection_sketch: >
+  Flag cumulative-type metrics when the project has no time-spine model or
+  the metric lacks time granularity params. False positives: event-complete
+  sources where every period provably has rows — accept a declared
+  no-spine-needed justification, re-checked when the source changes.
+severity_suggestion: warning
+examples:
+  bad: |-
+    - name: mtd_signups
+      type: cumulative
+      type_params:
+        measure: signup_count
+        # no time spine in project: gaps vanish instead of counting as zero
+  good: |-
+    - name: mtd_signups
+      type: cumulative
+      type_params:
+        measure: signup_count
+        grain: day
+        time_window: { count: 30, period: day }
+    # project includes metricflow_time_spine covering the reporting range
+sources:
+  - title: MetricFlow time spine
+    url: https://docs.getdbt.com/docs/build/metricflow-time-spine
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Time spine supplies the complete date spine cumulative metrics need
+  - title: About MetricFlow
+    url: https://docs.getdbt.com/docs/build/about-metricflow
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: MetricFlow generates cumulative queries against time dimensions
+confidence: high
+conflicts_with: []
+status: draft

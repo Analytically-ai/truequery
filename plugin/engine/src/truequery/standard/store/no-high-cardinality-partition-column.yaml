@@ -1,0 +1,47 @@
+id: store/no-high-cardinality-partition-column
+title: Never partition on a high-cardinality or unique column
+domain: store
+modes: [build, change, assure]
+applies_to: [bigquery, databricks, iceberg, delta]
+statement: >
+  A partition key must not be a high-cardinality column (order/user/session id or
+  raw timestamp): partition cardinality must stay in the low thousands per table,
+  and no single partition should be expected below ~1 GB in Delta-family tables.
+rationale: >
+  Partitioning by unique IDs explodes into millions of tiny directories/files:
+  listing overhead dominates, pruning fails, compactions never catch up, and
+  small-file reads cost more than the data. This is the classic costly-failure
+  partitioning mistake Delta docs explicitly warn against.
+failure_example: >
+  PARTITIONED BY (user_id) on 1M users creates 1M partitions averaging 3 MB;
+  a full-table scan opens 1M file handles and times out where daily partitions
+  would scan 365 files.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: a cardinality or uniqueness annotation for the
+  partition column in the contract (or a catalog statistics snapshot). With
+  it, flag PARTITION BY over a column declared high-cardinality or unique
+  with no truncation transform (day, month, bucket(N, col)). Truncated
+  transforms are not flagged. A name-only fallback (column named *_id,
+  *_key, *uuid or a raw timestamp with no transform) is a heuristic and is
+  reported at advisory only. False positives: low-cardinality id-like codes
+  (country_id), cleared by a contract cardinality annotation.
+severity_suggestion: warning
+examples:
+  bad: "PARTITIONED BY (user_id)"
+  good: "PARTITIONED BY (days(event_ts))"
+sources:
+  - title: Delta Lake — Best practices (choose the right partition column)
+    url: https://docs.delta.io/best-practices/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Do not partition on very-high-cardinality columns such as userId; partition only when a partition holds at least ~1 GB.
+  - title: Iceberg — Partitioning (hidden partitioning)
+    url: https://iceberg.apache.org/docs/latest/partitioning/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Iceberg partition transforms (day/month/bucket/truncate) exist so physical layout need not mirror raw high-cardinality values.
+confidence: high
+conflicts_with: []
+status: draft

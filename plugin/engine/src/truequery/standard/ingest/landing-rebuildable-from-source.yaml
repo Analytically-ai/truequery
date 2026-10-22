@@ -1,0 +1,43 @@
+id: ingest/landing-rebuildable-from-source
+title: Landing data is rebuildable from the source within declared retention
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every intake contract MUST state how its landing data is rebuilt after
+  loss: source retention window, replay method (snapshot + log, re-pull,
+  re-drop), and who can trigger it. A landing zone with no documented
+  rebuild path fails review.
+rationale: >
+  Landing zones get corrupted, dropped, or poisoned; without a rebuild
+  path the team discovers at incident time that the source keeps 7 days
+  and the damage is 30 days old. Declared retention plus a tested replay
+  method bounds the blast radius before it matters.
+failure_example: >
+  A bad deploy writes garbage keys into the events landing table for three
+  weeks. The Kafka source retains 7 days; the older two weeks are
+  unrecoverable and the history is permanently wrong.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  The contract must name retention, replay method, and rebuild owner; none
+  of this is visible in pipeline code alone. Review checks the replay was
+  exercised, not just written down. False positives: none structural -
+  every intake needs this answer.
+severity_suggestion: warning
+examples:
+  bad: |
+    # no rebuild story: "the landing table IS the history"
+    intake: pg-cdc events -> landing.events (no retention/replay noted)
+  good: |
+    rebuild: snapshot + WAL replay; source retention 30d; replay runbook
+    linked; last replay drill 2026-09-15
+sources:
+  - title: Chapter 29. Logical Replication
+    url: https://www.postgresql.org/docs/current/logical-replication.html
+    publisher: PostgreSQL Project
+    accessed: 2026-10-12
+    supports: Logical replication supports initial snapshots plus ongoing change streams, the standard rebuild-then-replay pattern
+confidence: medium
+conflicts_with: []
+status: draft

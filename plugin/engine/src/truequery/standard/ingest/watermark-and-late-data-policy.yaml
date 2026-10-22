@@ -1,0 +1,49 @@
+id: ingest/watermark-and-late-data-policy
+title: Streaming intake declares watermarks and a late-data policy
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every streaming intake that aggregates by event time MUST declare a
+  watermark (how late data may be) and what happens to later-than-watermark
+  records: drop with counting, side-output, or reprocess. A streaming
+  aggregate with no watermark or late-data rule fails review.
+rationale: >
+  Late events are normal (mobile offline, retries, clock skew). Without a
+  policy, late data either silently vanishes from aggregates or forces
+  unbounded state that OOMs the stream. The policy decides openly which
+  cost the business pays.
+failure_example: >
+  A sessionization stream keeps state forever waiting for stragglers.
+  State grows until the streaming job falls over weekly; each restart
+  replays days of data and downstream counts swing.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Requires the stream contract to state watermark delay and the late-data
+  disposition. A detector can flag event-time aggregations with no
+  watermark clause. False positives: processing-time-only streams, which
+  must declare that choice (see choose-batch-vs-streaming rule).
+severity_suggestion: warning
+examples:
+  bad: |
+    events.groupBy(window("event_ts", "1 hour")).count()
+    # no watermark: state grows without bound
+  good: |
+    events.withWatermark("event_ts", "2 hours")
+      .groupBy(window("event_ts", "1 hour")).count()
+    # later-than-2h records counted to late_events side output
+sources:
+  - title: What is Auto Loader?
+    url: https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Auto Loader ingests files as an ordered stream with progress tracking, the substrate watermarks build on
+  - title: Debezium Architecture
+    url: https://debezium.io/documentation/reference/stable/architecture.html
+    publisher: Debezium
+    accessed: 2026-10-12
+    supports: Change events carry source timestamps, enabling event-time handling downstream
+confidence: medium
+conflicts_with: []
+status: draft

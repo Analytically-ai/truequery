@@ -1,0 +1,53 @@
+id: sql/sargable-filter-bare-column
+title: Filter columns stay bare so partition and cluster pruning applies
+domain: sql
+modes: [build, change]
+applies_to: [bigquery, snowflake, databricks]
+statement: >
+  This is a performance rule, not a correctness rule: the wrapped and bare
+  forms return the same rows. A filter on a partition, cluster, or sort key
+  compares the bare column (range predicates for timestamps) rather than a
+  function or cast wrapped around the column, so the engine can prune.
+rationale: >
+  Wrapping the key column can force per-row evaluation and defeat metadata
+  pruning, turning a cheap pruned scan into a full-table scan. On
+  pay-per-byte warehouses every run pays the multiplier. Whether a given
+  wrapper defeats pruning is engine- and version-specific.
+failure_example: >
+  WHERE DATE(order_ts) = '2026-01-15' on a column-partitioned table may scan
+  all partitions; the range form scans one day. The query result is the same
+  either way.
+enforcement: detector
+detection_sketch: >
+  Match function, cast, or anonymous-call nodes whose argument is a column
+  inside WHERE/ON/QUALIFY or a dbt incremental block, only when the contract
+  declares that column a partition or cluster key; without that fact, stay
+  silent. Advisory only. No proof block: both forms return identical rows,
+  so there is no wrong answer to demonstrate; confirm cost with BigQuery
+  dry-run bytes or Snowflake partitions-scanned in the query profile.
+  False positives: engines that push specific expressions through to
+  pruning; exempt documented push-through forms.
+severity_suggestion: advisory
+examples:
+  bad: SELECT v FROM ev WHERE CAST(ts AS DATE) = DATE '2024-01-15';
+  good: SELECT v FROM ev WHERE ts >= TIMESTAMP '2024-01-15' AND ts < TIMESTAMP '2024-01-16';
+sources:
+- title: Query partitioned tables (BigQuery)
+  url: https://docs.cloud.google.com/bigquery/docs/querying-partitioned-tables
+  publisher: Google Cloud
+  accessed: 2026-10-11
+  supports: Queries should filter on the partitioning column so only the indicated partitions are processed.
+- title: Query clustered tables (BigQuery)
+  url: https://docs.cloud.google.com/bigquery/docs/querying-clustered-tables
+  publisher: Google Cloud
+  accessed: 2026-10-11
+  supports: Filters on clustered columns let the engine skip blocks; the form of the predicate matters.
+- title: Micro-partitions and Data Clustering (Snowflake)
+  url: https://docs.snowflake.com/en/user-guide/tables-clustering-micropartitions
+  publisher: Snowflake
+  accessed: 2026-10-11
+  supports: Snowflake keeps per-micro-partition column value ranges as metadata, which enables fine-grained pruning.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [sql/between-date-on-timestamp]

@@ -1,0 +1,68 @@
+id: sem/single-governed-metric-definition
+title: Each business metric has exactly one governed definition
+domain: sem
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every metric name used in reporting or decisions (e.g. revenue, active
+  user, churn) resolves to exactly one governed definition in the semantic
+  layer. No two metric definitions with different logic share the same
+  business name. Dashboards, BI calculated fields, exports, notebooks and
+  syncs that report a governed metric reference that definition (by metric
+  name, saved query or semantic-layer API) instead of re-implementing its
+  formula in their own SQL.
+rationale: >
+  Duplicate metric logic is the classic "two dashboards disagree" failure:
+  each copy drifts independently, executives act on whichever number they
+  saw first, and reconciliation becomes a monthly fire drill. A single
+  governed definition makes divergence structurally impossible instead of
+  socially discouraged.
+failure_example: >
+  Finance reports revenue from the governed metric while Growth reports it
+  from a dashboard SQL block with different refund handling; the board sees
+  two revenue numbers differing by 4% and no one can say which is right.
+enforcement: detector
+detection_sketch: >
+  Two parts with different enforcement.
+  (1) Detector, duplicate definitions: parse semantic-layer files (dbt
+  metrics, Cube measures, LookML measures) and collect (name, normalized
+  expression). Flag the same metric name defined more than once with
+  differing expressions, within one tool or across tools in the repo. This
+  part is deterministic and needs only code files.
+  (2) Judgment, re-implemented metrics: deciding that a dashboard tile or
+  ad-hoc SQL block "is" revenue computed differently is semantic. It is
+  taught, not checked. A tool may at most surface an advisory hint (a
+  persisted consumer query whose output column or tile title matches a
+  governed metric name but does not reference the metric), labelled as a
+  heuristic and never failing a build.
+  False positives for (1): intentionally scoped variants (revenue_gross vs
+  revenue_net), which distinct names resolve, as the rule requires.
+severity_suggestion: warning
+examples:
+  bad: |-
+    # metrics.yml defines revenue; dashboard D7 also defines its own:
+    SELECT SUM(amount) AS revenue FROM orders  -- ignores refunds, unlike governed metric
+  good: |-
+    metrics:
+      - name: revenue
+        type: simple
+        type_params:
+          measure: order_revenue
+        description: Gross order revenue net of refunds
+    # dashboards query the metric by name via the semantic layer API
+    # or bind a saved query such as revenue_by_week
+sources:
+  - title: Build your metrics
+    url: https://docs.getdbt.com/docs/build/build-metrics-intro
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Metrics defined once in YAML and queried consistently through the Semantic Layer by downstream tools instead of being re-derived.
+  - title: Creating metrics
+    url: https://docs.getdbt.com/docs/build/metrics-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Metric types compose from shared measures instead of repeated SQL
+confidence: high
+conflicts_with: []
+see_also: [gov/exposures-registered, sem/derived-metrics-compose-from-governed]
+status: draft

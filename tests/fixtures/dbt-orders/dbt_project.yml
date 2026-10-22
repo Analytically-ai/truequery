@@ -1,0 +1,4 @@
+name: dbt_orders
+version: "1.0.0"
+profile: dbt_orders
+model-paths: ["models"]

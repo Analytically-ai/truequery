@@ -1,0 +1,45 @@
+id: model/null-join-keys-excluded
+title: Null join keys are handled explicitly, never silently dropped
+domain: model
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every join on a nullable key must state its null policy in the model:
+  filter nulls before the join, coalesce to an explicit default, or route
+  null-key rows to a quarantine path. Inner joins that silently drop nulls
+  are not acceptable without that statement.
+rationale: >
+  Equality joins never match nulls, so rows with null keys vanish without an
+  error. The missing rows understate facts and the loss is invisible in
+  ordinary row-count monitoring.
+failure_example: >
+  Orders with a null promo code drop out of an inner join to promotions; the
+  campaign mart understates unattributed revenue by 12%.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: column nullability for join keys, from the model
+  contract, not_null tests or enforced NOT NULL constraints. With it, flag
+  inner joins whose key columns are declared nullable (or carry no non-null
+  guarantee) and have no adjacent IS NOT NULL filter, COALESCE, or
+  quarantine branch. A parser alone cannot know whether a key column can be
+  NULL, so without declarations it stays silent rather than flag every join.
+  False positives: keys proven non-nullable by enforced contracts.
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT o.order_id, p.promo_name
+    FROM orders o JOIN promotions p ON p.code = o.promo_code;
+    -- null promo_code rows vanish
+  good: |
+    SELECT o.order_id, COALESCE(p.promo_name, 'no-promo') AS promo_name
+    FROM orders o LEFT JOIN promotions p ON p.code = o.promo_code;
+sources:
+  - title: SELECT statement (DuckDB)
+    url: https://duckdb.org/docs/current/sql/statements/select
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: join semantics under which null keys never match
+confidence: medium
+conflicts_with: []
+status: draft

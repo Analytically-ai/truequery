@@ -1,0 +1,44 @@
+id: ops/ci-pr-checks-required
+title: Every pull request must run automated build and data tests before merge
+domain: ops
+modes: [change, assure]
+applies_to: [any]
+statement: >
+  Every pull request that touches pipeline code, SQL models, or pipeline
+  configuration must trigger an automated CI run that builds the changed
+  scope and executes its data tests; merging with a red or missing CI
+  check is treated as a process violation.
+rationale: >
+  Untested merges are the cheapest point at which wrong numbers, broken
+  SQL, or schema drift enter production. A mandatory CI gate moves failure
+  discovery from the production run (expensive, user-visible) to the pull
+  request (cheap, author-visible).
+failure_example: >
+  An analyst merges a renamed column directly to main without CI. The
+  nightly run fails at 2 a.m., three downstream marts go stale, and the
+  morning dashboard shows yesterday's numbers with no annotation.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check the repo's CI configuration and branch-protection rules for a
+  required-status-check covering pipeline build plus data tests.
+  False positives: repos where CI is defined in an external system the
+  detector cannot see; monorepos where the check name differs.
+severity_suggestion: warning
+examples:
+  bad: Merging a model change with no CI run, or with a failing test suite.
+  good: PR shows green "build + test changed scope" check; merge blocked until it passes.
+sources:
+- title: About continuous integration (CI) in dbt
+  url: https://docs.getdbt.com/docs/deploy/about-ci
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: CI jobs run builds on pull requests to verify changes before merge.
+- title: Continuous integration jobs in dbt
+  url: https://docs.getdbt.com/docs/deploy/ci-jobs
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: CI jobs build and test changed code in an isolated schema on each PR.
+confidence: high
+conflicts_with: []
+status: draft

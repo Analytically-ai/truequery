@@ -1,0 +1,47 @@
+id: py/dagster-asset-declared-dependencies
+title: Dagster assets must declare dependencies through parameters, not hidden reads
+domain: py
+modes: [build, change, assure]
+applies_to: [dagster]
+statement: >
+  An @asset function must receive every upstream dependency as a function
+  argument (or AssetIn) so the asset graph contains it; it must not read
+  another asset's data via direct I/O (file paths, warehouse queries,
+  ad-hoc clients) inside its body.
+rationale: >
+  Hidden reads make the Dagster UI lineage a lie: re-materializing an
+  upstream asset does not trigger the hidden downstream consumer, so stale
+  data ships silently and root-cause tracing during incidents points at
+  the wrong asset.
+failure_example: >
+  Asset daily_report reads s3://bucket/upstream.parquet directly instead of
+  taking upstream_df as an argument; upstream is re-run to fix a bug but
+  daily_report is never invalidated and keeps publishing wrong numbers.
+enforcement: detector
+detection_sketch: >
+  Resolve @asset function signatures and compare against I/O-like calls in
+  the body (open, read_parquet/read_csv with literal paths, warehouse
+  client queries); flag reads whose target matches another asset's known
+  output but is not a declared parameter. False positives: reading static
+  reference/seed files that are not assets; allow-list non-asset paths via config.
+severity_suggestion: warning
+examples:
+  bad: |
+    @asset
+    def daily_report():
+        df = pd.read_parquet("s3://bucket/upstream.parquet")  # hidden dep
+        return df.groupby("k").sum()
+  good: |
+    @asset
+    def daily_report(upstream_df: pd.DataFrame):
+        return upstream_df.groupby("k").sum()
+sources:
+  - title: "Defining assets | Dagster Docs"
+    url: https://dagster.io/docs/guides/build/assets/defining-assets
+    publisher: Dagster
+    accessed: 2026-10-12
+    supports: Assets are defined as functions whose dependencies are
+      expressed through the asset graph so Dagster can track lineage.
+confidence: medium
+conflicts_with: []
+status: draft

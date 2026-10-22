@@ -1,0 +1,44 @@
+id: store/declare-sort-order-for-range-queries
+title: Declare sort order for tables serving range and merge workloads
+domain: store
+modes: [build, change]
+applies_to: [iceberg, snowflake, databricks, delta]
+statement: >
+  Tables whose recurring workload is range scans, windowed processing, or
+  MERGE-matching on a sort key must declare that sort order (Iceberg sort order,
+  Snowflake cluster key on the range column, Delta clustering on the range
+  column); evolving the sort order must use the engine's evolution mechanism,
+  not a silent rewrite.
+rationale: >
+  Declared sort order lets engines use min/max file statistics and merge
+  optimizations; without it, range queries and merges scan and shuffle far more
+  than necessary, and ad-hoc "ORDER BY at read time" cannot recover the layout.
+failure_example: >
+  A time-series table with no sort order forces every 7-day window query to scan
+  all files and sort at read time; declaring sort by ts lets file statistics
+  prune 90% of files before reading.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs the recurring range/merge key from the contract or query history;
+  checker verifies a sort/cluster declaration covering it. Static fallback:
+  warn on large event tables with no sort or cluster spec at all. False
+  positives: point-lookup-only tables where sort buys nothing.
+severity_suggestion: advisory
+examples:
+  bad: "CREATE TABLE metrics (ts TIMESTAMP, host STRING, v DOUBLE); -- range queries on ts, no order declared"
+  good: "CREATE TABLE metrics (ts TIMESTAMP, host STRING, v DOUBLE) WRITE ORDERED BY (ts);"
+sources:
+  - title: Iceberg — Evolution (sort order evolution)
+    url: https://iceberg.apache.org/docs/latest/evolution/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Iceberg supports declaring and evolving table sort orders as part of the table spec.
+  - title: Databricks — Optimization recommendations
+    url: https://docs.databricks.com/aws/en/optimizations
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Layout and file-skipping optimizations depend on matching data organization to query patterns.
+confidence: medium
+conflicts_with: []
+status: draft

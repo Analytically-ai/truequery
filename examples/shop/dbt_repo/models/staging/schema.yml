@@ -1,0 +1,76 @@
+version: 2
+
+sources:
+  - name: raw
+    database: warehouse
+    schema: main
+    tables:
+      - name: orders
+        description: Raw order headers. Amounts in CENTS. ordered_at is the business timestamp.
+        columns:
+          - name: order_id
+            description: Primary key.
+          - name: customer_id
+            description: FK to customers.
+          - name: ordered_at
+            description: Business timestamp of the order (UTC). Use for order date, never created_at.
+          - name: created_at
+            description: Row write time. NOT the order date.
+          - name: updated_at
+            description: Last row update time. NOT the order date.
+          - name: status
+            description: Raw status with legacy variants (complete/COMPLETE/done/canceled). Normalize downstream.
+          - name: currency
+            description: Transaction currency. Convert via fx_rates.
+          - name: subtotal_cents
+            description: Subtotal in cents.
+          - name: discount_cents
+            description: Discount in cents.
+          - name: tax_cents
+            description: Tax in cents.
+          - name: shipping_cents
+            description: Shipping in cents.
+          - name: is_test
+            description: Test/internal order flag. Exclude from revenue.
+      - name: payments
+        description: Raw payments; orders may have 0, 1, or 2 (split) payments.
+      - name: refunds
+        description: Raw refunds. customer_id is NULLABLE; join refunds to orders, not customers.
+      - name: customers
+        description: Customer base table with soft deletes.
+      - name: customers_history
+        description: SCD type-2 history, >1 row per customer. Only is_current rows are live.
+      - name: fx_rates
+        description: Daily rate_to_usd per currency. Join on business date.
+      - name: subscriptions
+      - name: marketing_spend
+        description: Spend in cents, multi-currency.
+      - name: plans
+
+models:
+  - name: stg_orders
+    description: Cleaned orders, one row per order, data issues flagged.
+    columns:
+      - name: order_id
+        description: Primary key.
+      - name: status_normalized
+        description: Lowercased status; legacy values NOT yet folded (see fct_orders status_canon).
+      - name: total_cents
+        description: subtotal - discount + tax + shipping, in cents.
+      - name: order_day_utc
+        description: ordered_at truncated to UTC day.
+      - name: ordered_at_tie_rank
+        description: Rank within identical ordered_at values, ordered by order_id.
+  - name: stg_payments
+    description: Cleaned payments with normalized status.
+  - name: stg_refunds
+    description: Cleaned refunds with is_processed and is_anonymous flags.
+  - name: stg_customers
+    description: One row per customer from the SCD current row.
+    columns:
+      - name: current_plan_tier
+        description: Live tier from the is_current SCD row.
+      - name: is_deleted
+        description: True when deleted_at is set.
+      - name: is_test_domain
+        description: Email in a test/internal domain.

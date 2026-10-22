@@ -1,0 +1,61 @@
+id: sem/aggregation-type-matches-additivity
+title: Aggregation type must match the measure's additivity
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Fully additive measures (revenue) may use SUM across all dimensions;
+  semi-additive measures (balances, inventory snapshots) must declare the
+  dimensions they cannot sum across (usually time) and expose a valid rollup
+  (e.g. last-value); non-additive measures (ratios, distinct counts) must not
+  be summed at all and are only valid through their defining expression.
+rationale: >
+  Summing a snapshot balance across days fabricates money: twelve month-end
+  balances added together can overstate assets 12x. Additivity is a property
+  of the business concept, and the layer must enforce it, not hope consumers
+  remember it.
+failure_example: >
+  Month-end inventory balance summed across 12 months reports $480M of stock
+  for a warehouse holding $40M; purchasing acts on the phantom surplus.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: an additivity tag on each measure (additive,
+  semi-additive with its blocked dimensions, non-additive), declared in the
+  semantic-layer metadata or contract; additivity cannot be inferred from
+  code. With the tags, flag SUM aggregations across a blocked dimension and
+  any re-aggregation of a non-additive measure outside its defining
+  expression. Normalize dbt / Cube / LookML tag vocabularies to one internal
+  enum first. Measures without a tag are reported as untagged, not passed.
+severity_suggestion: error
+examples:
+  bad: |-
+    measures:
+      - name: month_end_balance
+        sql: balance
+        type: sum   # balance is semi-additive; summing across months invents money
+  good: |-
+    measures:
+      - name: month_end_balance
+        sql: balance
+        type: average
+      dimensions:
+        - name: month
+          sql: month
+          type: time
+      # documented: valid across products/warehouses, never summed across time;
+      # month-end reporting uses last-value of the period
+sources:
+  - title: Getting started data modeling
+    url: https://docs.cube.dev/docs/data-modeling/overview
+    publisher: Cube
+    accessed: 2026-10-12
+    supports: Measures carry aggregation types distinct from dimension groupings
+  - title: LookML terms and concepts
+    url: https://docs.cloud.google.com/looker/docs/lookml-terms-and-concepts
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Measure types and symmetric aggregates guard non-additive rollups
+confidence: medium
+conflicts_with: []
+status: draft

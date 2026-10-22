@@ -1,0 +1,43 @@
+id: store/explicit-physical-types-no-implicit-casts
+title: Stored tables declare explicit physical column types
+domain: store
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  DDL for a stored table (or a model with an enforced contract) must declare an
+  explicit physical type for every column; types must not be left to inference
+  from a query, and the final SELECT should cast to the declared types.
+rationale: >
+  Inferred types drift with engine upgrades, source changes, or dialect
+  transpilation (e.g. integer width, timestamp precision, string length), causing
+  silent truncation, failed merges, or cross-engine incompatibility in
+  Iceberg/Delta readers.
+failure_example: >
+  A model column inferred as INT32 in one engine and INT64 in another blocks a
+  cross-engine MERGE and silently overflows large keys on the narrower side.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Join the declared contract/schema (contract file) against the DDL AST: every
+  stored column must have a type node. Separately warn when the final SELECT
+  expression for a contracted column has no CAST. False positives: engines
+  without enforced contracts — report UNMEASURABLE, not pass, when no contract
+  is declared.
+severity_suggestion: warning
+examples:
+  bad: "CREATE TABLE t (id, amount, ts);"
+  good: "CREATE TABLE t (id BIGINT NOT NULL, amount DECIMAL(18,2), ts TIMESTAMPTZ);"
+sources:
+  - title: SQLMesh Models overview — explicit types
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/models/overview/
+    publisher: SQLMesh (Tobiko)
+    accessed: 2026-10-12
+    supports: Explicit casting in the final SELECT is best practice to prevent unexpected stored types.
+  - title: dbt — Configure incremental models
+    url: https://docs.getdbt.com/docs/build/incremental-models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Incremental materializations require explicit unique-key and config declarations for deterministic rebuilds.
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,41 @@
+id: gov/lineage-from-declared-sources
+title: Models read only from declared lineage
+domain: gov
+modes: [build, change, assure]
+applies_to: [dbt, any]
+statement: >
+  Every table a model reads appears in declared lineage (refs, sources, or
+  an explicit external-table registry); raw table names or fully-qualified
+  paths with no declaration are not permitted in reviewed SQL.
+rationale: >
+  Undeclared reads are invisible to impact analysis and access review: a
+  model can ingest a PII table nobody approved, and revoking the grant
+  later misses the dependency nobody recorded.
+failure_example: >
+  Model selects from prod.legacy.emails_dump directly; the PII review of
+  declared sources never sees it and the table flows into a public mart.
+enforcement: detector
+detection_sketch: >
+  Parse FROM clauses and compare against declared refs/sources/external
+  registry; flag undeclared table references. Fully checkable from code.
+  False positives: sanctioned utility tables (date spine) in a declared
+  allowlist.
+severity_suggestion: warning
+examples:
+  bad: "SELECT ... FROM prod.legacy.emails_dump with no source declaration."
+  good: "SELECT ... FROM {{ source('legacy', 'emails_dump') }} with the source declared, classified, and owned."
+sources:
+- title: Add sources to your DAG
+  url: https://docs.getdbt.com/docs/build/sources
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: declared sources as the governed entry point of external tables
+- title: Add Exposures to your DAG
+  url: https://docs.getdbt.com/docs/build/exposures
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: complete dependency records enabling lineage and impact analysis
+confidence: high
+conflicts_with: []
+see_also: [ingest/reference-sources-not-raw-tables]
+status: draft

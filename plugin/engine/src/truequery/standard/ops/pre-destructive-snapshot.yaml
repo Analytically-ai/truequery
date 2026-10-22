@@ -1,0 +1,35 @@
+id: ops/pre-destructive-snapshot
+title: Snapshot or time-travel checkpoint before any destructive production operation
+domain: ops
+modes: [change]
+applies_to: [snowflake, bigquery, any]
+statement: >
+  Before dropping, overwriting, or restating a production table, the
+  operator must create a restorable checkpoint (clone, snapshot, or
+  recorded time-travel offset) and record how to restore from it.
+rationale: >
+  Destructive operations are occasionally necessary (GDPR deletes,
+  restatements), but without a checkpoint a typo or wrong predicate
+  becomes permanent data loss. A clone costs little; a lost table
+  costs everything.
+failure_example: >
+  A backfill script with a wrong date predicate overwrites the current
+  month's partition in place. No clone exists and time travel has
+  expired by the time anyone notices; the month must be rebuilt from
+  raw sources over two weeks.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: Dropping and recreating a prod table in the same script with no backup step.
+  good: Script clones the table first, records the clone name in the change ticket, then runs the overwrite.
+sources:
+- title: Introduction (Apache Iceberg documentation)
+  url: https://iceberg.apache.org/docs/latest/
+  publisher: Apache Software Foundation
+  accessed: 2026-10-12
+  supports: Iceberg snapshot isolation and time travel let readers pin a prior table state for recovery and audit.
+confidence: medium
+conflicts_with: []
+see_also: [ops/full-refresh-approval]
+status: draft

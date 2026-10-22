@@ -1,0 +1,50 @@
+id: consume/adhoc-limit-required
+title: Ad-hoc exploration queries carry a LIMIT unless they aggregate
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  Any ad-hoc SELECT returning raw rows (no GROUP BY or aggregate over the
+  full result) carries an explicit LIMIT (or FETCH FIRST) bounding the rows
+  returned to the analyst.
+rationale: >
+  Unbounded exploratory SELECTs return millions of rows to the analyst's
+  client or notebook, exhausting memory and freezing BI tools. LIMIT bounds
+  the rows returned; it is NOT a cost control in columnar warehouses: in
+  BigQuery, LIMIT on SELECT * does not reduce bytes read or billed. Cost
+  control comes from partition filters, column projection and table preview.
+failure_example: >
+  An analyst runs an unbounded SELECT on a large events table from a
+  notebook; the client tries to materialize tens of millions of rows and the
+  kernel dies. Adding LIMIT 200 fixes the client, but the scan cost is
+  unchanged, so the date filter is what keeps the bill down.
+enforcement: detector
+detection_sketch: >
+  Parse ad-hoc query text; flag row-returning SELECTs with no LIMIT or FETCH
+  and no aggregate or GROUP BY. False positives: COUNT existence checks and
+  queries whose client applies its own cap, which is undetectable statically.
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT user_id, event FROM raw_events WHERE dt = '2026-10-01'
+  good: |
+    SELECT user_id, event FROM raw_events WHERE dt = '2026-10-01' LIMIT 200
+sources:
+  - title: Optimize query computation (BigQuery best practices)
+    url: https://docs.cloud.google.com/bigquery/docs/best-practices-performance-compute
+    publisher: Google Cloud
+    accessed: 2026-10-11
+    supports: LIMIT on SELECT * does not affect the amount of data read; billing covers all bytes read.
+  - title: SELECT
+    url: https://www.postgresql.org/docs/current/sql-select.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: Documents LIMIT/OFFSET/FETCH result-bounding clauses the detector relies on.
+  - title: Introduction to optimizing query performance
+    url: https://docs.cloud.google.com/bigquery/docs/best-practices-performance-overview
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Advises limiting result sets and avoiding excess reads to control cost and latency.
+confidence: high
+conflicts_with: []
+status: draft

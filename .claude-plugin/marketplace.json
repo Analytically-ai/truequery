@@ -1,0 +1,14 @@
+{
+  "name": "analytically",
+  "description": "Analytically.ai's marketplace: TrueQuery, one standard for data work, built into your AI coding agent.",
+  "owner": {
+    "name": "Analytically.ai"
+  },
+  "plugins": [
+    {
+      "name": "truequery",
+      "source": "./plugin",
+      "description": "One standard for data work: the /truequery skill (build, ask, analyze, metric, review, harden) plus an offline checker that verifies the agent's SQL as it works."
+    }
+  ]
+}

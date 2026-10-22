@@ -1,0 +1,44 @@
+id: store/full-refresh-by-replace-not-delete-insert
+title: Full refreshes replace table content atomically, never DELETE plus INSERT
+domain: store
+modes: [build, change]
+applies_to: [databricks, delta, iceberg, bigquery, snowflake]
+statement: >
+  A full-refresh rebuild of a table must use an atomic replace (CREATE OR
+  REPLACE, Delta REPLACE WHERE / CLONE-replace, Iceberg snapshot swap), never a
+  DELETE FROM followed by INSERT: at no point may readers see an empty or
+  half-loaded table.
+rationale: >
+  DELETE-then-INSERT exposes every concurrent reader to a window with missing
+  data and turns a failed reload into total data loss (old rows deleted, new
+  rows never written); atomic replace keeps the old snapshot live until the new
+  one commits.
+failure_example: >
+  A nightly job DELETEs 50M rows then fails on INSERT; morning dashboards read
+  zero rows and the team must emergency-restore from time travel under pressure.
+enforcement: detector
+detection_sketch: >
+  Flag job/DDL sequences containing DELETE FROM <t> (or TRUNCATE <t>) followed
+  by INSERT INTO <t> in the same pipeline without an atomic-replace statement;
+  accept CREATE OR REPLACE / REPLACE TABLE / snapshot-swap patterns. False
+  positives: deliberate row-level GDPR deletes (scoped deletes with a predicate,
+  not full-table wipes).
+severity_suggestion: warning
+examples:
+  bad: "DELETE FROM marts.orders; INSERT INTO marts.orders SELECT ...;"
+  good: "CREATE OR REPLACE TABLE marts.orders AS SELECT ...;"
+sources:
+  - title: Delta Lake — Best practices (replace the content or schema of a table)
+    url: https://docs.delta.io/best-practices/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Delta documents atomic replace operations for swapping table content or schema.
+  - title: Delta Lake — Table utility commands (clone and restore)
+    url: https://docs.delta.io/delta-utility/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Clone and restore commands provide safe copy/rollback paths instead of destructive rewrites.
+confidence: high
+conflicts_with: []
+see_also: [ops/full-refresh-approval]
+status: draft

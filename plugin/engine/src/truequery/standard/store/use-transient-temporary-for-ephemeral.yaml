@@ -1,0 +1,35 @@
+id: store/use-transient-temporary-for-ephemeral
+title: Use transient or temporary tables for ephemeral and staging data
+domain: store
+modes: [build, change]
+applies_to: [snowflake]
+statement: >
+  Staging, scratch, and reproducible intermediate tables in Snowflake must be
+  created TRANSIENT or TEMPORARY rather than permanent, unless the contract
+  records a recovery requirement for them.
+rationale: >
+  Permanent tables pay Time Travel plus 7-day fail-safe storage on every byte
+  including throwaway staging copies; transient/temporary tables drop fail-safe
+  and bound retention, which is the cheapest correct lifetime for data that can
+  be rebuilt from source.
+failure_example: >
+  A 3 TB daily staging copy kept permanent "just in case" costs Time Travel +
+  fail-safe on 3 TB every day for data that is overwritten tomorrow anyway.
+enforcement: detector
+detection_sketch: >
+  Flag CREATE TABLE in staging/scratch schemas (or matching stg_*/tmp_*/scratch
+  names) that lacks the TRANSIENT or TEMPORARY keyword. False positives: staging
+  snapshots kept deliberately for audit — allowlist via contract recovery class.
+severity_suggestion: warning
+examples:
+  bad: "CREATE TABLE staging.orders_load (...);"
+  good: "CREATE TRANSIENT TABLE staging.orders_load (...);"
+sources:
+  - title: Snowflake — Temporary and Transient Tables
+    url: https://docs.snowflake.com/en/user-guide/tables-temp-transient
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Transient and temporary tables have no fail-safe period and reduced retention, suiting short-lived data.
+confidence: high
+conflicts_with: []
+status: draft

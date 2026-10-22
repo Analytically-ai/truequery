@@ -1,0 +1,51 @@
+id: dq/unenforced-constraints-are-tested
+title: Constraints the warehouse does not enforce are covered by tests
+domain: dq
+modes: [build, assure]
+applies_to: [snowflake, bigquery, any]
+statement: >
+  On platforms where declared constraints are informational rather than
+  enforced, every relied-upon unique, primary-key, or foreign-key constraint
+  has a corresponding data test; DDL declarations alone are never treated as
+  guarantees.
+rationale: >
+  A PRIMARY KEY clause that the engine ignores is documentation masquerading
+  as protection. Teams that trust it skip the test, and duplicate or orphan
+  rows accumulate behind a schema that claims they are impossible.
+failure_example: >
+  A Snowflake table declares a primary key that the engine does not
+  enforce; a double-load inserts duplicates, and analysts trusting the DDL
+  never add a uniqueness test until revenue is restated.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  List declared but unenforced constraints per platform capability and
+  confirm each has a covering data test; platform enforcement tables make
+  this statically checkable. False positives: constraints declared purely
+  for BI-tool join hints until marked informational-only in the contract.
+severity_suggestion: warning
+examples:
+  bad: |-
+    CREATE TABLE orders (order_id INT PRIMARY KEY, ...);
+    -- trusted as enforced; no test exists
+  good: |-
+    CREATE TABLE orders (order_id INT PRIMARY KEY, ...);
+    -- plus: unique + not_null tests on order_id in the pipeline suite
+sources:
+  - title: Constraints
+    url: https://docs.snowflake.com/en/sql-reference/constraints
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Snowflake supports defining constraints but does not enforce
+      them except NOT NULL and CHECK, providing them mainly for modeling and
+      tool compatibility
+  - title: PostgreSQL Constraints
+    url: https://www.postgresql.org/docs/current/ddl-constraints.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: PostgreSQL documents enforced check, not-null, unique, primary
+      key, foreign key, and exclusion constraints as the contrasting
+      enforced case
+confidence: high
+conflicts_with: []
+status: draft

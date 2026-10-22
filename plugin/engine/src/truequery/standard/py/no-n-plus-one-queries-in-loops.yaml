@@ -1,0 +1,46 @@
+id: py/no-n-plus-one-queries-in-loops
+title: Never issue per-iteration queries or API calls from Python loops
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Pipeline Python must not execute a query, API call, or warehouse round
+  trip inside a loop over rows/keys/partitions; such access must be
+  batched into a single set-based query (IN clause, join) or a bulk API
+  call before the loop.
+rationale: >
+  N+1 access turns one fast set operation into thousands of round trips:
+  latency multiplies, connection pools exhaust, source APIs rate-limit,
+  and a job that should take seconds runs for hours while holding
+  warehouse slots other pipelines need.
+failure_example: >
+  A task loops over 50k order ids calling fetchone per id; the run takes
+  3 hours, exhausts the Postgres connection pool, and pages the on-call
+  when the checkout service cannot get a connection.
+enforcement: detector
+detection_sketch: >
+  Flag execute/query/fetch/read_sql/requests calls lexically inside For or
+  While bodies or inside functions called per-iteration, unless the loop
+  bound is a small constant (pagination over a fixed page count is fine).
+  False positives: paginated bulk ingestion loops where each call fetches
+  a page, not one row; checkpointed loops with explicit batch sizes.
+severity_suggestion: warning
+examples:
+  bad: |
+    for oid in order_ids:
+        cur.execute("SELECT * FROM orders WHERE id = %s", (oid,))
+        rows.append(cur.fetchone())
+  good: |
+    cur.execute("SELECT * FROM orders WHERE id = ANY(%s)", (order_ids,))
+    rows = cur.fetchall()
+sources:
+  - title: "Python models | SQLMesh docs"
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/models/python_models/
+    publisher: SQLMesh (Tobiko)
+    accessed: 2026-10-12
+    supports: Upstream data is fetched through the execution context in
+      bulk queries; per-row fetching contradicts the set-based model
+      interface the docs describe.
+confidence: medium
+conflicts_with: []
+status: draft

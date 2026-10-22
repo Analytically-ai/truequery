@@ -1,0 +1,39 @@
+id: ops/plan-preview-before-apply
+title: Review a plan diff showing affected models and backfill scope before any production apply
+domain: ops
+modes: [change, assure]
+applies_to: [any]
+statement: >
+  Before applying changes to production, the operator must generate and
+  review a plan that lists added, removed, directly modified, and
+  indirectly modified models together with the date range that will be
+  backfilled; production applies without a reviewed plan are violations.
+rationale: >
+  Blind applies turn a one-line filter change into a silent full-history
+  rewrite or drop models the author did not know existed. A reviewed
+  plan surfaces downstream blast radius while it is still cheap to stop.
+failure_example: >
+  A developer applies a WHERE-clause tweak directly to prod. The tool
+  backfills six months of history across nine downstream models,
+  burning a weekend of warehouse budget and invalidating signed-off
+  monthly figures.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check deployment scripts and runbooks for a mandatory plan/preview
+  step whose output is recorded before the apply command.
+  False positives: interactive sessions where the plan is shown but not
+  logged; the detector can only see recorded evidence.
+severity_suggestion: warning
+examples:
+  bad: Applying local changes straight to prod with no preview step.
+  good: Plan output lists 1 direct plus 3 indirect models and a 7-day backfill window; reviewer approves, then apply runs.
+sources:
+- title: Plans (SQLMesh concepts)
+  url: https://sqlmesh.readthedocs.io/en/stable/concepts/plans/
+  publisher: SQLMesh (Tobiko)
+  accessed: 2026-10-12
+  supports: Plans summarize added, removed, and modified models plus missing intervals for review before apply.
+confidence: high
+conflicts_with: []
+status: draft

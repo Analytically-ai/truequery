@@ -1,0 +1,5 @@
+#!/bin/sh
+# Read-only SQL against the demo warehouse: ./dq "SELECT ..."
+cd "$(dirname "$0")"
+. ./_python.sh
+exec $PY dq.py "$@"

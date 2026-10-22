@@ -1,0 +1,38 @@
+id: consume/parameterized-dashboard-filters
+title: Dashboard filters are bound parameters, not concatenated SQL text
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Dashboard and report filter values reach the warehouse as bound parameters
+  or typed filter bindings; no consumer query builds SQL by concatenating
+  user-supplied text.
+rationale: >
+  Concatenated filters invite SQL injection from viewer inputs and break on
+  ordinary values containing quotes; parameter binding removes both failure
+  modes at once.
+failure_example: >
+  A dashboard text filter concatenates the viewer-typed store name into SQL;
+  a store named O'Brien breaks every regional report, and a crafted value
+  exfiltrates adjacent tables.
+enforcement: detector
+detection_sketch: >
+  Scan dashboard query templates and custom-SQL bindings for string
+  concatenation or templating of user-controlled filter values into SQL
+  text. False positives: server-side allowlist-validated template
+  parameters such as column pickers, waived by declaring the allowlist.
+severity_suggestion: error
+examples:
+  bad: |
+    query = "SELECT * FROM m WHERE store = '" + user_input + "'"
+  good: |
+    SELECT store, revenue FROM m WHERE store = {{ bound_parameter('store') }}
+sources:
+  - title: SELECT Statement
+    url: https://duckdb.org/docs/current/sql/statements/select
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: Documents prepared-statement parameter forms that bound filters should use.
+confidence: high
+conflicts_with: []
+status: draft

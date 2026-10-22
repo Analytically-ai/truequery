@@ -1,0 +1,58 @@
+id: sql/accidental-cross-join
+title: Every join of two tables carries an explicit join predicate
+domain: sql
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  No query block joins two table expressions without an explicit linking
+  predicate (ON/USING) unless the join is written as an explicit CROSS JOIN;
+  comma-separated FROM lists contain at most one table expression. This
+  record owns the comma-join ban for the whole pack.
+rationale: >
+  A missing predicate multiplies row counts (m x n) while the query stays
+  syntactically valid, so nothing fails loudly. At production scale this
+  exhausts memory or disk and, worse, silently feeds wrong rows downstream.
+failure_example: >
+  A refactor drops ON orders.customer_id = customers.id; 1,000 customers x
+  30,000 orders returns 30M rows instead of 30K, and a downstream revenue
+  total is overstated 1,000x.
+enforcement: detector
+detection_sketch: >
+  Match Join nodes with no ON/USING child that are not explicit CROSS JOIN,
+  plus FROM clauses with two or more table entries and no condition
+  referencing both sides. Exempt when one side is a one-row derived table or
+  a row generator (date spine). False positives: intentional theta joins with
+  inequality predicates still carry ON, so they pass; only predicate-less
+  joins flag.
+severity_suggestion: error
+examples:
+  bad: SELECT COUNT(*) FROM customers, orders;
+  good: SELECT COUNT(*) FROM customers JOIN orders ON orders.customer_id = customers.id;
+sources:
+- title: Joins Between Tables (PostgreSQL tutorial)
+  url: https://www.postgresql.org/docs/current/tutorial-join.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Join queries pair rows via an expression specifying which rows match; the ON form is the documented default.
+- title: FROM and JOIN Clauses (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/query_syntax/from
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: A CROSS JOIN has no conditions and returns all possible pairs, and is equivalent to omitting the JOIN clause (FROM a, b).
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE cust(id INT);
+    INSERT INTO cust VALUES (1), (2);
+    CREATE TABLE ords(cid INT, amount INT);
+    INSERT INTO ords VALUES (1, 10), (1, 20), (2, 30);
+  bad: "SELECT COUNT(*), SUM(amount) FROM cust, ords"
+  bad_result: "[(6, 120)]"
+  good: "SELECT COUNT(*), SUM(amount) FROM cust JOIN ords ON ords.cid = cust.id"
+  good_result: "[(3, 60)]"
+  note: >
+    The comma join pairs every customer with every order (2 x 3 = 6 rows), so
+    the revenue total doubles from 60 to 120 with no error. Standard SQL;
+    identical semantics in Postgres, BigQuery, Snowflake and SQL Server.

@@ -1,0 +1,79 @@
+id: orch/idempotent-retries-with-limits
+title: Tasks declare bounded retries with backoff over rerun-safe writes
+domain: orch
+modes:
+- build
+- assure
+applies_to:
+- airflow
+- dagster
+statement: >
+  Every task or asset that touches external systems MUST declare its retry
+  policy explicitly: a small finite retry count plus a delay, with
+  exponential backoff where the platform supports it. Its writes MUST be safe
+  to repeat for the same logical unit, because a retry reruns the whole task.
+  When retries are exhausted the task must fail loudly to its owner (see
+  orch/failure-alert-routing); inputs that fail deterministically (malformed
+  files) should be quarantined rather than retried again on every run.
+rationale: >
+  Airflow's built-in default is zero retries (`[core] default_task_retries =
+  0`, 300 s delay), so a pipeline that declares nothing fails on routine
+  transient faults; Astronomer notes that two retries protect against most
+  problems common to distributed environments. Retries rerun the whole task,
+  so a non-idempotent write that partly succeeded is duplicated on the
+  retry. Dagster has no retry unless a RetryPolicy is attached.
+failure_example: >
+  A nightly load fails once on a gateway timeout and has no retries; the
+  mart is a day stale. The on-call reruns it by hand and the bare INSERT
+  appends the same day twice.
+enforcement: detector
+detection_sketch: >
+  Airflow: flag tasks where neither the operator nor DAG default_args sets
+  retries (they inherit the config default, usually 0), and tasks with
+  retries > 0 whose SQL/write is a bare INSERT/append without a key or
+  partition overwrite. Dagster: flag assets/ops using external resources with
+  no retry_policy and no job-level op_retry_policy. Optionally flag retry
+  counts above a threshold (e.g. > 5) without backoff. False positives:
+  read-only or cheap-to-fail tasks (allow an explicit retries=0 with a
+  comment/marker); deployments that set default_task_retries in config the
+  scanner cannot see (accept a config path).
+severity_suggestion: warning
+examples:
+  bad: |
+    PythonOperator(task_id="load", python_callable=load)  # inherits 0 retries; INSERT INTO mart ...
+  good: |
+    PythonOperator(task_id="load", python_callable=load, retries=3,
+                   retry_delay=timedelta(minutes=5), retry_exponential_backoff=True)
+    # load() runs MERGE INTO mart USING staging ON key ...
+    # Dagster: @asset(retry_policy=RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL))
+sources:
+- title: Configuration Reference (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/configurations-ref.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: default_task_retries defaults to 0, default_task_retry_delay to 300 seconds, and
+    max_task_retry_delay caps delays at 86400 seconds.
+- title: Best Practices (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Because Airflow can retry a failed task, tasks should produce the same result on every re-run;
+    INSERT on re-run can duplicate rows, so use UPSERT.
+- title: DAG writing best practices in Apache Airflow
+  url: https://www.astronomer.io/docs/learn/dag-best-practices
+  publisher: Astronomer
+  accessed: '2026-10-11'
+  supports: Setting retries to 2 protects a task from most problems common to distributed environments;
+    retries repeat the whole task; idempotent design enables retries.
+- title: Op retries (Dagster docs)
+  url: https://dagster.io/docs/guides/build/ops/op-retries
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: RetryPolicy (max_retries, delay, Backoff, Jitter) can be attached to ops, assets, and asset
+    jobs. The quarantine/dead-letter advice is a general engineering recommendation, not from these docs.
+confidence: high
+conflicts_with: []
+see_also:
+- py/idempotent-task-logic
+- orch/idempotent-backfill-windowing
+status: draft

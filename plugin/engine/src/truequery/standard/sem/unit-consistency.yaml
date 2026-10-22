@@ -1,0 +1,54 @@
+id: sem/unit-consistency
+title: Measures declare units and currency; mixed units never aggregate
+domain: sem
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every monetary or unit-bearing measure declares its currency or unit, values
+  are converted to a common unit before aggregation, and raw multi-currency or
+  mixed-unit columns are never summed without conversion.
+rationale: >
+  Summing dollars, euros, and yen as bare numbers produces a total in no
+  currency at all; with typical mixes the reported figure can be off by
+  multiples while looking exact to the cent.
+failure_example: >
+  Global revenue sums USD, EUR, and JPY amounts without conversion and
+  reports $41M instead of $28M; the error survives two audits because the
+  metric definition never declared a currency.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the unit or currency of each monetary or
+  unit-bearing measure, which columns hold mixed currencies or units, and
+  the project's reporting currency. None of this is inferable from SQL. With
+  them, flag measures with no unit annotation and aggregations over columns
+  declared multi-currency or mixed-unit that have no conversion step or
+  currency dimension split. False positives: single-currency businesses,
+  exempt once the project declares one reporting currency.
+severity_suggestion: error
+examples:
+  bad: |-
+    measures:
+      - name: global_revenue
+        sql: amount
+        type: sum   # amount mixes USD, EUR, JPY; no currency declared
+  good: |-
+    measures:
+      - name: global_revenue_usd
+        sql: amount_usd_converted
+        type: sum
+        description: 'Currency: USD, converted at daily rate. Grain: order.'
+sources:
+  - title: Getting started data modeling
+    url: https://docs.cube.dev/docs/data-modeling/overview
+    publisher: Cube
+    accessed: 2026-10-12
+    supports: Measures defined with explicit SQL so conversions stay visible
+  - title: LookML terms and concepts
+    url: https://docs.cloud.google.com/looker/docs/lookml-terms-and-concepts
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Value formats and measure metadata keep units explicit for consumers
+confidence: medium
+conflicts_with: []
+status: draft

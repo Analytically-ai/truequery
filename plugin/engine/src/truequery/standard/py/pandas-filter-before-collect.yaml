@@ -1,0 +1,44 @@
+id: py/pandas-filter-before-collect
+title: Push filters and projections to the engine before collecting to pandas
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Pipeline Python that needs a subset of a warehouse table must apply
+  WHERE filters and column projections in the query (or lazy frame) before
+  collecting to pandas; fetching full tables and filtering in memory is
+  forbidden above trivial reference-data sizes.
+rationale: >
+  Collect-before-filter moves gigabytes the warehouse could have discarded
+  in milliseconds: workers OOM, task memory limits kill the run, and the
+  query slot burns for the transfer instead of serving production traffic.
+failure_example: >
+  A task runs context.fetchdf("SELECT * FROM events") (9B rows) then
+  df[df.ds == day]; the worker OOMs nightly until someone adds WHERE ds
+  and the job drops from 40 minutes to 90 seconds.
+enforcement: detector
+detection_sketch: >
+  Flag fetch/collect calls whose SQL lacks WHERE or selects * followed by
+  in-memory boolean-mask filtering on the result, and to_pandas/fetchdf
+  on unbounded lazy frames. False positives: staging models that
+  legitimately need full scans; small dimension/seed tables under a
+  documented row cap.
+severity_suggestion: warning
+examples:
+  bad: |
+    df = context.fetchdf("SELECT * FROM events")
+    day = df[df["ds"] == execution_date]
+  good: |
+    df = context.fetchdf(
+        "SELECT ds, user_id, revenue FROM events WHERE ds = '2026-10-11'")
+sources:
+  - title: "Python models | SQLMesh docs"
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/models/python_models/
+    publisher: SQLMesh (Tobiko)
+    accessed: 2026-10-12
+    supports: Python models fetch upstream data through ExecutionContext
+      queries, so interval/column restriction belongs in that query rather
+      than in post-fetch pandas filtering.
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,50 @@
+id: ingest/require-completeness-marker
+title: Batch intake waits for a completeness marker, not a timer
+domain: ingest
+modes: [build]
+applies_to: [any]
+statement: >
+  Every batch intake MUST gate on an explicit completeness signal from the
+  producer (marker file, manifest, partition-ready flag, or API
+  completion status) rather than a fixed clock delay. Time-guessed pickups
+  of still-being-written data fail review.
+rationale: >
+  Writers and readers race: a job that picks up files "30 minutes after
+  the hour" will eventually read a half-written file, loading truncated
+  data that passes every schema check. Producer-side completion markers
+  eliminate the race instead of betting against it.
+failure_example: >
+  A nightlyCOPY reads the partner drop at 02:30 sharp. One night the
+  upload runs long; the job loads a 40%-written file, marks success, and
+  the missing 60% is never retried because the batch "succeeded".
+enforcement: judgment
+detection_sketch: >
+  Judgment: taught, not checked. A static scan cannot tell whether a
+  cron-scheduled intake is safe (the producer finishes long before), whether
+  an upstream push is itself the marker, or whether a sensor waits for the
+  right signal. Reviewers check that each batch intake names its
+  completeness signal (marker file, manifest, partition-ready flag,
+  completion status, or push event).
+severity_suggestion: advisory
+examples:
+  bad: |
+    # cron at 02:30; hopes the upload finished
+    copy sales from 's3://drops/partner/2026-10-11/';
+  good: |
+    # waits for the producer's marker, then loads the manifest
+    sensor: s3://drops/partner/2026-10-11/_SUCCESS
+    copy sales from manifest 's3://drops/partner/2026-10-11/manifest.json';
+sources:
+  - title: Sensors
+    url: https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/sensors.html
+    publisher: Apache Airflow
+    accessed: 2026-10-12
+    supports: Sensors gate task execution on external arrival/completion signals rather than wall-clock guesses
+  - title: Introduction to loading data
+    url: https://docs.cloud.google.com/bigquery/docs/loading-data
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Load jobs support manifest and multi-URI sources so a complete file set is loaded atomically
+confidence: high
+conflicts_with: []
+status: draft

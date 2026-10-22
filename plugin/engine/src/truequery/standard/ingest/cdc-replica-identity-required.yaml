@@ -1,0 +1,47 @@
+id: ingest/cdc-replica-identity-required
+title: CDC sources set replica identity so updates and deletes replicate
+domain: ingest
+modes: [build, assure]
+applies_to: [postgres]
+statement: >
+  Any Postgres table captured by logical-replication CDC MUST have its
+  replica identity set to cover UPDATE and DELETE payloads (FULL, or a key
+  the subscriber handles). Tables left on the default identity whose key
+  cannot identify updated rows MUST be flagged before the connector goes
+  live.
+rationale: >
+  With an insufficient replica identity, UPDATEs and DELETEs arrive without
+  enough key information to apply: subscribers either error, skip the
+  change, or apply it to the wrong row. The replica silently diverges from
+  the source on exactly the rows that changed.
+failure_example: >
+  A users table without a primary key streams CDC with default identity.
+  Updates arrive unidentifiable; the subscriber logs warnings and keeps the
+  old email addresses, so the warehouse copy drifts from production.
+enforcement: runtime
+detection_sketch: >
+  Needs the source database: query pg_publication_tables joined to pg_class
+  (relreplident) and the table's primary key for every table in the CDC
+  publication. A table on DEFAULT identity with no primary key, or on
+  NOTHING, is a finding. Replica identity is catalog state, not code, so
+  migration files alone cannot prove it (ALTER TABLE ... REPLICA IDENTITY
+  may be run by hand or by the connector). A static scan of migrations is
+  only a hint. False positives: insert-only tables and row-filtered
+  publications, which need the publication definition to judge.
+severity_suggestion: error
+examples:
+  bad: |
+    create publication app_pub for table users;
+    -- users has no primary key; default replica identity
+  good: |
+    alter table users replica identity full;
+    create publication app_pub for table users;
+sources:
+  - title: Chapter 29. Logical Replication
+    url: https://www.postgresql.org/docs/current/logical-replication.html
+    publisher: PostgreSQL Project
+    accessed: 2026-10-12
+    supports: Documents publications, replica identity, and row-filter behavior for logical replication
+confidence: high
+conflicts_with: []
+status: draft

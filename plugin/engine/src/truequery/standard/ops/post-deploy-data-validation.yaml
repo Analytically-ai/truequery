@@ -1,0 +1,42 @@
+id: ops/post-deploy-data-validation
+title: Run data tests after every production deploy before exposing new data
+domain: ops
+modes: [change, assure]
+applies_to: [any]
+statement: >
+  After a production deployment completes, the pipeline must execute
+  its data test suite against the new production state and gate
+  downstream exposure (dashboard refresh, reverse sync, ML retrain) on
+  a pass; failures roll back exposure, not just page someone.
+rationale: >
+  A deploy that builds successfully but produces wrong rows is the most
+  dangerous outcome: green infrastructure, red data. Post-deploy
+  validation is the last point where bad data can be stopped before
+  consumers act on it.
+failure_example: >
+  A deploy succeeds; a join fan-out doubles revenue rows. Dashboards
+  refresh automatically, sales celebrates a record day, and the
+  correction memo goes out a week later.
+enforcement: runtime
+detection_sketch: >
+  Requires execution: run the test suite against post-deploy state and
+  check the exposure gate. Static review can confirm the gate exists in
+  the pipeline definition but cannot confirm it ran.
+severity_suggestion: warning
+examples:
+  bad: Deploy job ends with "build succeeded"; dashboards refresh unconditionally.
+  good: Deploy job runs tests post-build; dashboard refresh and sync tasks depend on the test task passing.
+sources:
+- title: Monitor jobs and alerts (dbt)
+  url: https://docs.getdbt.com/docs/deploy/monitor-jobs
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Production monitoring ties job outcomes to downstream visibility and notifications.
+- title: About continuous integration (CI) in dbt
+  url: https://docs.getdbt.com/docs/deploy/about-ci
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Build verification on changes is the established gate before new data reaches consumers.
+confidence: high
+conflicts_with: []
+status: draft

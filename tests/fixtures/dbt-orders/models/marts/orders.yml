@@ -1,0 +1,16 @@
+# dbt >= 1.8 spelling (data_tests:), so init must read it.
+models:
+  - name: orders
+    description: One row per order, with item totals.
+    columns:
+      - name: order_id
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        data_tests:
+          - not_null
+      - name: status
+        data_tests:
+          - accepted_values:
+              values: [placed, shipped, returned]

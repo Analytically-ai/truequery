@@ -1,0 +1,41 @@
+id: py/pandas-no-chained-assignment
+title: Mutate DataFrames with .loc/.iloc single-step assignment, never chains
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Pipeline code that mutates a pandas DataFrame must do so with a single
+  .loc/.iloc assignment (or an explicit .copy() first); chained
+  subscript-then-assign (df[a][b] = v, df.query(...)[col] = v) is forbidden.
+rationale: >
+  Chained assignment may write to a temporary copy instead of the frame,
+  silently dropping the mutation: a cleaning step that looks applied in
+  code review never lands, and downstream models train or report on dirty
+  data with no error anywhere.
+failure_example: >
+  df[df.region == "EU"]["vat"] = 0.2 runs without error but leaves vat
+  unchanged; the revenue model ships EU figures missing VAT for a month.
+enforcement: detector
+detection_sketch: >
+  Flag Subscript-of-Subscript assignment targets and assignments whose
+  base is a method call returning a new frame (query, sort_values,
+  boolean-mask-then-subscript). Ruff rule PLW2901 (chained assignment)
+  covers part of this. False positives: intentional writes into an
+  explicitly copied frame (df2 = df[mask].copy(); df2[col] = v) must not flag.
+severity_suggestion: error
+examples:
+  bad: |
+    df[df.region == "EU"]["vat"] = 0.2  # may write to a temp copy
+  good: |
+    df.loc[df.region == "EU", "vat"] = 0.2
+sources:
+  - title: "Copy-on-Write (CoW) | pandas docs"
+    url: https://pandas.pydata.org/docs/user_guide/copy_on_write.html
+    publisher: pandas
+    accessed: 2026-10-12
+    supports: Chained indexing mutates unpredictable view/copy targets;
+      Copy-on-Write removes cross-object side effects, so single-step
+      .loc assignment is the reliable mutation form.
+confidence: high
+conflicts_with: []
+status: draft

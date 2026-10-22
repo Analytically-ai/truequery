@@ -1,0 +1,41 @@
+id: store/partition-predicate-required
+title: Queries against partitioned tables must constrain the partition column
+domain: store
+modes: [explore, assure]
+applies_to: [bigquery, snowflake, databricks, iceberg, delta]
+statement: >
+  Every recurring or reviewed SELECT against a partitioned table must include a
+  filter on (a transform of) the partition column, or an explicit full-scan
+  justification recorded in the review; ad-hoc one-off exploration is exempt.
+rationale: >
+  Partitioning only saves money when queries prune: one unfiltered scheduled
+  query per day against a multi-TB table can dominate the entire warehouse bill
+  and starve concurrency.
+failure_example: >
+  A nightly aggregate drops its WHERE event_date >= CURRENT_DATE - 7 filter during
+  a refactor; the job silently goes from scanning 80 GB to 6 TB nightly.
+enforcement: runtime
+detection_sketch: >
+  Requires warehouse query history or reviewed-query set: resolve the table's
+  partition spec, then check the query predicate for that column/transform.
+  Static approximation (warn-only): flag partition-table scans with no literal or
+  parameter filter on the partition column. False positives: aggregations that
+  genuinely need full history — handled by the recorded-justification escape hatch.
+severity_suggestion: warning
+examples:
+  bad: "SELECT user_id, COUNT(*) FROM events GROUP BY 1; -- events partitioned by event_date, no filter"
+  good: "SELECT user_id, COUNT(*) FROM events WHERE event_date >= DATE '2026-09-01' GROUP BY 1;"
+sources:
+  - title: BigQuery — Introduction to partitioned tables
+    url: https://docs.cloud.google.com/bigquery/docs/partitioned-tables
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Partition pruning applies when queries filter on the partitioning column, reducing bytes scanned.
+  - title: Databricks — Optimization recommendations (dynamic file pruning)
+    url: https://docs.databricks.com/aws/en/optimizations
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: File/directory skipping depends on query predicates matching the layout.
+confidence: high
+conflicts_with: []
+status: draft

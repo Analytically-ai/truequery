@@ -1,0 +1,43 @@
+id: gov/declared-model-owner
+title: Every production dataset declares an owner
+domain: gov
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every production model or dataset ships with a declared owning team or
+  individual recorded in the project (for example a dbt group with an
+  owner entry, or an equivalent ownership field in the dataset contract),
+  so a reviewer can determine who approves access, schema, and retention
+  decisions without asking around.
+rationale: >
+  Unowned datasets accumulate silent consumers; when a breach, wrong-number
+  incident, or erasure request arrives, nobody can authorize the fix and
+  response stalls while PII keeps flowing.
+failure_example: >
+  A churn mart used by three teams has no owner; a request to delete a
+  user's rows bounces between teams for weeks while the data keeps shipping
+  to an analytics vendor.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Parse group/dataset declarations; flag production nodes with no owner
+  field. False positives: owner recorded outside the repo (wiki); treat a
+  documented owner-pointer as satisfying.
+severity_suggestion: warning
+examples:
+  bad: "marts/churn.sql ships with no group and no owner field anywhere."
+  good: "marts/churn.sql belongs to group growth with a named owner and contact."
+sources:
+- title: Add groups to your DAG
+  url: https://docs.getdbt.com/docs/build/groups
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: dbt groups assign ownership of models to teams
+- title: Data Mesh Principles and Logical Architecture
+  url: https://martinfowler.com/articles/data-mesh-principles.html
+  publisher: martinfowler.com (Zhamak Dehghani)
+  accessed: 2026-10-12
+  supports: domain-oriented decentralized data ownership as first principle
+confidence: high
+conflicts_with: []
+status: draft

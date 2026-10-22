@@ -1,0 +1,75 @@
+id: orch/light-dag-parse-no-heavy-top-level
+title: DAG files do no I/O or heavy work at parse time
+domain: orch
+modes:
+- build
+- change
+- assure
+applies_to:
+- airflow
+statement: >
+  Code that runs when an Airflow DAG file is imported (module level, and
+  module-level expressions inside the DAG context) MUST be limited to
+  building operators and their dependencies. It MUST NOT open connections,
+  run queries, call HTTP APIs, or read Airflow Variables/Connections; such
+  work goes inside task callables or Jinja templates (e.g.
+  `{{ var.value.x }}`), and expensive library imports go inside the callable
+  that needs them. Configuration needed at parse time comes from
+  environment variables or files shipped next to the DAG.
+rationale: >
+  The DAG processor re-parses DAG files continuously, so top-level work is
+  repeated on every parse, not once per run. Variable reads at top level
+  hit the metadata database on every parse; a slow or unreachable dependency
+  slows parsing for the deployment, and an import that exceeds
+  `dagbag_import_timeout` (30 s by default) fails, so the DAG drops out of
+  the scheduler with no task failure to alert on.
+failure_example: >
+  A DAG file calls psycopg2.connect() and runs a SELECT at module level to
+  build a mailing list. On a slow database morning the import times out, the
+  DAG disappears from the UI, and downstream tasks miss their SLA after the
+  database has already recovered.
+enforcement: detector
+detection_sketch: >
+  Parse each DAG file's AST and flag Call nodes evaluated at import time
+  (module level or inside a module-level `with DAG(...)` block, not inside a
+  def/lambda/class body) that target known I/O: Variable.get,
+  Connection/BaseHook.get_connection, *Hook(...).get_conn/get_records/run,
+  requests.*/httpx.*, DB-API connect(), cloud SDK clients' list/get calls,
+  pandas.read_*. Optionally flag top-level imports of known heavy libraries
+  used only inside callables. False positives: os.environ/os.getenv reads
+  and reads of small config files shipped with the DAG (allowlist); pure
+  computation of constants.
+severity_suggestion: warning
+examples:
+  bad: |
+    import requests
+    CONFIG = requests.get("https://cfg.internal/dag-params").json()  # runs on every parse
+    TABLES = Variable.get("tables", deserialize_json=True)           # metadata DB hit on every parse
+  good: |
+    @task
+    def load_config():
+        import requests
+        return requests.get("https://cfg.internal/dag-params").json()  # runs only at execution
+    # or: BashOperator(..., bash_command="run.sh {{ var.value.tables }}")
+sources:
+- title: Best Practices (Airflow 3.3.2 documentation), Top level Python Code
+  url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Avoid top-level code not needed to create operators and DAG relations; move expensive imports
+    into callables; Variables at top level cause network calls and database access and should be avoided,
+    with Jinja templates deferring the read to run time.
+- title: Dynamic Dag Generation (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/howto/dynamic-dag-generation.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Top-level Variable use connects to the metadata DB and slows parsing; recommends environment
+    variables or metadata files shipped in the DAG folder instead of pulling external data at parse time.
+- title: Configuration Reference (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/configurations-ref.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: dagbag_import_timeout defaults to 30 seconds before a Python file import times out.
+confidence: high
+conflicts_with: []
+status: draft

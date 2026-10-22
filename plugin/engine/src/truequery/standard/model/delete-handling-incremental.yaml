@@ -1,0 +1,51 @@
+id: model/delete-handling-incremental
+title: Incremental models declare how source deletes are handled
+domain: model
+modes: [build, assure]
+applies_to: [dbt, snowflake, bigquery, postgres]
+statement: >
+  Every incremental model must record its delete policy in its config or
+  contract (ignore with justification, propagate via delete-plus-insert or
+  merge with delete branch, or track via snapshot) and implement exactly that
+  policy; silent default-ignoring of deletes is not allowed.
+rationale: >
+  Most incremental strategies only insert or upsert, so deleted source rows
+  live on forever as ghost records. Undead rows overstate active counts and
+  can leak data that a user asked to have removed.
+failure_example: >
+  GDPR deletion requests remove users from the source, but the append
+  incremental mart keeps them; the company reports deleted users and breaches
+  its erasure obligation.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Read the declared delete policy from the model config or contract file and
+  verify the strategy implements it (delete branch, snapshot, or justified
+  ignore). Flag models with no declared policy. False positives: immutable
+  event streams where deletes are impossible by source guarantee.
+severity_suggestion: warning
+examples:
+  bad: |
+    {{ config(materialized='incremental', incremental_strategy='append') }}
+    SELECT user_id, email FROM raw_users;  -- deletes never propagate
+  good: |
+    {{ config(materialized='incremental', incremental_strategy='delete+insert',
+               unique_key='user_id', delete_policy='propagate') }}
+    SELECT user_id, email FROM raw_users
+    {% if is_incremental() %}
+    WHERE updated_at > (SELECT MAX(updated_at) - INTERVAL '3 days' FROM {{ this }})
+    {% endif %};
+sources:
+  - title: About incremental strategy
+    url: https://docs.getdbt.com/docs/build/incremental-strategy
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: strategy catalog including merge and delete-plus-insert behaviors
+  - title: Table deletes, updates, and merges (Delta Lake)
+    url: https://docs.delta.io/delta-update/
+    publisher: Delta Lake Project
+    accessed: 2026-10-12
+    supports: explicit delete and merge operations for propagating removals
+confidence: high
+conflicts_with: []
+status: draft

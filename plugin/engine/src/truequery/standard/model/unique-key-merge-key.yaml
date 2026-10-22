@@ -1,0 +1,55 @@
+id: model/unique-key-merge-key
+title: Incremental merge models declare a non-null unique merge key
+domain: model
+modes: [build, assure]
+applies_to: [dbt, snowflake, bigquery, postgres]
+statement: >
+  Every model using a merge or delete-plus-insert incremental strategy must
+  declare its merge key (unique_key) and every key column must be NOT NULL
+  with one row per key value in each processed batch.
+rationale: >
+  Null or duplicated merge keys make upserts nondeterministic: matched rows
+  update the wrong target, or one source row silently wins among duplicates.
+  The result is duplicated or missing rows in production tables.
+failure_example: >
+  A customer model merges on email, but 4% of rows have null email; those
+  rows never match, accumulate as duplicates, and support counts the same
+  customer twice.
+enforcement: detector
+detection_sketch: >
+  Detector (code files only): flag models whose config uses a merge or
+  delete+insert incremental strategy with no unique_key. In dbt, a merge
+  without unique_key degrades to append and duplicates rows on every re-run.
+  The other two clauses are not code-checkable here: key-column nullability
+  needs declared facts (contract columns or not_null tests), and one row per
+  key per batch needs the data (dq/uniqueness-key-no-duplicates and
+  model/merge-source-deduped). False positives: composite keys handled by an
+  explicit coalesced surrogate key.
+severity_suggestion: error
+examples:
+  bad: |
+    {{ config(materialized='incremental', incremental_strategy='merge') }}
+    SELECT email, name FROM raw_customers;  -- no unique_key, nulls allowed
+  good: |
+    {{ config(materialized='incremental', incremental_strategy='merge', unique_key='customer_id') }}
+    SELECT customer_id, email, name FROM raw_customers WHERE customer_id IS NOT NULL;
+sources:
+  - title: About incremental strategy
+    url: https://docs.getdbt.com/docs/build/incremental-strategy
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: merge strategies match source rows to target rows on a unique key
+  - title: MERGE statement (BigQuery DML)
+    url: https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: merge matches at most one source row per target row
+  - title: MERGE (Postgres)
+    url: https://www.postgresql.org/docs/current/sql-merge.html
+    publisher: PostgreSQL Project
+    accessed: 2026-10-12
+    supports: one WHEN clause executes per candidate row, so key collisions are decisive
+confidence: high
+conflicts_with: []
+see_also: [model/merge-source-deduped, dq/uniqueness-key-no-duplicates]
+status: draft

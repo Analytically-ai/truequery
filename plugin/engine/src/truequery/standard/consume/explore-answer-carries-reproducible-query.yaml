@@ -1,0 +1,56 @@
+id: consume/explore-answer-carries-reproducible-query
+title: The final answer carries the exact queries that reproduce every number in it
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  The shared answer is kept separate from the exploration that led to it,
+  and every number it reports can be traced to a query or script attached
+  to or linked from the answer (saved query, committed file, or notebook
+  revision). Each such query runs top to bottom without manual edits, has
+  its date window and parameters written as literals or named parameters
+  (not relative expressions such as CURRENT_DATE left unrecorded), and
+  produces the reported value. No reported number depends on a hand-edited
+  spreadsheet step or an unrecorded scratch cell.
+rationale: >
+  Exploration produces many dead-end queries; if the conclusion is not tied
+  to the one that matters, nobody (including the author a month later) can
+  check it, rerun it on new data, or find the bug when the number is
+  challenged. Relative dates make the same query return a different answer
+  tomorrow.
+failure_example: >
+  A churn figure from a notebook is quoted in a planning doc. When finance
+  disputes it three weeks later, the notebook has been re-run with
+  CURRENT_DATE, cell order was changed, and the original number cannot be
+  reproduced.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    Answer: "September churn was 3.4%."  (from cell 37 of an unsaved notebook)
+  good: |
+    Answer: "September churn was 3.4%."
+    Query: analyses/2026-10-churn/churn_sept.sql @ commit 4f2c1a9
+      -- params: month_start = '2026-09-01', month_end = '2026-10-01'
+      -- run at 2026-10-11 09:12 UTC; fct_subscriptions max(_loaded_at) 2026-10-11 06:00 UTC
+sources:
+  - title: Ten Simple Rules for Reproducible Computational Research
+    url: https://pmc.ncbi.nlm.nih.gov/articles/PMC3812051/
+    publisher: PLOS Computational Biology (Sandve, Nekrutenko, Taylor, Hovig, 2013)
+    accessed: 2026-10-11
+    supports: Rules include keeping track of how every result was produced, avoiding manual data manipulation steps, version-controlling scripts, and connecting textual statements to underlying results.
+  - title: The AQuA Book
+    url: https://www.gov.uk/guidance/the-aqua-book
+    publisher: UK Government Analysis Function
+    accessed: 2026-10-11
+    supports: Lists "Repeatable" (same outputs for the same inputs) as a quality principle and recommends Reproducible Analytical Pipelines for analysis in code.
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Recommends getting a rough result end to end during exploration, then separating validation, description and evaluation before presenting conclusions.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [consume/explore-caveats-and-unchecked-stated]

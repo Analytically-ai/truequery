@@ -1,0 +1,57 @@
+id: model/merge-source-deduped
+title: Merge sources are deduplicated to one row per target key
+domain: model
+modes: [build, assure]
+applies_to: [snowflake, bigquery, postgres, dbt]
+statement: >
+  Before any MERGE or merge-strategy incremental run, the source query must be
+  reduced to at most one row per target merge key (dedupe with explicit
+  pick-the-winner logic), because engines apply only one match per target row.
+rationale: >
+  Duplicate source rows per target key make the merge outcome engine- and
+  order-dependent: one duplicate wins silently and the loser (often the newer
+  record) is lost. The target then holds stale values with no error raised.
+failure_example: >
+  Two CDC rows for one account land in the same batch; the merge applies the
+  older balance and the account mart shows yesterday's money.
+enforcement: detector
+detection_sketch: >
+  Check merge sources for a dedupe step (row_number partitioned by merge key
+  with one-row filter, or group-by on the key) ahead of the merge. Flag merge
+  statements whose source has no such step. False positives: sources
+  constrained unique upstream with the constraint referenced in review.
+severity_suggestion: error
+examples:
+  bad: |
+    MERGE INTO customers t USING raw_customers s
+    ON t.customer_id = s.customer_id
+    WHEN MATCHED THEN UPDATE SET balance = s.balance;
+    -- raw_customers may hold several rows per customer_id
+  good: |
+    WITH ranked AS (
+      SELECT s.*, ROW_NUMBER() OVER (
+        PARTITION BY customer_id ORDER BY updated_at DESC) AS rn
+      FROM raw_customers s
+    )
+    MERGE INTO customers t USING (SELECT * FROM ranked WHERE rn = 1) s
+    ON t.customer_id = s.customer_id
+    WHEN MATCHED THEN UPDATE SET balance = s.balance;
+sources:
+  - title: MERGE (Snowflake)
+    url: https://docs.snowflake.com/en/sql-reference/sql/merge
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: merge join semantics between source and target on the key
+  - title: MERGE (Postgres)
+    url: https://www.postgresql.org/docs/current/sql-merge.html
+    publisher: PostgreSQL Project
+    accessed: 2026-10-12
+    supports: a single WHEN clause fires per candidate row
+  - title: MERGE statement (BigQuery DML)
+    url: https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: at-most-one source row per target row requirement
+confidence: high
+conflicts_with: []
+status: draft

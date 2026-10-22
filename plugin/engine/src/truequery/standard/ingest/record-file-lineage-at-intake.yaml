@@ -1,0 +1,48 @@
+id: ingest/record-file-lineage-at-intake
+title: Each loaded row carries its source file and load identity
+domain: ingest
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every file-based load MUST attach provenance columns to each row: source
+  file path (or equivalent object id), load batch id, and load timestamp.
+  A file intake that lands rows with no trace of which file they came from
+  fails review.
+rationale: >
+  Without file lineage, a corrupt or duplicate file cannot be scoped:
+  teams cannot answer "which rows came from the bad drop?" and must reload
+  whole windows or leave poisoned rows in place. Provenance turns file
+  problems into precise DELETE/WHERE operations.
+failure_example: >
+  A partner re-sends a corrected file under a new name; both files load.
+  With no source-file column, nobody can distinguish the corrected rows
+  from the originals, so the whole week is reloaded and downstream
+  aggregates shift twice.
+enforcement: detector
+detection_sketch: >
+  Flag file-intake targets whose schema lacks file-path/batch-id/audit
+  columns and whose loader captures no file metadata. False positives:
+  API/CDC intakes where the equivalent (offset, LSN, request id) applies
+  instead of a file path.
+severity_suggestion: warning
+examples:
+  bad: |
+    copy orders from 's3://landing/orders-2026-10-01.csv';
+    -- no record of which file produced these rows
+  good: |
+    copy orders (order_id, amount, _source_file, _batch_id, _loaded_at)
+    from 's3://landing/orders-2026-10-01.csv';
+sources:
+  - title: What is Auto Loader?
+    url: https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader
+    publisher: Databricks
+    accessed: 2026-10-12
+    supports: Auto Loader tracks per-file ingestion progress metadata, establishing file identity as a first-class intake concept
+  - title: Introduction to loading data
+    url: https://docs.cloud.google.com/bigquery/docs/loading-data
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: BigQuery load jobs expose per-job and per-source-URI metadata usable for load-batch identity
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,54 @@
+id: sem/conversion-metrics-window-bounds
+title: Conversion metrics declare bounded entity-typed windows
+domain: sem
+modes: [build, assure]
+applies_to: [dbt]
+statement: >
+  Every conversion metric declares a base entity, a conversion entity, bounded
+  calculation and window periods, and the entity type used to join them, so the
+  conversion rate is reproducible and its observation window is explicit.
+rationale: >
+  An unbounded "visited then bought" rate silently grows as late conversions
+  trickle in: the same query returns a different number every week and teams
+  argue about whether conversion improved or the window just widened.
+failure_example: >
+  Signup-to-paid conversion computed without a window drifts from 8% to 14%
+  over two years purely from late converters, and the growth team claims a
+  win that never happened.
+enforcement: detector
+detection_sketch: >
+  Check conversion-type metrics for calculation, window, base/consistent
+  entity, and entity-type params. Flag unbounded windows or mismatched entity
+  types. False positives: exploratory unbounded funnels — keep them out of
+  the governed layer (analyses, not metrics).
+severity_suggestion: warning
+examples:
+  bad: |-
+    - name: signup_to_paid_rate
+      type: conversion
+      type_params:
+        base_measure: signups
+        conversion_measure: paid_starts   # no window: rate drifts forever
+  good: |-
+    - name: signup_to_paid_rate
+      type: conversion
+      type_params:
+        base_measure: signups
+        conversion_measure: paid_starts
+        entity: user
+        calculation: conversions
+        window: { count: 30, period: day }
+sources:
+  - title: Creating metrics
+    url: https://docs.getdbt.com/docs/build/metrics-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Conversion metrics bind base and conversion measures with windows
+  - title: About MetricFlow
+    url: https://docs.getdbt.com/docs/build/about-metricflow
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: MetricFlow computes conversion semantics from declared params
+confidence: medium
+conflicts_with: []
+status: draft

@@ -1,0 +1,41 @@
+id: ops/cost-estimate-before-run
+title: Estimate bytes scanned and cost before running large or new queries
+domain: ops
+modes: [build, change, assure]
+applies_to: [bigquery, snowflake]
+statement: >
+  Before executing a new, modified, or historically expensive query or
+  model in production, the author must obtain a pre-execution estimate
+  (dry run, EXPLAIN, or byte-scan estimate) and record it alongside the
+  change.
+rationale: >
+  A single unexamined full-table scan can cost more than a year of CI.
+  Pre-execution estimates convert surprise bills into reviewable
+  numbers at the only point where the query can still be rewritten.
+failure_example: >
+  A backfill over a partitioned table omits the partition filter. The
+  query scans 40 TB on first run and the team learns about it from the
+  finance alert, not from review.
+enforcement: runtime
+detection_sketch: >
+  Requires warehouse access: run the query as a dry run or EXPLAIN and
+  compare estimated bytes to a threshold. Static checkers can only flag
+  missing partition filters heuristically, not price the query.
+severity_suggestion: warning
+examples:
+  bad: Running a new 12-month backfill with no estimate.
+  good: Dry run reports 38 GB estimated; reviewer confirms it matches expectations before the real run.
+sources:
+- title: Run a query (BigQuery documentation)
+  url: https://docs.cloud.google.com/bigquery/docs/running-queries
+  publisher: Google Cloud
+  accessed: 2026-10-12
+  supports: BigQuery supports dry runs that estimate bytes processed without executing or billing.
+- title: EXPLAIN (Snowflake documentation)
+  url: https://docs.snowflake.com/en/sql-reference/sql/explain
+  publisher: Snowflake
+  accessed: 2026-10-12
+  supports: EXPLAIN returns the execution plan without running the query, enabling pre-execution review.
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,52 @@
+id: dq/uniqueness-composite-grain
+title: Multi-column grains are tested as a composite, not column by column
+domain: dq
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  When a table's grain is a tuple of columns (for example line items keyed
+  by order_id plus line_number), the uniqueness check covers the full tuple;
+  per-column uniqueness is asserted only for columns that are genuinely
+  unique alone.
+rationale: >
+  Testing each grain column separately either fails spuriously (order_id
+  repeats across lines, as designed) or, when "fixed" by deleting the check,
+  leaves the real composite key untested and duplicate line items free to
+  inflate measures.
+failure_example: >
+  A team puts a unique test on order_id in an order-lines table, watches it
+  fail on legitimate multi-line orders, deletes it, and later ships doubled
+  line items from a double-loaded file with no check remaining.
+enforcement: contract
+contract_required: true
+detection_sketch: >
+  Compare the declared grain tuple in the contract against the columns named
+  in uniqueness checks; flag grain columns tested singly but never jointly.
+  False positives: none structural; misdeclared grains surface as repeated
+  failures and get corrected in the contract.
+severity_suggestion: warning
+examples:
+  bad: |-
+    columns:
+      - name: order_id
+        data_tests: [unique]   # wrong: repeats per line by design
+  good: |-
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [order_id, line_number]
+sources:
+  - title: Add data tests to your DAG
+    url: https://docs.getdbt.com/docs/build/data-tests
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: dbt documents the unique test family and custom generic tests
+      for composite shapes
+  - title: Expectation Gallery
+    url: https://greatexpectations.io/expectations/
+    publisher: Great Expectations
+    accessed: 2026-10-12
+    supports: the GX gallery catalogs compound-column uniqueness expectations
+      alongside single-column ones
+confidence: medium
+conflicts_with: []
+status: draft

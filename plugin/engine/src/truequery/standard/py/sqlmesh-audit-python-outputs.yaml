@@ -1,0 +1,49 @@
+id: py/sqlmesh-audit-python-outputs
+title: Attach blocking audits to Python models, not just SQL models
+domain: py
+modes: [build, assure]
+applies_to: [sqlmesh]
+statement: >
+  Every production Python model must carry at least one blocking audit
+  (row-count/division, not-null, uniqueness, or fresh-interval check)
+  that runs on each plan/interval, because Python-side transforms escape
+  the static checks that cover SQL models.
+rationale: >
+  Python models can emit any DataFrame, so schema drift, empty frames
+  from a failed API fetch, or duplicated keys pass evaluation silently;
+  without a blocking audit the bad interval promotes to production and
+  poisons every downstream model before anyone looks.
+failure_example: >
+  A Python model fetching exchange rates gets an empty API response and
+  returns an empty frame; with no audit the plan promotes it, downstream
+  FX conversions go NULL, and finance reports break the next morning.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Require each Python model file (or its project config) to reference at
+  least one non-trivial audit triggered on its intervals; flag models
+  with zero audits or audits scoped to other models. False positives:
+  exploratory/dev-kind models explicitly excluded from production plans.
+severity_suggestion: warning
+examples:
+  bad: |
+    @model("marts.fx_rates", columns={"ds": "date", "rate": "double"})
+    def execute(context, start, end, execution_time, **kwargs):
+        return fetch_rates(start, end)  # no audit if API returns empty
+  good: |
+    @model("marts.fx_rates", columns={"ds": "date", "rate": "double"})
+    def execute(context, start, end, execution_time, **kwargs):
+        return fetch_rates(start, end)
+    # audits/fx_rates.sql: AUDIT (name assert_fx_rows_present, ...);
+    # SELECT * FROM @this_model WHERE ds BETWEEN @start_ds AND @end_ds
+    # GROUP BY ds HAVING COUNT(*) = 0
+sources:
+  - title: "Auditing | SQLMesh docs"
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/audits/
+    publisher: SQLMesh (Tobiko)
+    accessed: 2026-10-12
+    supports: Audits validate model output after every run and blocking
+      audits halt plans so invalid data never promotes to production.
+confidence: high
+conflicts_with: []
+status: draft

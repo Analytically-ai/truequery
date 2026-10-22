@@ -1,0 +1,47 @@
+id: consume/explore-inspect-distributions-and-examples
+title: Inspect distributions and raw example rows, not only summary statistics
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  For each measure the answer summarizes with a mean, sum, or rate, the
+  analysis looks at its distribution (histogram, quantiles including min,
+  p50, p99, and max, or a top-N of values) and at a sample of raw rows,
+  including the largest values. Values that dominate the summary (for
+  example, a few rows contributing more than a stated share of a sum) are
+  either explained or reported separately, and the answer says so.
+rationale: >
+  Very different data can share the same mean and variance; a single
+  outlier, a sentinel value such as 999999, or a duplicated test account can
+  drive a summary statistic. Reading real rows is also how most logic bugs
+  in new analysis code are found.
+failure_example: >
+  Average order value rises 25 percent week over week. One B2B test order
+  for 2.4 million, created by QA in production, explains the entire change.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: |
+    SELECT AVG(order_value) FROM orders WHERE order_week = '2026-10-05'
+  good: |
+    SELECT MIN(order_value), APPROX_QUANTILES(order_value, 100)[OFFSET(50)] AS p50,
+           APPROX_QUANTILES(order_value, 100)[OFFSET(99)] AS p99, MAX(order_value)
+    FROM orders WHERE order_week = '2026-10-05';
+    SELECT order_id, customer_id, order_value FROM orders
+    WHERE order_week = '2026-10-05' ORDER BY order_value DESC LIMIT 20;
+sources:
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Advises looking at full distributions instead of summary metrics, investigating outliers, and inspecting raw examples for any new analysis code.
+  - title: Anscombe's quartet
+    url: https://en.wikipedia.org/wiki/Anscombe%27s_quartet
+    publisher: Wikipedia
+    accessed: 2026-10-11
+    supports: Four datasets with nearly identical summary statistics but very different shapes, built to show the importance of plotting data.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [consume/adhoc-limit-required]

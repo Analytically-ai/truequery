@@ -1,0 +1,51 @@
+id: sem/percentile-metrics-use-approximate
+title: Percentile metrics use warehouse approximate aggregates explicitly
+domain: sem
+modes: [build]
+applies_to: [any]
+statement: >
+  Median, percentile, and distribution metrics use the warehouse's approximate
+  aggregate (or a declared exact method with an acknowledged cost), and the
+  approximation method is recorded in the metric definition — never an exact
+  percentile computed by pulling raw rows client-side.
+rationale: >
+  Exact percentiles over billions of rows are a runaway-cost query wearing a
+  dashboard's refresh schedule: one p99 tile can scan terabytes hourly, while
+  approximate variants return within 1-2% accuracy at a fraction of the cost.
+failure_example: >
+  A p99 latency dashboard computes exact percentiles over raw events hourly
+  and burns $9K/month of BigQuery slots for a number approximate functions
+  would match within the display rounding.
+enforcement: detector
+detection_sketch: >
+  Flag percentile/median metric expressions lacking an approximate-aggregate
+  call or an explicit exact-with-approval tag; flag client-side percentile
+  computation over metric exports. False positives: small tables where exact
+  is cheap — exempt below a declared row-count threshold.
+severity_suggestion: warning
+examples:
+  bad: |-
+    measures:
+      - name: p99_latency
+        sql: percentile_cont(latency, 0.99)  # exact over full event stream
+        type: number
+  good: |-
+    measures:
+      - name: p99_latency
+        sql: approx_quantile(latency, 0.99)
+        type: number
+        description: 'Approximate p99 (±1%). Exact available on request for audits.'
+sources:
+  - title: Getting started data modeling
+    url: https://docs.cube.dev/docs/data-modeling/overview
+    publisher: Cube
+    accessed: 2026-10-12
+    supports: Measures support varied aggregation types matched to the question
+  - title: LookML terms and concepts
+    url: https://docs.cloud.google.com/looker/docs/lookml-terms-and-concepts
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Measure types include percentile and distribution options
+confidence: low
+conflicts_with: []
+status: draft

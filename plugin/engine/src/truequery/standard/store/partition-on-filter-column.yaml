@@ -1,0 +1,43 @@
+id: store/partition-on-filter-column
+title: Large tables are partitioned on a column queries actually filter
+domain: store
+modes: [build, change]
+applies_to: [bigquery, snowflake, databricks, iceberg, delta]
+statement: >
+  Any table expected to exceed ~1 GB per natural time grain (or already above
+  ~10 GB) must declare a partition spec on a column that recurring queries
+  filter or prune on — typically a date/timestamp truncated to day or coarser —
+  rather than remaining unpartitioned.
+rationale: >
+  Without a prunable partition layout every query scans the full table: linear
+  cost growth, blown SLOs, and runaway BigQuery billed bytes. Partitioning on
+  the filtered grain lets engines skip whole partitions (file pruning).
+failure_example: >
+  A 4 TB events table with no partition key forces a dashboard that needs one
+  day to scan 4 TB per refresh; partitioning by event date cuts it to ~12 GB.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared table size/growth expectation plus query-log or reviewed-query
+  filter columns in the contract file; checker compares partition spec against
+  that set. Static-only fallback (detector): flag CREATE of fact-like tables
+  (name matches fct_*/events/orders or >N columns with a timestamp) with no
+  PARTITION BY. False positives: small dims correctly left unpartitioned.
+severity_suggestion: warning
+examples:
+  bad: "CREATE TABLE events (event_ts TIMESTAMP, user_id BIGINT, payload STRING);"
+  good: "CREATE TABLE events (event_ts TIMESTAMP, user_id BIGINT, payload STRING) PARTITION BY DATE(event_ts);"
+sources:
+  - title: BigQuery — Introduction to partitioned tables
+    url: https://docs.cloud.google.com/bigquery/docs/partitioned-tables
+    publisher: Google Cloud
+    accessed: 2026-10-12
+    supports: Partitioned tables split data so queries can prune partitions and scan less.
+  - title: Delta Lake — Best practices (choose the right partition column)
+    url: https://docs.delta.io/best-practices/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Partition by a commonly filtered column such as date; each partition should hold substantial data.
+confidence: high
+conflicts_with: []
+status: draft

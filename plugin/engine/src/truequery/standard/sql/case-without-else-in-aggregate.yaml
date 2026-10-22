@@ -1,0 +1,67 @@
+id: sql/case-without-else-in-aggregate
+title: A CASE that feeds arithmetic or an aggregate states its ELSE
+domain: sql
+modes: [explore, build, change]
+applies_to: [any]
+statement: >
+  A CASE expression whose result feeds an aggregate (SUM, AVG), arithmetic,
+  or a filter has an explicit ELSE branch (ELSE 0, ELSE NULL, or ELSE an
+  explicit bucket such as 'unknown'), so the value for unmatched rows is a
+  visible decision.
+rationale: >
+  A CASE with no ELSE returns NULL for rows that match no branch. SUM over a
+  group with no matching rows is then NULL rather than 0, and NULL
+  propagates through arithmetic: gross - refunds becomes NULL for that
+  group. A later SUM across groups skips the NULL, so the group silently
+  drops out of the total.
+failure_example: >
+  net = SUM(CASE WHEN type = 'sale' THEN amt END) - SUM(CASE WHEN type =
+  'refund' THEN amt END) is NULL for every region with no refunds; the
+  company-wide net revenue, summed over regions, omits exactly the regions
+  that had a clean month.
+enforcement: detector
+detection_sketch: >
+  Match CASE nodes with no ELSE branch whose parent is an aggregate call, an
+  arithmetic operator, or a comparison in WHERE/HAVING. Advisory: ELSE NULL
+  is often what is wanted (e.g. AVG over a subset), and writing it
+  explicitly satisfies the rule. False positives: CASE inside COUNT, where
+  NULL for non-matching rows is the intended idiom; exempt COUNT parents.
+severity_suggestion: advisory
+examples:
+  bad: SELECT region, SUM(CASE WHEN type = 'sale' THEN amt END) - SUM(CASE WHEN type = 'refund' THEN amt END) AS net FROM tx GROUP BY region;
+  good: SELECT region, SUM(CASE WHEN type = 'sale' THEN amt ELSE 0 END) - SUM(CASE WHEN type = 'refund' THEN amt ELSE 0 END) AS net FROM tx GROUP BY region;
+sources:
+- title: Conditional Expressions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-conditional.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: If no WHEN condition yields true and the ELSE clause is omitted, the result of CASE is null.
+- title: Aggregate Functions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-aggregate.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: sum computes the sum of the non-null input values, so sum over only nulls yields null and sum across groups skips null groups.
+- title: CASE Expression (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/expressions/case
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: The ELSE clause of CASE is optional; if none of the conditions match and there is no ELSE, NULL is returned.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/negative-filter-drops-nulls]
+proof:
+  setup: |
+    CREATE TABLE tx(region VARCHAR, type VARCHAR, amt INT);
+    INSERT INTO tx VALUES ('north', 'sale', 100), ('north', 'refund', 10), ('south', 'sale', 50);
+  bad: "SELECT SUM(net) FROM (SELECT region, SUM(CASE WHEN type = 'sale' THEN amt END) - SUM(CASE WHEN type = 'refund' THEN amt END) AS net FROM tx GROUP BY region)"
+  bad_result: "[(90,)]"
+  good: "SELECT SUM(net) FROM (SELECT region, SUM(CASE WHEN type = 'sale' THEN amt ELSE 0 END) - SUM(CASE WHEN type = 'refund' THEN amt ELSE 0 END) AS net FROM tx GROUP BY region)"
+  good_result: "[(140,)]"
+  note: >
+    South has no refunds, so its refund SUM is NULL, its net is 50 - NULL =
+    NULL, and the outer SUM skips it: company net reads 90 instead of 140.
+    Standard CASE and aggregate semantics; identical in Postgres, BigQuery,
+    Snowflake, SQL Server and MySQL. Advisory despite the proof, because many
+    CASE expressions without ELSE are correct and the detector cannot tell
+    which; COALESCE(SUM(...), 0) is an equally valid fix.

@@ -1,0 +1,41 @@
+id: gov/redacting-views-for-pii
+title: Non-privileged consumers read PII through redacting views
+domain: gov
+modes: [build, assure]
+applies_to: [any, postgres]
+statement: >
+  Roles that do not need raw personal data are granted access only to views
+  that hash, truncate, or redact classified columns; raw tables stay
+  restricted to the owning pipeline role and named break-glass roles.
+rationale: >
+  Granting raw tables to broad audiences and trusting each query to redact
+  fails open: one ad-hoc export bypasses every redaction habit at once,
+  while views make the safe shape the only shape available.
+failure_example: >
+  Analysts query raw users directly; a CSV export of full emails and phones
+  ends up in a shared drive after a routine support investigation.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Requires declared view-to-role mapping; flag broad-role grants on raw PII
+  tables where no redacting view is the granted object. Warehouse-native
+  masking enforcement itself is runtime and not statically provable.
+  False positives: roles documented as raw-data-approved with owner sign-off.
+severity_suggestion: warning
+examples:
+  bad: "GRANT SELECT ON users TO analyst_role; analysts expected to redact manually."
+  good: "analyst_role holds SELECT on users_redacted (email hashed, phone last-four only); raw users stays with etl_owner."
+sources:
+- title: GRANT (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/sql-grant.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: privileges are grantable per object, enabling view-only access patterns
+- title: Privileges (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/ddl-priv.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: owner-only default access that explicit per-object grants relax
+confidence: medium
+conflicts_with: []
+status: draft

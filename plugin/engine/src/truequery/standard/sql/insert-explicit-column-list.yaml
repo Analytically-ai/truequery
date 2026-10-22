@@ -1,0 +1,60 @@
+id: sql/insert-explicit-column-list
+title: INSERT INTO names its target columns
+domain: sql
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Every INSERT INTO names the target columns explicitly and projects the
+  source in the same order (or uses a by-name form such as DuckDB's
+  INSERT INTO ... BY NAME); positional INSERT without a column list is
+  rejected.
+rationale: >
+  Positional inserts bind by declared column order, not by name. When the
+  source has the same number of compatible columns in a different order, the
+  insert succeeds and silently writes values into the wrong columns; the
+  defect surfaces far from the schema change that caused it.
+failure_example: >
+  A staging table is rebuilt with (last_name, first_name) instead of
+  (first_name, last_name); the nightly INSERT INTO customers SELECT * keeps
+  succeeding and every new customer is stored with first and last name
+  swapped.
+enforcement: detector
+detection_sketch: >
+  Match Insert nodes with no column-list child and no BY NAME modifier,
+  including INSERT ... SELECT * and INSERT ... VALUES. Message names the
+  expected column list. False positives: none; generated staging loads
+  should still expand the list at generation time.
+severity_suggestion: warning
+examples:
+  bad: INSERT INTO customers SELECT * FROM staging_customers;
+  good: INSERT INTO customers (first_name, last_name) SELECT first_name, last_name FROM staging_customers;
+sources:
+- title: INSERT (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-insert.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: If no column list is given, the default is all columns in declared order, and values from the query are associated with the column list left-to-right.
+- title: INSERT Statement (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/statements/insert
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: BY POSITION is the default insert column order (values bind left-to-right by declared order); BY NAME is the documented alternative that matches by column name.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE tgt(first_name VARCHAR, last_name VARCHAR);
+    CREATE TABLE src(last_name VARCHAR, first_name VARCHAR);
+    INSERT INTO src VALUES ('Smith', 'Anna'), ('Jones', 'Ben');
+  bad: "INSERT INTO tgt SELECT * FROM src; SELECT first_name, last_name FROM tgt ORDER BY first_name"
+  bad_result: "[('Jones', 'Ben'), ('Smith', 'Anna')]"
+  good: "INSERT INTO tgt (first_name, last_name) SELECT first_name, last_name FROM src; SELECT first_name, last_name FROM tgt ORDER BY first_name"
+  good_result: "[('Anna', 'Smith'), ('Ben', 'Jones')]"
+  note: >
+    DML proof: each query is the INSERT followed by a SELECT, and the result
+    is the fetchall of the final SELECT. Both tables have two VARCHAR columns,
+    so the positional insert raises no error and puts 'Smith' in first_name.
+    Positional binding is standard SQL: Postgres, Snowflake, SQL Server, MySQL
+    and BigQuery all behave the same. DuckDB's INSERT INTO tgt BY NAME SELECT
+    * FROM src is an acceptable alternative to an explicit list.

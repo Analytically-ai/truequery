@@ -1,0 +1,42 @@
+id: ops/disposable-dev-environments
+title: Test every change in an isolated disposable environment before production
+domain: ops
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Each branch or change set must be testable in an isolated environment
+  (separate schema, namespace, or virtual environment) created on demand
+  from production state, where writes never affect production tables.
+rationale: >
+  Testing in production schemas corrupts live data, blocks concurrent
+  work, and makes experiments expensive. Cheap isolated environments
+  are the precondition for every other change-safety practice.
+failure_example: >
+  Two developers test competing fixes in the shared prod schema. One
+  drops a table the other's test depends on; both declare their change
+  broken, and a half-tested version ships to meet the deadline.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Check project configuration for per-branch schema or naming templates
+  or virtual-environment support, plus CI jobs targeting them.
+  False positives: teams using warehouse-native cloning with different
+  config spelling.
+severity_suggestion: warning
+examples:
+  bad: All development runs write to the production schema.
+  good: Branch feature-x builds into its own schema; dropping it after merge is safe and automatic.
+sources:
+- title: Environments (SQLMesh concepts)
+  url: https://sqlmesh.readthedocs.io/en/stable/concepts/environments/
+  publisher: SQLMesh (Tobiko)
+  accessed: 2026-10-12
+  supports: Development environments are isolated namespaces that preview changes without impacting production.
+- title: The DataOps Manifesto
+  url: https://dataopsmanifesto.org/en/
+  publisher: DataKitchen (DataOps manifesto authors)
+  accessed: 2026-10-12
+  supports: Disposable technical environments that reflect production lower the cost of experimentation.
+confidence: high
+conflicts_with: []
+status: draft

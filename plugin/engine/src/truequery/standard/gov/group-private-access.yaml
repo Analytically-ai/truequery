@@ -1,0 +1,41 @@
+id: gov/group-private-access
+title: Internal models default to restricted access
+domain: gov
+modes: [build, assure]
+applies_to: [dbt]
+statement: >
+  Non-public dbt models belong to a group with restricted (private) access
+  unless they are explicitly designated public; only contracted public
+  models may be referenced across group or project boundaries.
+rationale: >
+  Without a default-restricted boundary, any team can hard-depend on any
+  internal model, so an access revocation or column removal silently breaks
+  unknown consumers and leaks data the owning team never approved.
+failure_example: >
+  Team B references team A's staging model directly; when A drops an email
+  column for privacy, B's pipeline fails and B's dashboard silently shows
+  stale PII exports.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Read group/access declarations; flag models with public access that are
+  not marked as contracted interfaces, and cross-group refs to non-public
+  models. False positives: same-team cross-group refs declared intentional.
+severity_suggestion: advisory
+examples:
+  bad: "access: public on stg_payments with no contract; three other groups ref it."
+  good: "stg_payments is access: private; only contracted marts_orders (public) is referenced cross-group."
+sources:
+- title: Add groups to your DAG
+  url: https://docs.getdbt.com/docs/build/groups
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: groups plus model access controls govern cross-group references
+- title: About dbt Mesh
+  url: https://docs.getdbt.com/docs/mesh/about-mesh
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: multi-project governance through public contracted models
+confidence: high
+conflicts_with: []
+status: draft

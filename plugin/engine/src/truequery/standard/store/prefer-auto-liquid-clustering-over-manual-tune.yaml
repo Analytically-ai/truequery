@@ -1,0 +1,37 @@
+id: store/prefer-auto-liquid-clustering-over-manual-tune
+title: Prefer automatic or liquid clustering over hand-tuned sort keys
+domain: store
+modes: [build, change]
+applies_to: [bigquery, snowflake, databricks, delta]
+statement: >
+  On platforms that offer it (BigQuery automatic re-clustering, Snowflake
+  automatic clustering, Delta liquid clustering), teams must use the automatic
+  mechanism rather than hand-maintained sort keys, Z-ORDER schedules, or periodic
+  manual rewrites — unless a benchmark in the repo justifies manual control.
+rationale: >
+  Hand-tuned sort layouts rot as data distribution shifts and every manual
+  rewrite is a full-scan maintenance bill; automatic clustering adapts
+  incrementally and removes a recurring human tuning loop that is usually stale.
+failure_example: >
+  A team runs weekly ZORDER BY jobs that each rewrite 2 TB to preserve a 2024
+  layout; query patterns moved on in 2025 and the rewrites now buy nothing.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: "OPTIMIZE events ZORDER BY (user_id); -- weekly cron, no benchmark on file"
+  good: "ALTER TABLE events CLUSTER BY AUTO (user_id); -- platform maintains layout incrementally"
+sources:
+  - title: Delta Lake — Use liquid clustering for Delta tables
+    url: https://docs.delta.io/delta-clustering/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Liquid clustering simplifies layout decisions versus legacy partitioning and Z-ORDER techniques.
+  - title: Snowflake — Clustering Keys and Clustered Tables
+    url: https://docs.snowflake.com/en/user-guide/tables-clustering-keys
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Snowflake documents automatic clustering maintenance for clustered tables.
+confidence: medium
+conflicts_with: []
+status: draft

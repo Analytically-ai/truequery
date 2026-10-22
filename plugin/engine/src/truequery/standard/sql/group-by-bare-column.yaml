@@ -1,0 +1,75 @@
+id: sql/group-by-bare-column
+title: In engines that allow it, GROUP BY queries never project bare ungrouped columns
+domain: sql
+modes: [build, change, assure, explore]
+applies_to: [mysql, sqlite]
+statement: >
+  On engines that silently accept ungrouped columns in an aggregate query
+  (MySQL with ONLY_FULL_GROUP_BY disabled, SQLite), every projected column
+  under GROUP BY is a grouping key, wrapped in an aggregate, or wrapped in an
+  explicit arbitrariness marker such as ANY_VALUE(). Engines that reject the
+  query (DuckDB, Postgres, BigQuery, Snowflake, MySQL in its default mode)
+  need no lint: the error already stops it.
+rationale: >
+  Where the engine accepts it, a bare column returns the value from one
+  input row of the group, chosen by the engine, and reads as meaningful.
+  Reports then show a plausible but arbitrary representative per group.
+  MySQL documents the chosen values as nondeterministic, and adding ORDER BY
+  does not influence the choice.
+failure_example: >
+  On a MySQL server with sql_mode stripped of ONLY_FULL_GROUP_BY,
+  SELECT dept, emp, COUNT(*) FROM staff GROUP BY dept returns an arbitrary
+  employee as the face of each department; a "lead per department" report is
+  fiction.
+enforcement: detector
+detection_sketch: >
+  Only when the target dialect is mysql or sqlite: in blocks with GROUP BY,
+  flag projected columns outside the grouping keys and outside aggregate
+  calls. Suggest MIN/MAX, ANY_VALUE (MySQL), or GROUP_CONCAT. False
+  positives: columns functionally dependent on a grouped primary key (MySQL
+  accepts these legitimately), and SQLite's documented single min()/max()
+  case, where bare columns come from the min/max row; exempt both when the
+  contract declares the key or the intent.
+severity_suggestion: warning
+examples:
+  bad: SELECT dept, emp, COUNT(*) FROM staff GROUP BY dept;
+  good: SELECT dept, MIN(emp), COUNT(*) FROM staff GROUP BY dept;
+sources:
+- title: MySQL Handling of GROUP BY (MySQL 8.4 Reference Manual)
+  url: https://dev.mysql.com/doc/refman/8.4/en/group-by-handling.html
+  publisher: Oracle
+  accessed: 2026-10-11
+  supports: ONLY_FULL_GROUP_BY is enabled by default and rejects the query; if it is disabled, the server is free to choose any value from each group, the values are nondeterministic, and ORDER BY cannot influence the choice. ANY_VALUE() is the documented explicit form.
+- title: SELECT, section Bare columns in an aggregate query (SQLite)
+  url: https://www.sqlite.org/lang_select.html
+  publisher: SQLite
+  accessed: 2026-10-11
+  supports: A bare column takes its value from one of the input rows of the group, and you usually do not know which, so the value is in many cases undefined; with exactly one min() or max() it comes from the min/max row.
+- title: SELECT (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-select.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: With GROUP BY or aggregates present it is not valid for the select list to refer to ungrouped columns except inside aggregates or when functionally dependent on grouped columns, so Postgres rejects the query.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE g(dept VARCHAR, emp VARCHAR);
+    INSERT INTO g VALUES ('e', 'a'), ('e', 'b'), ('f', 'c');
+  bad: "SELECT dept, emp, COUNT(*) FROM g GROUP BY dept ORDER BY dept"
+  bad_result: "ERROR: BinderException"
+  good: "SELECT dept, MIN(emp), COUNT(*) FROM g GROUP BY dept ORDER BY dept"
+  good_result: "[('e', 'a', 2), ('f', 'c', 1)]"
+  note: >
+    DuckDB cannot reproduce the silent failure: it raises a BinderException
+    ("column emp must appear in the GROUP BY clause or must be part of an
+    aggregate function"), which is why this rule is scoped to mysql and
+    sqlite. Postgres rejects it the same way (per its SELECT docs); the
+    review that prompted this rescope also reports rejection on BigQuery and
+    Snowflake. On SQLite, and on MySQL with ONLY_FULL_GROUP_BY off, the bad
+    query returns a row per department with an engine-chosen emp; run against
+    this setup in SQLite 3.50.4 (Python sqlite3) it returned
+    [('e', 'a', 2), ('f', 'c', 1)] with no warning, and nothing in the query
+    says why 'a' rather than 'b'. The proof records the DuckDB error and the
+    portable explicit form.

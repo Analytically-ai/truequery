@@ -1,0 +1,38 @@
+id: gov/row-policy-for-sensitive-tables
+title: Sensitive tables carry an enforced row filter
+domain: gov
+modes: [build, change, assure]
+applies_to: [postgres]
+statement: >
+  Every production table classified as holding personal or tenant-scoped
+  data has row-level security enabled with at least one policy recorded in
+  reviewed DDL; a classified table with no policy declaration fails review.
+rationale: >
+  Postgres tables have no policies by default, so anyone with table
+  privileges sees all rows; without a declared policy, tenant and region
+  scoping lives only in application code and one forgotten WHERE clause
+  leaks another tenant's rows.
+failure_example: >
+  customers table holds two tenants with no policy; an analyst query
+  without a tenant filter exports both tenants' emails to a shared sheet.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Join the declared PII classification against DDL: flag classified tables
+  with no ENABLE ROW LEVEL SECURITY plus CREATE POLICY. Static review
+  cannot prove the policy is correct (that needs the warehouse), only that
+  one is declared. False positives: single-tenant databases documented as
+  needing no row scoping.
+severity_suggestion: error
+examples:
+  bad: "customers classified as containing PII; no ENABLE ROW LEVEL SECURITY in DDL."
+  good: "ALTER TABLE customers ENABLE ROW LEVEL SECURITY plus a CREATE POLICY tenant_isolation scoping rows to the current tenant."
+sources:
+- title: Row Security Policies (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/ddl-rowsecurity.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: tables have no policies by default and access without a policy follows default-deny once RLS is enabled
+confidence: high
+conflicts_with: []
+status: draft

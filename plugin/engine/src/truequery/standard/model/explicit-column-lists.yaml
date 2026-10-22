@@ -1,0 +1,83 @@
+id: model/explicit-column-lists
+title: Persisted SQL lists its columns; SELECT * is for exploration only
+domain: model
+modes: [explore, build, change]
+applies_to: [any]
+statement: >
+  Mode-aware. In explore mode (throwaway ad-hoc queries that nothing else
+  reads) SELECT * is fine and is not flagged. In build and change mode, any
+  persisted SQL must project an explicit column list: model SQL (staging,
+  intermediate, mart), CREATE TABLE AS, CREATE VIEW and materialized views,
+  and consumer queries saved behind dashboards, scheduled reports, exports
+  and reverse-ETL syncs. A bare `*` or `alias.*` as the projection is a
+  finding. Narrowing forms that state intent (BigQuery `SELECT * EXCEPT
+  (...)`, Snowflake and DuckDB `SELECT * EXCLUDE (...)`) are reported at
+  advisory, not warning. Views that deliberately mirror one source must say
+  so in a comment or config to be exempt.
+rationale: >
+  A star binds the output shape to whatever the source holds at run or
+  creation time. Upstream additions, renames, reorders and drops then flow
+  silently into stored tables and consumers instead of showing up as a
+  reviewable diff. CTAS and views freeze the source shape at creation, so
+  later drift breaks positional INSERTs and dependents. Star selects in
+  models break merges and contracts at read time. Star selects in exports
+  can leak a newly added PII column to an outside party, and on columnar
+  warehouses they scan (and bill) every column.
+failure_example: >
+  `CREATE TABLE marts.orders AS SELECT * FROM raw.orders` picks up a new
+  2 MB JSON payload column added upstream; storage triples, and a downstream
+  INSERT by position starts writing amounts into the discount column.
+  Separately, a CSV export built on `SELECT *` silently gains a
+  customer_ssn column after an upstream change and emails it to a vendor.
+enforcement: detector
+detection_sketch: >
+  Parse SQL. In build and change mode, flag a star (`*` or `alias.*`) in the
+  top-level projection of model SQL, of CREATE TABLE AS / CREATE VIEW /
+  CREATE MATERIALIZED VIEW, and of persisted consumer queries (dashboard,
+  report, export and sync definitions), plus stars in subqueries that feed
+  those projections. Report `* EXCEPT` / `* EXCLUDE` at advisory. Exempt
+  COUNT(*), stars inside EXISTS subqueries, and views marked as intentional
+  source mirrors. In explore mode, do not flag. Mode comes from the run
+  (explore vs build/change) or from path conventions (an analyses/ or
+  scratch directory counts as explore).
+severity_suggestion: warning
+examples:
+  bad: |
+    -- build mode: model or CTAS
+    CREATE TABLE snap AS SELECT * FROM src;
+    SELECT * FROM {{ ref('stg_orders') }};
+  good: |
+    CREATE TABLE snap AS SELECT a, b FROM src;
+    SELECT order_id, status, total, updated_at FROM {{ ref('stg_orders') }};
+    -- explore mode: fine, not flagged
+    SELECT * FROM mart_orders LIMIT 20;
+sources:
+  - title: SELECT statement (DuckDB)
+    url: https://duckdb.org/docs/current/sql/statements/select
+    publisher: DuckDB
+    accessed: 2026-10-12
+    supports: Star expansion semantics (and the EXCLUDE/REPLACE star modifiers) that silently follow schema changes.
+  - title: About dbt models
+    url: https://docs.getdbt.com/docs/build/models
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Models as versioned SELECT statements other models build on.
+  - title: SELECT (PostgreSQL)
+    url: https://www.postgresql.org/docs/current/sql-select.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: SELECT * expands to all columns at execution, so dependent objects and consumers inherit source-schema changes.
+  - title: INSERT (PostgreSQL)
+    url: https://www.postgresql.org/docs/current/sql-insert.html
+    publisher: PostgreSQL Global Development Group
+    accessed: 2026-10-12
+    supports: Omitting the column list defaults to declared order, which is the fragility wildcard DDL creates for positional inserts.
+  - title: SQLMesh Models overview
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/models/overview/
+    publisher: SQLMesh (Tobiko)
+    accessed: 2026-10-12
+    supports: The final SELECT of a stored model should use explicit, inferrable column names and casts rather than opaque projections.
+confidence: high
+conflicts_with: []
+see_also: [gov/column-grants-for-pii]
+status: draft

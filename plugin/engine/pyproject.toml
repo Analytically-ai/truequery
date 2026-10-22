@@ -1,0 +1,32 @@
+[build-system]
+# hatchling builds out of tree: running the engine straight from an
+# installed plugin (uvx --from <plugin>/engine) writes nothing into it.
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "truequery"
+version = "0.1.0"
+description = "TrueQuery engine: offline, deterministic checks for SQL that silently returns the wrong answer"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["sqlglot==30.22.0", "pyyaml"]
+
+authors = [{ name = "Analytically.ai" }]
+
+[project.urls]
+Homepage = "https://github.com/Analytically-ai/truequery"
+Issues = "https://github.com/Analytically-ai/truequery/issues"
+
+[project.optional-dependencies]
+test = ["duckdb", "pytest"]
+
+[project.scripts]
+truequery = "truequery.cli:main"
+tq = "truequery.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/truequery"]
+exclude = ["**/__pycache__"]

@@ -1,0 +1,67 @@
+id: sql/row-number-dedupe-tiebreaker
+title: ROW_NUMBER dedupe orders by a unique tiebreaker
+domain: sql
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every ROW_NUMBER used to pick one row per group (QUALIFY rn = 1 or
+  equivalent) has an ORDER BY whose columns are unique within the partition.
+rationale: >
+  Without a stable order the surviving row is arbitrary; with a non-unique
+  order key, tied rows can swap winners between runs or reloads.
+  Golden-record tables then flap and downstream diffs never settle.
+failure_example: >
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY email ORDER BY updated_at) = 1
+  keeps the old address on Monday and the new one on Tuesday when two
+  captures share a timestamp.
+enforcement: detector
+detection_sketch: >
+  Match Window nodes containing ROW_NUMBER with no Order child, or an Order
+  whose keys are not provably unique (heuristic: timestamp or date keys with
+  no id-like column appended; exact when the contract declares the
+  partition's unique key). Recommend appending the primary key. False
+  positives: intentional any-row picks, which should state that intent.
+severity_suggestion: warning
+examples:
+  bad: SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY email ORDER BY ts) AS rn FROM t) WHERE rn = 1;
+  good: SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY email ORDER BY ts DESC, capture_id DESC) AS rn FROM t) WHERE rn = 1;
+sources:
+- title: SELECT (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-select.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Rows that the window's ORDER BY considers equivalent are peers; the ORDER BY decides nothing between them.
+- title: Window Functions (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/functions/window_functions
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: row_number() numbers rows within the partition using the provided ordering, so ties in that ordering leave the numbering among peers undetermined.
+- title: Non-Deterministic Behavior (DuckDB documentation)
+  url: https://duckdb.org/docs/current/operations_manual/non-deterministic_behavior
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: SQL set semantics allow results in a different order, and DuckDB exploits this, especially under multi-threaded execution.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/limit-requires-order-by]
+proof:
+  setup: |
+    CREATE TABLE t1(email VARCHAR, ts DATE, capture_id INT, addr VARCHAR);
+    INSERT INTO t1 VALUES ('a@x', '2024-01-01', 1, 'old'), ('a@x', '2024-01-01', 2, 'new');
+  setup_alt: |
+    CREATE TABLE t1(email VARCHAR, ts DATE, capture_id INT, addr VARCHAR);
+    INSERT INTO t1 VALUES ('a@x', '2024-01-01', 2, 'new'), ('a@x', '2024-01-01', 1, 'old');
+  bad: "SELECT email, addr FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY email ORDER BY ts DESC) AS rn FROM t1) WHERE rn = 1"
+  bad_result: "[('a@x', 'old')]"
+  bad_result_alt: "[('a@x', 'new')]"
+  good: "SELECT email, addr FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY email ORDER BY ts DESC, capture_id DESC) AS rn FROM t1) WHERE rn = 1"
+  good_result: "[('a@x', 'new')]"
+  note: >
+    setup and setup_alt hold the same two rows, which tie on ts, in a
+    different insert order. Ordered by ts alone, the surviving row follows
+    physical order; with the unique capture_id appended, the latest capture
+    wins on both. In DuckDB the tie resolves by insertion order on this tiny
+    single-threaded input; in Postgres, Snowflake, BigQuery and SQL Server the
+    order among peers is likewise unspecified and can change with plans and
+    parallelism.

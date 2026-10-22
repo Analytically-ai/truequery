@@ -1,0 +1,35 @@
+id: ops/breaking-change-categorization
+title: Categorize each model change as breaking or non-breaking and backfill accordingly
+domain: ops
+modes: [change]
+applies_to: [any]
+statement: >
+  Every directly modified model in a plan must carry an explicit
+  breaking or non-breaking categorization; breaking changes backfill
+  the model and its downstream dependents, non-breaking changes
+  backfill only the model itself.
+rationale: >
+  Defaulting everything to breaking wastes compute on full downstream
+  backfills; defaulting everything to non-breaking silently leaves
+  downstream tables inconsistent with their parents. Explicit
+  categorization forces the author to state the blast radius.
+failure_example: >
+  Adding a column is auto-treated as breaking: 40 downstream models
+  backfill six months of history for no reason. The next month a real
+  filter change ships as non-breaking and downstream marts disagree
+  with their parent for weeks.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: All changes backfilled downstream by default with no recorded category.
+  good: Plan records the filter-logic change as breaking and the new-column addition as non-breaking with no downstream backfill.
+sources:
+- title: Plans (SQLMesh concepts)
+  url: https://sqlmesh.readthedocs.io/en/stable/concepts/plans/
+  publisher: SQLMesh (Tobiko)
+  accessed: 2026-10-12
+  supports: Change categories (breaking vs non-breaking) drive which downstream models are backfilled.
+confidence: medium
+conflicts_with: []
+status: draft

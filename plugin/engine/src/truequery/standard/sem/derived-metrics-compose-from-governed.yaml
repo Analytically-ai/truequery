@@ -1,0 +1,52 @@
+id: sem/derived-metrics-compose-from-governed
+title: Derived metrics compose only from governed inputs
+domain: sem
+modes: [build, change]
+applies_to: [dbt]
+statement: >
+  Derived (and chained derived) metrics reference only other governed metrics
+  by name — never raw columns, model SQL, or dashboard calculations — so every
+  input to a derived number is itself versioned, tested, and documented.
+rationale: >
+  A derived metric reaching past the layer into raw columns inherits none of
+  the layer's filters, grain guards, or change review: one upstream rename
+  breaks it silently while its sibling metrics migrate cleanly.
+failure_example: >
+  `net_revenue = gross_revenue - refunds_raw.refund_amount` reads a staging
+  column directly; a refunds backfill restates history for every metric except
+  this one, and net revenue disagrees with gross-minus-refunds for a quarter.
+enforcement: detector
+detection_sketch: >
+  Parse derived metric expressions; flag references to models, columns, or
+  SQL functions over raw inputs instead of metric names. Allow metric-name
+  references plus arithmetic and documented constants only. False positives:
+  unit-conversion constants and calendar logic — allowlist pure functions of
+  the referenced metrics.
+severity_suggestion: warning
+examples:
+  bad: |-
+    - name: net_revenue
+      type: derived
+      type_params:
+        expr: gross_revenue - SUM(stg_refunds.amount)  # raw column reference
+        metrics: [gross_revenue]
+  good: |-
+    - name: net_revenue
+      type: derived
+      type_params:
+        expr: gross_revenue - refund_total
+        metrics: [gross_revenue, refund_total]
+sources:
+  - title: Creating metrics
+    url: https://docs.getdbt.com/docs/build/metrics-overview
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Derived metrics combine input metrics by name
+  - title: Build your metrics
+    url: https://docs.getdbt.com/docs/build/build-metrics-intro
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Metric types form a composable governed layer
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,58 @@
+id: sql/left-join-null-rejecting-where
+title: Filters on the nullable side of an outer join live in ON
+domain: sql
+modes: [build, change, assure, explore]
+applies_to: [any]
+statement: >
+  Predicates on columns of the nullable side of a LEFT, RIGHT, or FULL join
+  appear in the ON clause; the WHERE clause never null-rejects those columns
+  unless the inner-join conversion is intended and recorded.
+rationale: >
+  A WHERE predicate that null-rejects eliminates the unmatched rows the outer
+  join was written to keep, silently converting it to an inner join. Reports
+  undercount with no error.
+failure_example: >
+  FROM customers LEFT JOIN orders ... WHERE orders.status = 'done' drops
+  every customer with no orders; a retention report silently excludes the
+  exact cohort it should count as inactive.
+enforcement: detector
+detection_sketch: >
+  Match outer Join nodes where the query-level WHERE references nullable-side
+  columns in null-rejecting comparisons. Suggest moving the predicate into
+  ON. False positives: deliberate anti-joins (WHERE right.key IS NULL), which
+  are null-preserving and exempt, and deliberate inner-join conversions,
+  which should be rewritten as INNER JOIN.
+severity_suggestion: warning
+examples:
+  bad: SELECT c.id FROM c LEFT JOIN o ON o.cid = c.id WHERE o.status = 'done';
+  good: SELECT c.id FROM c LEFT JOIN o ON o.cid = c.id AND o.status = 'done';
+sources:
+- title: Joins Between Tables (PostgreSQL tutorial)
+  url: https://www.postgresql.org/docs/current/tutorial-join.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Outer joins preserve unmatched rows with NULLs on the nullable side, which WHERE filtering then removes.
+- title: Table Expressions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/queries-table-expressions.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: A restriction in the ON clause is processed before the join while one in WHERE is processed after it; for outer joins this matters.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE lc(id INT);
+    INSERT INTO lc VALUES (1), (2);
+    CREATE TABLE lo(cid INT, status VARCHAR);
+    INSERT INTO lo VALUES (1, 'done');
+  bad: "SELECT lc.id, lo.status FROM lc LEFT JOIN lo ON lo.cid = lc.id WHERE lo.status = 'done' ORDER BY 1"
+  bad_result: "[(1, 'done')]"
+  good: "SELECT lc.id, lo.status FROM lc LEFT JOIN lo ON lo.cid = lc.id AND lo.status = 'done' ORDER BY 1"
+  good_result: "[(1, 'done'), (2, None)]"
+  note: >
+    Customer 2 has no order, so lo.status is NULL on its row; the WHERE
+    predicate evaluates to unknown and drops it, turning the LEFT JOIN into
+    an inner join. Moving the predicate into ON keeps customer 2 with a NULL
+    status. Standard SQL; identical in Postgres, BigQuery, Snowflake and SQL
+    Server.

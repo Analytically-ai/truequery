@@ -1,0 +1,39 @@
+id: gov/no-public-privileges
+title: No privileges granted to PUBLIC on governed data
+domain: gov
+modes: [build, change, assure]
+applies_to: [any, postgres]
+statement: >
+  No GRANT of any privilege on production schemas, tables, or sequences
+  names the PUBLIC pseudo-role; every consumer accesses governed data
+  through a named role with an owner.
+rationale: >
+  A grant to PUBLIC silently includes every current and future role in the
+  database, so PII tables become world-readable the moment a new login is
+  created, with no review catching it.
+failure_example: >
+  GRANT SELECT ON users TO PUBLIC added for a one-off demo stays in the
+  migration history and exposes emails to every service account created later.
+enforcement: detector
+detection_sketch: >
+  Scan reviewed SQL for TO PUBLIC in any GRANT statement. False positives:
+  grants on intentionally-open helper functions in a sandbox schema;
+  allowlist by schema, never by default.
+severity_suggestion: error
+examples:
+  bad: "GRANT SELECT ON app.users TO PUBLIC;"
+  good: "GRANT SELECT ON app.users TO reporting_role;"
+sources:
+- title: GRANT (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/sql-grant.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: GRANT targets named roles; PUBLIC grants affect all roles
+- title: Privileges (PostgreSQL documentation)
+  url: https://www.postgresql.org/docs/current/ddl-priv.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-12
+  supports: default owner-only access model that explicit grants relax
+confidence: high
+conflicts_with: []
+status: draft

@@ -1,0 +1,48 @@
+id: ingest/propagate-deletes-explicitly
+title: Source deletes propagate under an explicit hard/soft policy
+domain: ingest
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Every replicated source MUST declare how source-side deletes propagate:
+  hard-delete downstream, soft-delete flag, or ignore-with-log. A CDC or
+  snapshot-diff intake with no delete policy fails review.
+rationale: >
+  Deletes are the quiet half of replication: connectors that stream only
+  inserts/updates let deleted rows live forever downstream. Reports keep
+  counting churned users, and privacy deletion requests (GDPR) silently
+  fail to propagate - a compliance incident, not just a data bug.
+failure_example: >
+  A CDC connector captures inserts and updates but drops delete events.
+  A user exercises their right to erasure; the warehouse copy retains
+  their record for months until an audit finds it.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Requires the intake contract to name its delete disposition. A detector
+  can flag CDC subscriptions or diff-loaders with no delete/tombstone
+  handling branch; tombstone support needs the envelope format to judge.
+  False positives: append-only event sources where deletes are meaningless
+  by declaration.
+severity_suggestion: warning
+examples:
+  bad: |
+    # consumer applies inserts/updates; delete events unhandled
+    if event.op in ("c", "u"): apply(event)
+  good: |
+    if event.op == "d": soft_delete(event.key, deleted_at=event.ts)
+    elif event.op in ("c", "u"): apply(event)
+sources:
+  - title: Debezium Architecture
+    url: https://debezium.io/documentation/reference/stable/architecture.html
+    publisher: Debezium
+    accessed: 2026-10-12
+    supports: Change-event envelopes include delete/tombstone semantics the consumer must handle
+  - title: Introduction to streams
+    url: https://docs.snowflake.com/en/user-guide/streams-intro
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Streams expose row-level change metadata including deletes for downstream application
+confidence: high
+conflicts_with: []
+status: draft

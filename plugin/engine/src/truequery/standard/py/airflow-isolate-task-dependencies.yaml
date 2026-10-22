@@ -1,0 +1,40 @@
+id: py/airflow-isolate-task-dependencies
+title: Isolate conflicting task dependencies instead of sharing one image
+domain: py
+modes: [build, change]
+applies_to: [airflow]
+statement: >
+  When tasks in one DAG need mutually incompatible Python packages, run the
+  conflicting task in an isolated environment (virtualenv/external-Python /
+  container operator) rather than forcing one shared image to satisfy both.
+rationale: >
+  One shared image for conflicting pins resolves to "works for neither":
+  silent version drift between local dev and the worker image produces runs
+  that pass in CI and corrupt or crash in production, with the failure
+  surfacing as wrong numbers rather than an import error.
+failure_example: >
+  Task A needs pandas 1.x for a legacy reader while task B needs pandas 2.x;
+  the shared image installs 2.x, task A silently parses dates differently,
+  and a month of loads carries shifted month-end boundaries before anyone diffs.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: advisory
+examples:
+  bad: |
+    # requirements.txt pins pandas==2.2; legacy task still coded against pandas 1.x
+    PythonOperator(task_id="legacy_read", python_callable=legacy_read)
+  good: |
+    PythonOperator(
+        task_id="legacy_read",
+        python_callable=legacy_read,
+        requirements=["pandas==1.5.3"],
+    )
+sources:
+  - title: "Best Practices — Apache Airflow (Handling conflicting/complex Python dependencies)"
+    url: https://airflow.apache.org/docs/apache-airflow/stable/best-practices.html
+    publisher: Apache Airflow
+    accessed: 2026-10-12
+    supports: Recommends virtualenv/external-Python/container operators for conflicting deps.
+confidence: medium
+conflicts_with: []
+status: draft

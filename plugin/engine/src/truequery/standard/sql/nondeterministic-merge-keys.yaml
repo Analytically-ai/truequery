@@ -1,0 +1,69 @@
+id: sql/nondeterministic-merge-keys
+title: Merge and dedupe keys never use nondeterministic functions
+domain: sql
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Merge keys, dedupe keys, and incremental watermarks never call per-row
+  nondeterministic functions (RAND, RANDOM, UUID, GEN_RANDOM_UUID, NEWID);
+  wall-clock calls in keys are replaced by deterministic business keys, and
+  templates are checked pre-render so Jinja markers like is_incremental do
+  not hide the call.
+rationale: >
+  A key that changes per row or per run defeats matching by construction:
+  every rerun produces new keys, so a MERGE inserts instead of updating and
+  reruns are never idempotent. The table silently grows by one full copy of
+  the batch per rerun.
+failure_example: >
+  A merge keyed on UUID() inserts the full batch on every run; a retried
+  backfill triples the fact table before anyone notices row counts climbing.
+enforcement: detector
+detection_sketch: >
+  In MERGE ON clauses, incremental model unique_key expressions, and dedupe
+  CTEs, flag RAND/RANDOM, UUID/GEN_RANDOM_UUID/NEWID, and wall-clock calls in
+  key position, including keys computed from such calls in a source CTE. Run
+  on the Jinja pre-render template for dbt models. Distinguish
+  stable-in-query CURRENT_DATE (warning in watermarks) from per-row calls
+  (error in keys). False positives: audit columns stamped at write time
+  outside keys; exempt non-key projections.
+severity_suggestion: error
+examples:
+  bad: MERGE INTO t USING (SELECT uuid() AS uid, order_id, amt FROM s) s ON t.uid = s.uid WHEN NOT MATCHED THEN INSERT VALUES (s.uid, s.order_id, s.amt);
+  good: MERGE INTO t USING s ON t.order_id = s.order_id WHEN MATCHED THEN UPDATE SET amt = s.amt WHEN NOT MATCHED THEN INSERT (order_id, amt) VALUES (s.order_id, s.amt);
+sources:
+- title: MERGE INTO Statement (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/statements/merge_into
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: MERGE updates rows whose ON condition matches and inserts rows with no match (WHEN NOT MATCHED THEN INSERT), so a key that never matches always inserts.
+- title: Utility Functions (DuckDB documentation)
+  url: https://duckdb.org/docs/current/sql/functions/utility
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: gen_random_uuid() / uuid() return a random UUID per call.
+- title: Configure incremental models (dbt)
+  url: https://docs.getdbt.com/docs/build/incremental-models
+  publisher: dbt Labs
+  accessed: 2026-10-11
+  supports: Incremental models with incremental_strategy merge template a MERGE matched on the configured unique_key, so the key must be stable across runs.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  setup: |
+    CREATE TABLE tgt(uid VARCHAR, order_id INT, amt INT);
+    CREATE TABLE src(order_id INT, amt INT);
+    INSERT INTO src VALUES (1, 10), (2, 20);
+  bad: "MERGE INTO tgt USING (SELECT uuid()::VARCHAR AS uid, order_id, amt FROM src) s ON tgt.uid = s.uid WHEN MATCHED THEN UPDATE SET amt = s.amt WHEN NOT MATCHED THEN INSERT (uid, order_id, amt) VALUES (s.uid, s.order_id, s.amt); MERGE INTO tgt USING (SELECT uuid()::VARCHAR AS uid, order_id, amt FROM src) s ON tgt.uid = s.uid WHEN MATCHED THEN UPDATE SET amt = s.amt WHEN NOT MATCHED THEN INSERT (uid, order_id, amt) VALUES (s.uid, s.order_id, s.amt); SELECT COUNT(*) FROM tgt"
+  bad_result: "[(4,)]"
+  good: "MERGE INTO tgt USING (SELECT uuid()::VARCHAR AS uid, order_id, amt FROM src) s ON tgt.order_id = s.order_id WHEN MATCHED THEN UPDATE SET amt = s.amt WHEN NOT MATCHED THEN INSERT (uid, order_id, amt) VALUES (s.uid, s.order_id, s.amt); MERGE INTO tgt USING (SELECT uuid()::VARCHAR AS uid, order_id, amt FROM src) s ON tgt.order_id = s.order_id WHEN MATCHED THEN UPDATE SET amt = s.amt WHEN NOT MATCHED THEN INSERT (uid, order_id, amt) VALUES (s.uid, s.order_id, s.amt); SELECT COUNT(*) FROM tgt"
+  good_result: "[(2,)]"
+  note: >
+    DML proof: each query runs the same MERGE twice (a load and its rerun)
+    and then SELECT COUNT(*); the result is the fetchall of that final
+    SELECT. Keyed on a fresh uuid(), the rerun matches nothing and inserts
+    the batch again, so 2 source rows become 4 target rows. Keyed on the
+    business key order_id, the rerun updates in place and the count stays 2;
+    the uuid is still generated, but only as a non-key surrogate. Applies to
+    Postgres gen_random_uuid(), BigQuery GENERATE_UUID(), Snowflake
+    UUID_STRING() and SQL Server NEWID() alike. Verified with DuckDB 1.5.6.

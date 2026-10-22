@@ -1,0 +1,68 @@
+id: orch/explicit-schedule-timezone
+title: Schedules declare their timezone explicitly
+domain: orch
+modes:
+- build
+- change
+- assure
+applies_to:
+- airflow
+- dagster
+statement: >
+  Every time-based schedule MUST state its timezone in code (explicit UTC is
+  fine) rather than inheriting it from deployment config. Airflow: a
+  timezone-aware start_date built with pendulum, or a timetable given a
+  timezone such as CronTriggerTimetable(..., timezone=...). Dagster:
+  execution_timezone on the schedule (or timezone on the partitions
+  definition for partitioned jobs).
+rationale: >
+  Airflow applies `[core] default_timezone` (utc on a fresh install, but
+  configurable to `system` or any zone) to naive datetimes, and Dagster runs
+  schedules without a timezone in UTC. A DAG that relies on the inherited
+  value changes wall-clock behaviour when the config changes, and
+  timezone-aware cron schedules shift their UTC run time across daylight
+  saving transitions, which only matters if the author knows which zone
+  applies. Stating the zone makes both visible in review.
+failure_example: >
+  A revenue DAG uses a naive start_date and schedule "0 2 * * *". A platform
+  migration sets default_timezone to America/New_York; the DAG now runs at
+  06:00 or 07:00 UTC instead of 02:00 UTC and the downstream 05:00 UTC
+  extract reads a partial day.
+enforcement: detector
+detection_sketch: >
+  Airflow: flag DAGs with a cron/preset schedule whose start_date is a naive
+  datetime (no tz argument / tzinfo) and whose timetable, if any, has no
+  timezone argument. Dagster: flag @schedule / ScheduleDefinition /
+  build_schedule_from_dbt_selection calls without execution_timezone, unless
+  the job's partitions definition sets timezone. Accept explicit "UTC". Low
+  false-positive rate; schedule=None DAGs are exempt.
+severity_suggestion: warning
+examples:
+  bad: |
+    DAG("rev", schedule="0 2 * * *", start_date=datetime(2024, 1, 1))  # naive
+  good: |
+    DAG("rev", schedule=CronTriggerTimetable("0 2 * * *", timezone="America/New_York"),
+        start_date=pendulum.datetime(2024, 1, 1, tz="America/New_York"))
+    # Dagster: ScheduleDefinition(..., cron_schedule="0 2 * * *", execution_timezone="America/New_York")
+sources:
+- title: Time zones (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timezone.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: default_timezone is utc on install and configurable; naive start/end dates get the default
+    zone; make DAGs aware with a pendulum start_date; aware cron DAGs respect daylight saving time.
+- title: Timetables (Airflow 3.3.2 documentation)
+  url: https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html
+  publisher: Apache Software Foundation
+  accessed: '2026-10-11'
+  supports: Shows CronTriggerTimetable("0 1 * * 3", timezone="UTC"); in Airflow 3 a bare cron string
+    resolves to CronTriggerTimetable (create_cron_data_intervals defaults to False).
+- title: Customizing a schedule's execution timezone (Dagster docs)
+  url: https://dagster.io/docs/guides/automate/schedules/customizing-execution-timezone
+  publisher: Dagster Labs
+  accessed: '2026-10-11'
+  supports: execution_timezone sets a schedule's zone; schedules without one run in UTC; documents DST
+    handling for skipped and repeated times.
+confidence: high
+conflicts_with: []
+status: draft

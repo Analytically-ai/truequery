@@ -1,0 +1,55 @@
+id: py/idempotent-task-logic
+title: Pipeline Python callables must be idempotent across retries and backfills
+domain: py
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Any Python callable run by an orchestrator (task, asset, model) must
+  produce the same warehouse state when retried or backfilled for the same
+  logical input: writes must be overwrite/merge keyed on the run's logical
+  partition, never blind appends, and side effects (emails, API posts, file
+  moves) must be guarded by the run/partition key.
+rationale: >
+  Orchestrators retry failed tasks and backfill past partitions by design;
+  a non-idempotent callable turns one transient failure into duplicated
+  rows or double-charged side effects, and restatements corrupt history
+  instead of repairing it.
+failure_example: >
+  A task appends its DataFrame to reporting.daily_kpis with to_sql APPEND
+  and no partition overwrite; an Airflow retry after a downstream timeout
+  inserts the same day twice and revenue dashboards read 2x for a week
+  before anyone notices.
+enforcement: runtime
+detection_sketch: >
+  Execute the callable twice against an isolated staging target with the
+  same logical partition and diff the resulting tables and recorded side
+  effects; any delta fails. Static pre-screen may flag append-mode writes
+  without partition filters. False positives: intentionally append-only
+  event logs keyed by run id where dedup happens downstream and is
+  declared in the task docs.
+severity_suggestion: error
+examples:
+  bad: |
+    def load_kpis(df, engine):
+        df.to_sql("daily_kpis", engine, if_exists="append", index=False)
+  good: |
+    def load_kpis(df, engine, ds):
+        with engine.begin() as tx:
+            tx.execute(text("DELETE FROM daily_kpis WHERE ds = :ds"), {"ds": ds})
+            df.to_sql("daily_kpis", tx, if_exists="append", index=False)
+sources:
+  - title: "Glossary (Idempotency) | SQLMesh docs"
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/glossary/
+    publisher: SQLMesh (Tobiko)
+    accessed: 2026-10-12
+    supports: Idempotency defined as same outputs for same inputs no matter
+      how many times the operation is applied.
+  - title: "Partitions and backfills | Dagster Docs"
+    url: https://dagster.io/docs/guides/build/partitions-and-backfills
+    publisher: Dagster
+    accessed: 2026-10-12
+    supports: Partitioned assets are designed to be re-executed per
+      partition via backfills, which requires per-partition re-runs to be safe.
+confidence: high
+conflicts_with: []
+status: draft

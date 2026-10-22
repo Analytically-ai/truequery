@@ -1,0 +1,52 @@
+id: sem/no-fanout-double-counting
+title: Multi-entity joins in the semantic layer must not fan out measures
+domain: sem
+modes: [build, change, assure]
+applies_to: [dbt]
+statement: >
+  In dbt Semantic Layer joins, a measure may only be queried with dimensions
+  from another semantic model through a declared entity path where the join is
+  many-to-one from the measure side. Joins that fan out (one-to-many from the
+  measure side) are rejected or require an explicit deduplication rule.
+rationale: >
+  Fanout silently multiplies measures: one order joined to three line items
+  triples revenue. It is the single most expensive wrong-number bug in metric
+  layers because every downstream number inflates without any error raised.
+failure_example: >
+  Revenue sliced by product category fans out across order line items and
+  reports $3.1M instead of $1.2M; the inflated figure ships in a board deck
+  before anyone re-checks.
+enforcement: detector
+detection_sketch: >
+  Use MetricFlow entity graph: for each measure/dimension pair, resolve the
+  join path and flag paths where the measure-side entity is not unique on the
+  join key (entity expr without a uniqueness test, or join declared as
+  one-to-many from the measure side). False positives: legit multi-count
+  patterns (line-item revenue) where fanout is the intent — resolved by
+  defining the measure at the finer grain.
+severity_suggestion: error
+examples:
+  bad: |-
+    # orders joined to line_items, SUM(order_total) grouped by line category
+    SELECT c.category, SUM(o.order_total) FROM orders o
+    JOIN line_items l ON l.order_id = o.id GROUP BY 1  -- fanned out
+  good: |-
+    entities:
+      - name: order_id
+        type: primary
+        expr: order_id
+    # MetricFlow joins line-item grain up to order via the primary entity only
+sources:
+  - title: Joins
+    url: https://docs.getdbt.com/docs/build/join-logic
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: MetricFlow joins semantic models through entities with defined join paths
+  - title: Entities
+    url: https://docs.getdbt.com/docs/build/entities
+    publisher: dbt Labs
+    accessed: 2026-10-12
+    supports: Primary entities identify unique rows and anchor safe joins
+confidence: high
+conflicts_with: []
+status: draft

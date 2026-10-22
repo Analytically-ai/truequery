@@ -1,0 +1,47 @@
+id: dq/audits-blocking-every-run
+title: Audits run automatically on every materialization with blocking defaults
+domain: dq
+modes: [build, change]
+applies_to: [sqlmesh, dbt, dagster, any]
+statement: >
+  Quality audits execute automatically as part of every model materialization
+  or plan, and a failed audit blocks promotion of the data downstream by
+  default; non-blocking downgrades require explicit per-audit justification.
+rationale: >
+  Opt-in quality gates are skipped exactly when they matter most: rushed
+  hotfixes and large restatements. Automatic blocking audits contain bad
+  data in an isolated environment before production tables are touched.
+failure_example: >
+  A Friday hotfix skips the manual quality run to save twenty minutes and
+  promotes a mis-joined customer dimension; every weekend report carries
+  mismatched segments.
+enforcement: runtime
+detection_sketch: >
+  Confirm pipeline definitions wire audits into the default plan or run
+  path rather than a separate manual command; execution needs the runtime.
+  False positives: exploratory branches blocked by strict defaults until
+  non-production contexts are configured to warn instead of halt.
+severity_suggestion: warning
+examples:
+  bad: |-
+    AUDIT (name assert_price_not_null);  # defined but only run manually
+  good: |-
+    MODEL (name marts.orders, audits (assert_price_not_null, assert_no_orphans));
+    -- plan halts before promotion when any audit returns rows
+sources:
+  - title: Auditing
+    url: https://sqlmesh.readthedocs.io/en/stable/concepts/audits/
+    publisher: Tobiko
+    accessed: 2026-10-12
+    supports: SQLMesh runs each model's audits automatically on plan and
+      halts on failure so invalid data never reaches production, with
+      opt-out non-blocking audits
+  - title: Testing assets with asset checks
+    url: https://dagster.io/docs/guides/test/asset-checks
+    publisher: Dagster Labs
+    accessed: 2026-10-12
+    supports: Dagster documents checks attached to assets as the testing
+      mechanism for produced data
+confidence: high
+conflicts_with: []
+status: draft

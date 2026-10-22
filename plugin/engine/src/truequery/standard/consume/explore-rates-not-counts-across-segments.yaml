@@ -1,0 +1,51 @@
+id: consume/explore-rates-not-counts-across-segments
+title: Compare segments of different sizes with rates, and check for mix shift
+domain: consume
+modes: [explore]
+applies_to: [any]
+statement: >
+  When an answer compares segments (regions, cohorts, plans, variants) or
+  periods whose base populations differ by more than a factor of two, the
+  comparison is made on a normalized measure (rate, per-unit value, or
+  share) with its denominator stated, and each segment's base size is shown
+  next to the rate. When an overall rate is compared across periods or
+  groups, the answer also shows the rate within the main sub-segments, so a
+  change in segment mix (Simpson's paradox) is visible rather than read as a
+  change in behaviour.
+rationale: >
+  Raw counts mostly measure segment size, so the biggest segment "wins"
+  every comparison. Pooled rates can move, or even reverse, purely because
+  the mix of segments changed, while every segment's own rate stays the same
+  or moves the other way.
+failure_example: >
+  A report says the US "drives the most support tickets" (12,000 versus
+  Germany's 2,100). Per 1,000 active accounts, Germany's rate is 2.3 times
+  the US rate; the escalation budget is allocated to the wrong market.
+enforcement: judgment
+detection_sketch: null
+severity_suggestion: warning
+examples:
+  bad: |
+    SELECT country, COUNT(*) AS tickets FROM tickets GROUP BY 1 ORDER BY 2 DESC
+  good: |
+    SELECT t.country,
+           COUNT(*)                                 AS tickets,
+           a.active_accounts,
+           1000.0 * COUNT(*) / a.active_accounts    AS tickets_per_1k_accounts
+    FROM tickets t JOIN active_accounts_by_country a USING (country)
+    GROUP BY t.country, a.active_accounts
+sources:
+  - title: Good Data Analysis
+    url: https://developers.google.com/machine-learning/guides/good-data-analysis
+    publisher: Google for Developers (Patrick Riley)
+    accessed: 2026-10-11
+    supports: Advises slicing data, watching for mix shifts and Simpson's paradox when comparing groups, and giving ratios clear numerators and denominators.
+  - title: Simpson's paradox
+    url: https://en.wikipedia.org/wiki/Simpson%27s_paradox
+    publisher: Wikipedia
+    accessed: 2026-10-11
+    supports: Describes trends that appear within groups reversing when groups are combined, with the 1973 UC Berkeley admissions case as a worked example.
+confidence: medium
+conflicts_with: []
+status: draft
+see_also: [consume/explore-question-metric-grain-stated]

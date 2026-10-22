@@ -1,0 +1,76 @@
+id: ops/full-refresh-approval
+title: Full refreshes are opt-in, approved, and recoverable
+domain: ops
+modes: [build, change, assure]
+applies_to: [dbt, any]
+statement: >
+  Any operation that rebuilds a table from scratch (full refresh,
+  truncate-and-load, partition overwrite beyond the agreed window) must
+  require an explicit flag, confirmation step, or approval; it must never
+  be the default path of a routine run. Before the approved refresh
+  replaces the table, the prior state must be recoverable: a clone or
+  snapshot taken first, or a time-travel window long enough to cover the
+  run, with the rollback command recorded. Tables that are trivially
+  rebuildable from retained source data may declare rebuild-from-source as
+  their rollback instead.
+rationale: >
+  Full refreshes erase history-dependent state, multiply cost, and can
+  destroy the only copy of late-arriving corrections. They are also the
+  highest data-loss-risk load: a bad source extract or a mid-load failure
+  leaves an empty or corrupt table with nothing to restore. Making them
+  deliberate keeps routine runs incremental, and a pre-refresh snapshot
+  turns a catastrophe into a rollback.
+failure_example: >
+  A developer adds a config that triggers full refresh on every run to
+  "keep it simple"; the 3-year events table rebuilds nightly for a month
+  before anyone notices the bill and the lost intraday corrections. In
+  another pipeline a full-refresh job truncates dim_customers, the source
+  extract fails halfway, and the dimension sits half-empty for a day until
+  yesterday's backup is restored by hand.
+enforcement: detector
+detection_sketch: >
+  Detector (code files only): parse model configs, job definitions and run
+  commands; flag full_refresh set as a project or model default, scheduled
+  jobs that always pass --full-refresh, and truncate-and-load or
+  CREATE OR REPLACE sequences on persistent tables in scheduled code with
+  no preceding CLONE / snapshot statement and no recorded rollback. The
+  recoverability check is a heuristic: a time-travel window set elsewhere
+  (see store/time-travel-retention-explicit) also satisfies it, so report
+  missing snapshots at advisory when the platform has time travel. Whether
+  a human approved a given run is not visible in code. False positives:
+  first-time builds, seeds, and small tables where full refresh is the
+  documented strategy.
+severity_suggestion: warning
+examples:
+  bad: |
+    # dbt_project.yml: every nightly run rebuilds all history
+    models:
+      +full_refresh: true
+    -- scheduled job
+    truncate table dim_customers;
+    copy dim_customers from 's3://extracts/customers.csv';
+  good: |
+    # incremental by default; a backfill job passes --full-refresh with a recorded reason
+    create table dim_customers_backup clone dim_customers;
+    copy dim_customers from 's3://extracts/customers.csv';
+    -- rollback: alter table dim_customers swap with dim_customers_backup
+sources:
+- title: Plans (SQLMesh concepts)
+  url: https://sqlmesh.readthedocs.io/en/stable/concepts/plans/
+  publisher: SQLMesh (Tobiko)
+  accessed: 2026-10-12
+  supports: Plans distinguish backfill scope so expensive full rebuilds are a visible, reviewable choice.
+- title: About continuous integration (CI) in dbt
+  url: https://docs.getdbt.com/docs/deploy/about-ci
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: CI discipline exists to keep routine runs safe and incremental rather than destructive.
+- title: Introduction - Apache Iceberg
+  url: https://iceberg.apache.org/docs/latest/
+  publisher: Apache Iceberg
+  accessed: 2026-10-12
+  supports: Snapshot-based table history allows rollback to prior states instead of destructive overwrite.
+confidence: medium
+conflicts_with: []
+see_also: [store/full-refresh-by-replace-not-delete-insert, ops/pre-destructive-snapshot, store/time-travel-retention-explicit]
+status: draft

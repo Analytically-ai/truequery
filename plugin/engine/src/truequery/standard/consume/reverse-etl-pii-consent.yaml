@@ -1,0 +1,50 @@
+id: consume/reverse-etl-pii-consent
+title: Reverse-ETL payloads exclude non-consented PII by policy
+domain: consume
+modes: [build, assure]
+applies_to: [any]
+statement: >
+  Every reverse-ETL sync declares which personal-data fields it sends and
+  the consent basis for each; fields without a recorded basis are dropped or
+  masked before the payload leaves the warehouse.
+rationale: >
+  SaaS copies of warehouse PII escape warehouse access controls and masking
+  policies; sending emails or phone numbers without consent basis risks
+  regulatory violations and irreversible third-party spread.
+failure_example: >
+  A marketing sync copies raw phone numbers into an ad platform for all
+  users including those who opted out of sharing; the platform retains them
+  beyond any deletion request the team can honor.
+enforcement: contract
+contract_required: false
+detection_sketch: >
+  Needs declared facts: the PII field registry with consent basis per field
+  and destination. Check: sync payload projection minus masked fields is
+  covered by a basis. False positives: hashed or consented-identifier joins
+  flagged when the registry does not record pseudonymization.
+severity_suggestion: error
+examples:
+  bad: |
+    syncs:
+      - name: ad_audience
+        fields: [email, phone, full_name]   # no basis recorded
+  good: |
+    syncs:
+      - name: ad_audience
+        fields: [email_sha256]
+        consent_basis: marketing_opt_in_v2
+        pii_policy: mask-except-hashed
+sources:
+  - title: Understanding Dynamic Data Masking
+    url: https://docs.snowflake.com/en/user-guide/security-column-ddm-intro
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Describes column masking policies that protect PII inside the warehouse, the control reverse-ETL must extend outward.
+  - title: About Secure Data Sharing
+    url: https://docs.snowflake.com/en/user-guide/data-sharing-intro
+    publisher: Snowflake
+    accessed: 2026-10-12
+    supports: Describes governed sharing primitives, the model for extending warehouse governance to outbound copies.
+confidence: high
+conflicts_with: []
+status: draft

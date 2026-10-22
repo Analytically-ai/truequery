@@ -1,0 +1,44 @@
+id: store/compact-small-files-optimize
+title: Schedule compaction for continuously written lake tables
+domain: store
+modes: [build, assure]
+applies_to: [databricks, delta, iceberg]
+statement: >
+  Any Delta or Iceberg table fed by streaming or small-batch writes must have a
+  scheduled compaction (Delta OPTIMIZE / auto-compact, Iceberg rewrite-data-files
+  procedure) at least weekly, so average data-file size stays near the engine
+  target (~128 MB–1 GB) instead of accumulating kilobyte files.
+rationale: >
+  Continuous small writes accumulate thousands of tiny files; every read then
+  pays open/list/deserialize overhead per file, query latency collapses, and
+  the table can become effectively unreadable long before the data volume itself
+  is a problem.
+failure_example: >
+  A streaming ingest writing 5 MB files every 2 minutes reaches 200k files in
+  three months; a simple SELECT COUNT(*) lists metadata for minutes before
+  reading any data.
+enforcement: runtime
+detection_sketch: >
+  Needs warehouse/file inventory: sample DESCRIBE DETAIL / metadata to compute
+  file count and mean file size per table; flag tables past thresholds with no
+  recent OPTIMIZE/rewrite in job history. Static approximation: flag streaming
+  writes with no optimize job declared in the repo. False positives: tables with
+  auto-optimize already enabled at the platform level.
+severity_suggestion: warning
+examples:
+  bad: "-- streaming write, no maintenance job anywhere: df.writeStream.format('delta').start('/events')"
+  good: "OPTIMIZE events; -- weekly job, plus autoCompact enabled on the table"
+sources:
+  - title: Delta Lake — Best practices (compact files)
+    url: https://docs.delta.io/best-practices/
+    publisher: Delta Lake
+    accessed: 2026-10-12
+    supports: Continuously written tables accumulate many files; compact them to keep reads efficient.
+  - title: Iceberg — Maintenance (compact data files)
+    url: https://iceberg.apache.org/docs/latest/maintenance/
+    publisher: Apache Iceberg
+    accessed: 2026-10-12
+    supports: Iceberg documents data-file compaction as optional maintenance to consolidate small files.
+confidence: high
+conflicts_with: []
+status: draft

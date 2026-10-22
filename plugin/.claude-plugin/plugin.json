@@ -1,0 +1,16 @@
+{
+  "name": "truequery",
+  "version": "0.1.0",
+  "description": "TrueQuery: one standard for data work, built into your AI coding agent. A skill that teaches the agent the procedure, and an offline checker that verifies the work as it's written.",
+  "author": {
+    "name": "Analytically.ai"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "data",
+    "sql",
+    "dbt",
+    "analytics-engineering",
+    "data-quality"
+  ]
+}
