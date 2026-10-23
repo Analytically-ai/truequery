@@ -1,6 +1,6 @@
 # Sourced by generate.sh and dq: pick a Python that has duckdb.
 if command -v uv >/dev/null 2>&1; then
-  PY="uv run --quiet --no-project --with duckdb --with pytz python"
+  PY="uv run --quiet --no-project --with duckdb>=1.1,<2 --with pytz python"
 elif python3 -c "import duckdb" 2>/dev/null; then
   PY="python3"
 else

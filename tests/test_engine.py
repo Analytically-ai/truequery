@@ -97,3 +97,21 @@ def test_check_file_shape_and_missing_path(tmp_path):
     assert findings == []
     assert len(diagnostics) == 1
     assert "could not parse" in diagnostics[0].message
+
+
+def test_run_skips_files_over_size_limit(tmp_path, monkeypatch):
+    """Files over MAX_FILE_BYTES are not checked (verified False) with
+    the reason. run() is the shared path for detect and the hook."""
+    monkeypatch.setattr(E, "MAX_FILE_BYTES", 64)
+    big = tmp_path / "big.sql"
+    big.write_text("DELETE FROM t;\n" * 16, encoding="utf-8")  # 240 bytes
+    small = tmp_path / "small.sql"
+    small.write_text("DELETE FROM t;\n", encoding="utf-8")
+    by_rel = {r.rel: r for r in E.run([str(tmp_path)], str(tmp_path))}
+    assert by_rel["big.sql"].verified is False
+    assert by_rel["big.sql"].findings == []  # never parsed, never checked
+    assert [d.message for d in by_rel["big.sql"].diagnostics] == [E.TOO_LARGE]
+    assert "size limit" in by_rel["big.sql"].diagnostics[0].message
+    assert by_rel["small.sql"].verified
+    assert [f.rule for f in by_rel["small.sql"].findings] == [
+        "sql/unguarded-update-delete"]

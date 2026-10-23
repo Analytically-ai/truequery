@@ -286,7 +286,13 @@ def clean_line(rel: str, modes=None) -> str:
 
 
 def unverified_block(diagnostics) -> str:
-    lines = ["[truequery@1] UNVERIFIED — could not parse, not checked:"]
+    if all(d.message == E.TOO_LARGE for d in diagnostics):
+        why = "over the size limit, not checked"
+    elif any(d.message == E.TOO_LARGE for d in diagnostics):
+        why = "could not parse or over the size limit, not checked"
+    else:
+        why = "could not parse, not checked"
+    lines = [f"[truequery@1] UNVERIFIED — {why}:"]
     for diagnostic in diagnostics[:5]:
         lines.append(f"- {diagnostic.file}: {diagnostic.message}")
     lines.append("Run `tq detect --verbose` for the full parse error.")

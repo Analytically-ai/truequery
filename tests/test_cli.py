@@ -144,6 +144,21 @@ def test_parse_failure_is_diagnostic_not_exit_2(tmp_path):
     assert code == 3 and "detail:" in err
 
 
+def test_detect_reports_file_over_size_limit(tmp_path):
+    root = tmp_path
+    with open(root / "big.sql", "w", encoding="utf-8") as handle:
+        chunk = "SELECT 1;\n" * 100000  # 1 MB per write, never parsed
+        for _ in range(11):
+            handle.write(chunk)
+    code, out, err = run("detect", "big.sql", cwd=root)
+    assert code == 3  # not everything was checked: CI must not pass
+    assert out == ("no findings in 0 files checked · "
+                   "1 not checked (over the size limit)\n")
+    assert "big.sql" in err and "size limit" in err
+    code, out, _ = run("review", "big.sql", cwd=root)
+    assert "not checked  over the 10 MB size limit 1 file: big.sql" in out
+
+
 def test_detect_is_deterministic(tmp_path):
     root = fresh("plain", tmp_path)
     _, first, _ = run("detect", "plain", cwd=root)

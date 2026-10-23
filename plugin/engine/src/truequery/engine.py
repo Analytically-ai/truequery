@@ -26,6 +26,8 @@ ENGINE_VERSION = __version__
 
 IGNORES_NAME = "ignores.json"
 
+MAX_FILE_BYTES = 10 * 1024 * 1024  # ~10 MB; bigger files are not checked.
+
 
 def active_overrides(config: dict | None) -> dict:
     """tier_overrides from DATA.md, restricted to known slugs and tiers.
@@ -220,10 +222,15 @@ def check_file(path: str, dialect: str | None = None,
 
 NOT_UTF8 = "not UTF-8 text (not checked)"
 
+TOO_LARGE = "file over the 10 MB size limit (not checked)"
+
 
 def _read(path: str) -> str | None:
-    """File text; None when unreadable; NOT_UTF8 sentinel handled by run()."""
+    """File text; None when unreadable. NOT_UTF8 and TOO_LARGE are
+    sentinels handled by run(): the file is reported as not checked."""
     try:
+        if os.path.getsize(path) > MAX_FILE_BYTES:
+            return TOO_LARGE
         with open(path, encoding="utf-8") as handle:
             return handle.read()
     except UnicodeDecodeError:
@@ -278,10 +285,11 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             continue
         rel = P._rel(path, root)
         file_mode = P.resolve_mode(rel, config, mode)
-        if text is NOT_UTF8:
-            # Never silent: an undecodable file is listed as not checked.
+        if text is NOT_UTF8 or text is TOO_LARGE:
+            # Never silent: an undecodable or oversize file is listed
+            # as not checked, with the reason.
             results.append(FileResult(path=path, rel=rel, mode=file_mode,
-                                      diagnostics=[Diagnostic(rel, NOT_UTF8)]))
+                                      diagnostics=[Diagnostic(rel, text)]))
             continue
         findings, diagnostics, key_lookups = check_file(
             path, dialect=base_dialect, mode=file_mode, tiers=tiers,
@@ -297,7 +305,7 @@ def run(paths: list[str], root: str, dialect: str | None = None,
         results.append(result)
     for path in discover_aux(paths):
         text = _read(path)
-        if text is None or text is NOT_UTF8:
+        if text is None or text is NOT_UTF8 or text is TOO_LARGE:
             continue
         rel = P._rel(path, root)
         file_mode = P.resolve_mode(rel, config, mode)
