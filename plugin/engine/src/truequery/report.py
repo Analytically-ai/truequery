@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 
+from truequery import engine as E
 from truequery import project as P
 from truequery import std_registry
 from truequery.schema import STANDARD_VERSION
@@ -182,7 +183,11 @@ def build_receipt(results, modes: list[str], contracts: dict,
             slot[finding.severity] = slot.get(finding.severity, 0) + 1
     sql = [r for r in results if r.kind == "sql"]
     project = [r for r in results if r.kind == "project"]
-    unverified = sorted({r.rel for r in results if not r.verified})
+    oversize = sorted({r.rel for r in results
+                       if any(d.message == E.TOO_LARGE
+                              for d in r.diagnostics)})
+    unverified = sorted({r.rel for r in results if not r.verified}
+                        - set(oversize))
     missing = [t for t in tables_referenced
                if P.match_contract(t, contracts) is None]
     present = [t for t in tables_referenced
@@ -207,6 +212,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
         },
         "not_checked": {
             "unverified_files": unverified,
+            "oversize_files": oversize,
             "invalid_contracts": list(invalid_contracts or []),
             "metadata": "no adapter",
             "data": "no adapter",
@@ -260,6 +266,13 @@ def render_receipt(receipt: dict) -> str:
                      "identifiers need one)")
     for problem in nc.get("invalid_contracts", []):
         lines.append(f"{'not checked':<13}invalid contract: {problem}")
+    oversized = nc.get("oversize_files", [])
+    if oversized:
+        shown = ", ".join(oversized[:MAX_LISTED])
+        if len(oversized) > MAX_LISTED:
+            shown += f" and {len(oversized) - MAX_LISTED} more (--json lists all)"
+        lines.append(f"{'not checked':<13}over the 10 MB size limit "
+                     f"{_plural(len(oversized), 'file')}: {shown}")
     lines.append(f"{'not checked':<13}" + "; ".join(nc["recall_limits"]))
     counts = receipt["findings"]
     attributed = receipt.get("attribution", {})

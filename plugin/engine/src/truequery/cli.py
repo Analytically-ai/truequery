@@ -25,7 +25,8 @@ EXIT_UNVERIFIED = 3
 EXIT_HELP = ("Exit codes: 0 = everything checked, no findings at or above "
              "--fail-on (default error); 1 = findings at or above it; "
              "2 = usage or config error; 3 = no such findings, but some "
-             "files could not be checked (parse or encoding failures, "
+             "files could not be checked (parse failures, undecodable "
+             "text, or files over the size limit, "
              "listed on stderr). --allow-unverified turns 3 into 0.")
 
 FAIL_LEVELS = ("error", "warning", "advisory")
@@ -98,6 +99,17 @@ def _stderr_diagnostics(results, verbose: bool = False) -> None:
             print(f"  detail: {diagnostic.detail}", file=sys.stderr)
 
 
+def _unverified_reason(results) -> str:
+    """Why files went unchecked: parse failures, the size limit, or both."""
+    diags = [d for r in results if not r.verified for d in r.diagnostics]
+    reasons = []
+    if any(d.message != E.TOO_LARGE for d in diags):
+        reasons.append("could not parse")
+    if any(d.message == E.TOO_LARGE for d in diags):
+        reasons.append("over the size limit")
+    return " / ".join(reasons) or "could not parse"
+
+
 def _summary_line(results, findings) -> str:
     """Never print 'clean' unless every file was verified."""
     verified = sum(1 for r in results if r.verified)
@@ -105,10 +117,11 @@ def _summary_line(results, findings) -> str:
     checked = RP._plural(verified, "file")
     hidden = sum(len(r.suppressed) for r in results)
     ignored = f" ({hidden} hidden by ignores)" if hidden else ""
+    reason = _unverified_reason(results)
     if not findings:
         if unverified:
             return (f"no findings in {checked} checked{ignored} · "
-                    f"{unverified} not checked (could not parse)")
+                    f"{unverified} not checked ({reason})")
         if hidden:
             return f"no findings in {checked} checked offline{ignored}"
         return f"clean: {checked} checked offline, no findings"
@@ -119,7 +132,7 @@ def _summary_line(results, findings) -> str:
         counts.append(RP._plural(advisories, "advisory"))
     line = f"{', '.join(counts)} in {checked} checked offline{ignored}"
     if unverified:
-        line += f" ({unverified} not checked: could not parse)"
+        line += f" ({unverified} not checked: {reason})"
     return line
 
 

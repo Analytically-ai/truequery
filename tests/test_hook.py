@@ -818,3 +818,18 @@ def test_hook_command_quotes_paths_with_spaces(monkeypatch):
     exe = os.path.join(os.path.abspath(os.sep), "a b", "bin", "truequery")
     monkeypatch.setattr(hook.sys, "argv", [exe])
     assert hook._hook_command("claude") == f'"{exe}" hook --harness claude'
+
+
+def test_oversize_file_reaches_agent_as_not_checked(tmp_path, monkeypatch):
+    """The hook reports an over-limit file as not checked with the
+    reason, never silently."""
+    from truequery import engine as E
+    monkeypatch.setattr(E, "MAX_FILE_BYTES", 64)
+    target = tmp_path / "big.sql"
+    target.write_text("DELETE FROM t;\n" * 16, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    code, out = _run(_event(str(target)), Args(), monkeypatch)
+    assert code == 0
+    body = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "[truequery@1] UNVERIFIED" in body
+    assert "big.sql" in body and "size limit" in body

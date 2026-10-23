@@ -155,6 +155,15 @@ def test_receipt_line_counts_adjustments(tmp_path):
     assert "rule settings: 2 adjusted by project config" in out
 
 
+def test_receipt_line_flags_user_config_adjustment(tmp_path):
+    root = project(tmp_path)
+    write_user(tmp_path, f"rules:\n  {NOTIN}:\n    severity: warning\n")
+    env = env_with_config(tmp_path)
+    code, out, _ = run("review", "q.sql", cwd=root, env=env)
+    assert code == 0  # warning < default fail-on error
+    assert "rule settings: 1 adjusted by user config" in out
+
+
 def test_interrupt_edits_false_silences_per_edit(tmp_path, monkeypatch):
     from test_hook import Args, _event, _run
     root = project(tmp_path, extra="interrupt_edits: false\nrules:\n"
