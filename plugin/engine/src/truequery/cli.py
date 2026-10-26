@@ -195,7 +195,9 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
 
 def _review_tables(results, dialect) -> list[str]:
-    return P.tables_in_files([r.path for r in results], dialect)
+    # Only files the checker read: a skipped file (over the size limit,
+    # unparseable) is never opened again for the receipt.
+    return P.tables_in_files([r.path for r in results if r.verified], dialect)
 
 
 def cmd_review(args: argparse.Namespace) -> int:
@@ -550,8 +552,10 @@ def build_parser() -> argparse.ArgumentParser:
                         version=f"truequery {ENGINE_VERSION}")
     sub = parser.add_subparsers(dest="command", required=False)
 
+    # `check` is what agents tend to guess first; accept it.
     p_detect = sub.add_parser(
-        "detect", help="run enabled checks on files/dirs (zero config)",
+        "detect", aliases=["check"],
+        help="run enabled checks on files/dirs (zero config)",
         epilog=EXIT_HELP)
     p_detect.add_argument("paths", nargs="+", help=".sql files or dirs")
     _add_output(p_detect)

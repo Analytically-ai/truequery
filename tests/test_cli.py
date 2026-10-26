@@ -592,3 +592,10 @@ def test_named_python_file_is_checked_once(tmp_path):
                        "orch/explicit-catchup-policy", "--fail-on", "warning",
                        cwd=tmp_path)
     assert out.count("[warning] orch/explicit-catchup-policy") == 1
+
+
+def test_check_is_another_name_for_detect(tmp_path):
+    root = fresh("plain", tmp_path)
+    detect = run("detect", "plain", cwd=root)
+    check = run("check", "plain", cwd=root)
+    assert check == detect

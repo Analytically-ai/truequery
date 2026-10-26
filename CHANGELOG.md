@@ -16,6 +16,10 @@ checks (15 on by default), the receipt, and Claude Code hooks.
   runs the plugin's own checker, never an older install or another `tq`.
 - Claude Code: a finding shown right after an edit isn't repeated at the
   end of the turn. Hook messages start with `[TrueQuery]`.
+- The plugin runs its own engine as an editable install, so the hooks
+  and the agent always run the code in the plugin folder, never a stale
+  cached build, even after a reinstall at the same version.
+- `truequery check` works as another name for `truequery detect`.
 - The checker installs from PyPI: `pip install truequery`
   (or `uv tool install truequery`; no install at all with
   `uvx truequery`).
