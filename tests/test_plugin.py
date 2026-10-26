@@ -27,7 +27,7 @@ def test_plugin_is_self_contained():
     # The plugin manager copies only plugin/, so everything the plugin
     # runs (manifest, skill, hooks, shim, engine) must live inside it.
     for rel in (".claude-plugin/plugin.json", "skills/truequery/SKILL.md",
-                "hooks/hooks.json", "scripts/tq-hook.sh",
+                "hooks/hooks.json", "scripts/tq-hook.sh", "bin/truequery",
                 "engine/pyproject.toml", "engine/src/truequery/cli.py"):
         assert os.path.isfile(os.path.join(PLUGIN, rel)), rel
 
@@ -61,7 +61,7 @@ def test_shim_ignores_a_foreign_tq_and_never_fails(tmp_path):
              "CLAUDE_PLUGIN_ROOT": PLUGIN})
     assert proc.returncode == 0
     assert "foreign" not in proc.stdout
-    assert "uv tool install" in proc.stdout
+    assert "docs.astral.sh/uv" in proc.stdout
 
 
 
@@ -133,3 +133,50 @@ def test_shim_falls_back_to_a_stale_engine_and_names_the_version(tmp_path):
     if out is not None:
         assert out.startswith(f"PATH-ENGINE wants={_plugin_version()}")
         assert "Stop" in out
+
+
+def _launcher(tmp_path, tools, *args):
+    """Run plugin/bin/truequery the way the agent's Bash tool does, with
+    only the given fake tools (plus a foreign `truequery`) on PATH."""
+    import subprocess
+    import sys
+    if sys.platform == "win32":
+        return None
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    for name, body in {"truequery": "echo FOREIGN\n", **tools}.items():
+        exe = bindir / name
+        exe.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        exe.chmod(0o755)
+    return subprocess.run(
+        ["sh", os.path.join(PLUGIN, "bin", "truequery"), *args],
+        capture_output=True, text=True, timeout=30,
+        env={"PATH": f"{bindir}:/usr/bin:/bin"})
+
+
+def test_launcher_runs_the_plugins_own_engine(tmp_path):
+    # The agent's `truequery` must be this plugin's engine, not whatever
+    # else is on PATH (an older install, another tool's tq).
+    proc = _launcher(tmp_path, {"uvx": 'echo "UVX $*"\n'},
+                     "review", "models/")
+    if proc is not None:
+        assert proc.returncode == 0
+        assert "FOREIGN" not in proc.stdout
+        engine = os.path.realpath(os.path.join(PLUGIN, "engine"))
+        assert proc.stdout.strip() == \
+            f"UVX --quiet --from {engine} truequery review models/"
+
+
+def test_launcher_without_uv_says_how_to_fix_it(tmp_path):
+    proc = _launcher(tmp_path, {})
+    if proc is not None:
+        assert proc.returncode == 127
+        assert "FOREIGN" not in proc.stdout
+        assert "docs.astral.sh/uv" in proc.stderr
+
+
+def test_launcher_is_executable_in_git():
+    import subprocess
+    out = subprocess.run(["git", "ls-files", "-s", "plugin/bin/truequery"],
+                         cwd=ROOT, capture_output=True, text=True).stdout
+    assert out.startswith("100755"), out

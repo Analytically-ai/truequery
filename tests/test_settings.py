@@ -176,7 +176,7 @@ def test_interrupt_edits_false_silences_per_edit(tmp_path, monkeypatch):
     assert "DELETE" in open(target).read() or True
     code, text = out if isinstance(out, tuple) else (0, out)
     assert "triage" not in text.lower()
-    assert "truequery@1" not in text
+    assert "[TrueQuery]" not in text
 
 
 def test_config_change_notice(tmp_path, monkeypatch):

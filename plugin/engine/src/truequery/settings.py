@@ -209,7 +209,7 @@ def data_md_with_rule(text: str, slug: str, updates: dict) -> str:
     match = P._TQ_FENCE.search(text)
     if not match:
         raise ValueError("DATA.md has no ```tq-config fence to edit; "
-                         "run `tq init` first")
+                         "run `truequery init` first")
     try:
         config = yaml.safe_load(match.group(1))
     except yaml.YAMLError as exc:

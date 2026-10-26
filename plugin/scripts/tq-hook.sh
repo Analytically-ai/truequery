@@ -35,8 +35,8 @@ if command -v truequery >/dev/null 2>&1; then
   exit 0
 fi
 if [ -f "$ROOT/engine/pyproject.toml" ]; then
-  echo "[truequery] the checker is not installed, so nothing was checked. Install it with: uv tool install \"$ROOT/engine\" (the /truequery skill still works without it)."
+  echo "[TrueQuery] the checker couldn't start, so nothing was checked. It runs with uv (https://docs.astral.sh/uv/), and its first run needs internet once to fetch two dependencies. The /truequery skill still works without it."
 else
-  echo "[truequery] the checker is not installed, so nothing was checked. Install it from your TrueQuery clone with: uv tool install <clone>/plugin/engine (the /truequery skill still works without it)."
+  echo "[TrueQuery] the checker is not installed, so nothing was checked. Install it from your TrueQuery clone with: uv tool install <clone>/plugin/engine (the /truequery skill still works without it)."
 fi
 exit 0

@@ -9,12 +9,17 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 CLI = [sys.executable, "-m", "truequery.cli"]
-ENV = dict(os.environ, PYTHONPATH=os.path.join(
-    os.path.dirname(__file__), "..", "plugin", "engine", "src"))
+# A throwaway home: the developer's own ~/.claude and ~/.config/truequery
+# must never change what a test sees.
+_HOME = tempfile.mkdtemp(prefix="tq-test-home-")
+ENV = dict(os.environ, HOME=_HOME, USERPROFILE=_HOME,
+           PYTHONPATH=os.path.join(
+               os.path.dirname(__file__), "..", "plugin", "engine", "src"))
 
 DASH = " — "
 
@@ -156,7 +161,7 @@ def test_detect_reports_file_over_size_limit(tmp_path):
                    "1 not checked (over the size limit)\n")
     assert "big.sql" in err and "size limit" in err
     code, out, _ = run("review", "big.sql", cwd=root)
-    assert "not checked  over the 10 MB size limit 1 file: big.sql" in out
+    assert "Not checked  1 file over the 10 MB limit: big.sql" in out
 
 
 def test_detect_is_deterministic(tmp_path):
@@ -196,16 +201,33 @@ def test_review_receipt_golden(tmp_path):
         f"{DASH}a NULL in the subquery makes NOT IN return zero rows\n"
         "    fix: rewrite as NOT EXISTS, or add WHERE col IS NOT NULL\n"
         "\n"
-        "[truequery@1] receipt · mode=build · standard-0.1\n"
-        "checked      3 SQL files · 2 project files (preview checks) · "
+        "TrueQuery receipt\n"
+        "Checked      3 SQL files · 2 project files · "
         "contracts for 0 of 3 tables\n"
-        "not checked  warehouse metadata and data "
-        "(no warehouse adapter connected)\n"
-        "not checked  integer division between columns (column types are "
-        "unknown from files alone); project rules not covered by the 4 "
-        "project checks (dbt YAML, incremental models, Airflow catchup)\n"
-        "findings     2 errors · 0 warnings · 0 advisories\n"
-        "no contract  a, b, t\n")
+        "Found        2 errors\n"
+        "Not checked  your data: TrueQuery reads files and never connects "
+        "to your database\n"
+        "Not checked  dbt, incremental-model and Airflow rules beyond the 4 "
+        "project checks\n"
+        "No contract  a, b, t\n")
+
+
+def test_receipt_names_only_the_limits_that_apply(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "q.sql").write_text(
+        "-- a / in a comment is not division\nSELECT 'a/b' AS s FROM t;\n",
+        encoding="utf-8")
+    _, out, _ = run("review", ".", cwd=root)
+    assert "Found        no problems" in out
+    assert "integer division" not in out
+    assert "Airflow" not in out
+    assert "your data: TrueQuery reads files" in out  # always said
+    (root / "q.sql").write_text("SELECT a / b AS r FROM t;\n",
+                                encoding="utf-8")
+    _, out, _ = run("review", ".", cwd=root)
+    assert ("Not checked  integer division between columns: column types "
+            "aren't known from files alone") in out
 
 
 def test_review_json_carries_receipt(tmp_path):
@@ -216,8 +238,8 @@ def test_review_json_carries_receipt(tmp_path):
     receipt = doc["receipt"]
     assert receipt["files_checked"] == 2
     assert receipt["evidence"]["metadata"] == "no adapter"
-    assert "integer division between columns" in (
-        receipt["not_checked"]["recall_limits"][0])
+    # no file divides and there are no project files: no limit applies
+    assert receipt["not_checked"]["recall_limits"] == []
     # judgment scope respects the mode: build sees none of the
     # explore-only sql practices, explore sees both
     assert receipt["judgment_in_scope"] == []
@@ -342,14 +364,14 @@ def test_hook_posttooluse_end_to_end(tmp_path):
     assert proc.returncode == 0
     body = json.loads(proc.stdout)["hookSpecificOutput"]
     assert body["hookEventName"] == "PostToolUse"
-    assert "[truequery@1] UNVERIFIED" in body["additionalContext"]
+    assert "[TrueQuery] UNVERIFIED" in body["additionalContext"]
     assert (root / ".truequery" / "session.json").exists()
 
 
 def test_hook_stop_end_to_end(tmp_path):
     root = tmp_path / "proj"
     root.mkdir()
-    (root / "q.sql").write_text("DELETE FROM t;\n", encoding="utf-8")
+    (root / "q.sql").write_text("SELECT * FROM a, b;\n", encoding="utf-8")
     payload = json.dumps({"hook_event_name": "PostToolUse",
                           "tool_name": "Write",
                           "tool_input": {"file_path": "q.sql"}})
@@ -365,8 +387,8 @@ def test_hook_stop_end_to_end(tmp_path):
     assert body["hookEventName"] == "Stop"
     assert "stop pass ·" in body["additionalContext"]
     # Fix 1: fresh findings only, never the receipt
-    assert "[truequery@1] receipt" not in body["additionalContext"]
-    assert "unguarded-update-delete" in body["additionalContext"]
+    assert "TrueQuery receipt" not in body["additionalContext"]
+    assert "accidental-cross-join" in body["additionalContext"]
 
 
 def test_install_end_to_end(tmp_path):

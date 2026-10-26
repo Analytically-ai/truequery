@@ -129,17 +129,17 @@ samples/bad_orders.sql:17:14 [error] sql/count-star-after-left-join — COUNT(*)
 5 errors, 2 warnings in 1 file checked offline
 ```
 
-`truequery review` adds the receipt. Its `not checked` lines are the point:
-they name what this pass could not verify, here the warehouse data itself
-and two kinds of check no file can settle.
+`truequery review` adds the receipt. Its `Not checked` lines are the
+point: they name what this pass could not verify. Here that's the data
+itself; a limit such as integer division is listed only when a file
+could hit it.
 
 ```
-[truequery@1] receipt · mode=build · standard-0.1
-checked      1 SQL file · contracts for 0 of 3 tables
-not checked  warehouse metadata and data (no warehouse adapter connected)
-not checked  integer division between columns (column types are unknown from files alone); project rules not covered by the 4 project checks (dbt YAML, incremental models, Airflow catchup)
-findings     5 errors · 2 warnings · 0 advisories
-no contract  customers, orders, staging_orders
+TrueQuery receipt
+Checked      1 SQL file · contracts for 0 of 3 tables
+Found        5 errors · 2 warnings
+Not checked  your data: TrueQuery reads files and never connects to your database
+No contract  customers, orders, staging_orders
 ```
 
 - **Offline and deterministic.** No LLM in the check path and no network
@@ -195,8 +195,9 @@ claude plugin install truequery@analytically
 
 Then open your project in Claude Code and run `/truequery init`.
 
-The checker ships inside the plugin, and the hooks always run the checker
-version that matches the plugin. To use `truequery` in a terminal or in CI:
+The checker ships inside the plugin: the hooks and the agent always run
+the version that matches the plugin, with nothing else to install. To use
+`truequery` in a terminal or in CI:
 
 ```bash
 pip install truequery          # or: uv tool install truequery

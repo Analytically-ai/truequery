@@ -1,0 +1,11 @@
+#!/bin/sh
+# `truequery` for the agent. Claude Code puts a plugin's bin/ on the Bash
+# tool's PATH while the plugin is enabled, so the skill's `truequery ...`
+# commands always run this plugin's own engine (the version its hooks
+# run), never an older install or another tool's `tq`.
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+if command -v uvx >/dev/null 2>&1; then
+  exec uvx --quiet --from "$ROOT/engine" truequery "$@"
+fi
+echo "truequery: the TrueQuery plugin runs its checker with uv, which isn't installed. Install it from https://docs.astral.sh/uv/ and try again." >&2
+exit 127
