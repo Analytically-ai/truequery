@@ -599,3 +599,23 @@ def test_check_is_another_name_for_detect(tmp_path):
     detect = run("detect", "plain", cwd=root)
     check = run("check", "plain", cwd=root)
     assert check == detect
+
+
+def test_dbt_macro_files_are_listed_not_failed(tmp_path):
+    # Most dbt projects have macros/. A file of macro definitions is not a
+    # query: it must not fail CI (exit 3), and must not count as clean.
+    root = tmp_path / "proj"
+    (root / "macros").mkdir(parents=True)
+    (root / "models").mkdir()
+    (root / "macros" / "money.sql").write_text(
+        "{% macro cents(c) %}({{ c }} / 100.0){% endmacro %}\n",
+        encoding="utf-8")
+    (root / "models" / "m.sql").write_text("select a from t\n", encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert out.strip() == ("no findings in 1 file checked offline · "
+                           "1 dbt macro file not checked (macro definitions)")
+    _, out, _ = run("review", ".", cwd=root)
+    assert ("Not checked  1 dbt macro file (macro definitions are templates, "
+            "not queries): macros/money.sql") in out
+    assert "Checked      1 SQL file" in out

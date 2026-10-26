@@ -112,16 +112,22 @@ def _unverified_reason(results) -> str:
 
 def _summary_line(results, findings) -> str:
     """Never print 'clean' unless every file was verified."""
+    macros = sum(1 for r in results if r.kind == "macro")
+    results = [r for r in results if r.kind != "macro"]
     verified = sum(1 for r in results if r.verified)
     unverified = len(results) - verified
     checked = RP._plural(verified, "file")
     hidden = sum(len(r.suppressed) for r in results)
     ignored = f" ({hidden} hidden by ignores)" if hidden else ""
     reason = _unverified_reason(results)
+    skipped = (f" · {RP._plural(macros, 'dbt macro file')} not checked "
+               "(macro definitions)") if macros else ""
     if not findings:
         if unverified:
             return (f"no findings in {checked} checked{ignored} · "
-                    f"{unverified} not checked ({reason})")
+                    f"{unverified} not checked ({reason}){skipped}")
+        if skipped:
+            return f"no findings in {checked} checked offline{ignored}{skipped}"
         if hidden:
             return f"no findings in {checked} checked offline{ignored}"
         return f"clean: {checked} checked offline, no findings"
@@ -133,7 +139,7 @@ def _summary_line(results, findings) -> str:
     line = f"{', '.join(counts)} in {checked} checked offline{ignored}"
     if unverified:
         line += f" ({unverified} not checked: {reason})"
-    return line
+    return line + skipped
 
 
 def _dialect_arg(value: str) -> str | None:
@@ -197,7 +203,8 @@ def cmd_detect(args: argparse.Namespace) -> int:
 def _review_tables(results, dialect) -> list[str]:
     # Only files the checker read: a skipped file (over the size limit,
     # unparseable) is never opened again for the receipt.
-    return P.tables_in_files([r.path for r in results if r.verified], dialect)
+    return P.tables_in_files([r.path for r in results
+                              if r.kind == "sql" and r.verified], dialect)
 
 
 def cmd_review(args: argparse.Namespace) -> int:

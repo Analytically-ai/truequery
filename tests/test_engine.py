@@ -127,3 +127,15 @@ def test_receipt_never_reads_a_file_the_checker_skipped(tmp_path):
     skipped = FileResult(path=missing, rel="big.sql", mode="build",
                          diagnostics=[Diagnostic("big.sql", TOO_LARGE)])
     assert RP.recall_limits([skipped]) == []
+
+
+def test_macro_definition_files_are_recognised():
+    from truequery.engine import is_macro_file
+    only_macros = ("{# money #}\n{% macro cents(c) %}\n  ({{ c }} / 100.0)\n"
+                   "{% endmacro %}\n-- note\n{%- test positive(model) -%}\n"
+                   "select * from {{ model }} where x < 0\n{%- endtest -%}\n")
+    assert is_macro_file(only_macros)
+    # a real query beside a macro is still a query: checked as usual
+    assert not is_macro_file("{% macro m() %}1{% endmacro %}\n"
+                             "select a from t where b = null\n")
+    assert not is_macro_file("select * from {{ ref('orders') }}\n")
