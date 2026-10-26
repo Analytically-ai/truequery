@@ -550,8 +550,10 @@ def build_parser() -> argparse.ArgumentParser:
                         version=f"truequery {ENGINE_VERSION}")
     sub = parser.add_subparsers(dest="command", required=False)
 
+    # `check` is what agents tend to guess first; accept it.
     p_detect = sub.add_parser(
-        "detect", help="run enabled checks on files/dirs (zero config)",
+        "detect", aliases=["check"],
+        help="run enabled checks on files/dirs (zero config)",
         epilog=EXIT_HELP)
     p_detect.add_argument("paths", nargs="+", help=".sql files or dirs")
     _add_output(p_detect)

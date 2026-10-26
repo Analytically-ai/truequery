@@ -1,6 +1,7 @@
 [build-system]
 # hatchling builds out of tree: running the engine straight from an
-# installed plugin (uvx --from <plugin>/engine) writes nothing into it.
+# installed plugin (uv run --with-editable <plugin>/engine) writes nothing
+# into it; the plugin's scripts send bytecode to ~/.cache/truequery.
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 

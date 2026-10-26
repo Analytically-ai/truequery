@@ -108,23 +108,20 @@ def _fake_truequery(version):
             'echo "PATH-ENGINE wants=$TRUEQUERY_PLUGIN_VERSION input=$(cat)"\n')
 
 
-FAKE_UVX = ('for a; do [ "$a" = --version ] && { echo "truequery x"; exit 0; }; done\n'
-            'echo "UVX $* input=$(cat)"\n')
+FAKE_UV = ('for a; do [ "$a" = --version ] && { echo "truequery x"; exit 0; }; done\n'
+           'echo "UV $* input=$(cat)"\n')
+
+OWN = (f'run --quiet --no-project --python >=3.11 --with-editable '
+       f'{PLUGIN}/engine -- truequery')
 
 
-def test_shim_uses_a_matching_engine_on_path(tmp_path):
+def test_shim_prefers_the_plugins_own_engine_over_path(tmp_path):
+    # Even a `truequery` on PATH that claims this version may be stale
+    # code; the plugin's own engine (editable) is always current.
     out = _shim(tmp_path, {"truequery": _fake_truequery(_plugin_version()),
-                           "uvx": FAKE_UVX})
+                           "uv": FAKE_UV})
     if out is not None:
-        assert out.startswith("PATH-ENGINE") and "Stop" in out
-
-
-def test_shim_runs_the_plugins_own_engine_when_path_is_stale(tmp_path):
-    out = _shim(tmp_path, {"truequery": _fake_truequery("0.0.1"),
-                           "uvx": FAKE_UVX})
-    if out is not None:
-        assert out.startswith("UVX")
-        assert f"--from {PLUGIN}/engine truequery hook" in out
+        assert out.startswith(f"UV {OWN} hook --harness auto")
         assert "Stop" in out  # the event reached it
 
 
@@ -157,14 +154,15 @@ def _launcher(tmp_path, tools, *args):
 def test_launcher_runs_the_plugins_own_engine(tmp_path):
     # The agent's `truequery` must be this plugin's engine, not whatever
     # else is on PATH (an older install, another tool's tq).
-    proc = _launcher(tmp_path, {"uvx": 'echo "UVX $*"\n'},
+    proc = _launcher(tmp_path, {"uv": 'echo "UV $*"\n'},
                      "review", "models/")
     if proc is not None:
         assert proc.returncode == 0
         assert "FOREIGN" not in proc.stdout
         engine = os.path.realpath(os.path.join(PLUGIN, "engine"))
-        assert proc.stdout.strip() == \
-            f"UVX --quiet --from {engine} truequery review models/"
+        assert proc.stdout.strip() == (
+            "UV run --quiet --no-project --python >=3.11 --with-editable "
+            f"{engine} -- truequery review models/")
 
 
 def test_launcher_without_uv_says_how_to_fix_it(tmp_path):
@@ -180,3 +178,4 @@ def test_launcher_is_executable_in_git():
     out = subprocess.run(["git", "ls-files", "-s", "plugin/bin/truequery"],
                          cwd=ROOT, capture_output=True, text=True).stdout
     assert out.startswith("100755"), out
+
