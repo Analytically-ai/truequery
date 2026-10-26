@@ -35,6 +35,10 @@ answers:
 > records stop on 24 April 2025. September 2026 has no data, so I used the
 > most recent full month.
 
+And the checker on a sample file, with the receipt at the end:
+
+![truequery detect and review on a sample file](docs/demo.gif)
+
 ## Run it on your own repo
 
 - In Claude Code: `/truequery init` in your project, then
