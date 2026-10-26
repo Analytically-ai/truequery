@@ -1,0 +1,51 @@
+name: False alarm
+description: A check fired on SQL that is actually fine
+labels: [false-alarm]
+body:
+  - type: input
+    id: rule
+    attributes:
+      label: Rule id
+      description: The rule from the finding, e.g. sql/not-in-nullable-subquery
+      placeholder: e.g. sql/not-in-nullable-subquery
+    validations:
+      required: true
+  - type: textarea
+    id: sql
+    attributes:
+      label: Minimal SQL
+      description: The smallest query that still triggers the finding
+      render: sql
+    validations:
+      required: true
+  - type: dropdown
+    id: dialect
+    attributes:
+      label: Dialect
+      options:
+        - BigQuery
+        - Snowflake
+        - PostgreSQL
+        - DuckDB
+        - Redshift
+        - Databricks/Spark
+        - T-SQL
+        - MySQL
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected and why
+      description: Why is this SQL correct? What should the checker have said?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: truequery --version
+      description: The output of `truequery --version`
+      placeholder: e.g. 0.1.0
+    validations:
+      required: false

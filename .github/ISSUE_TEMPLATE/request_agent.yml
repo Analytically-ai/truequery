@@ -1,0 +1,29 @@
+name: Support another agent
+description: Ask for TrueQuery hooks in an agent we don't support yet
+labels: [agent-request]
+body:
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and version
+      description: Which agent should TrueQuery support, and which version are you on?
+      placeholder: e.g. Cursor 1.2, Gemini CLI 0.9
+    validations:
+      required: true
+  - type: textarea
+    id: hooks
+    attributes:
+      label: How it runs hooks
+      description: How does this agent run hooks or linters on edited files? Link to its docs if you know them.
+    validations:
+      required: false
+  - type: dropdown
+    id: testing
+    attributes:
+      label: Would you test it?
+      description: Would you try a preview hook config and report back?
+      options:
+        - Yes, I can test a preview
+        - No, just registering interest
+    validations:
+      required: true

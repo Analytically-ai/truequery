@@ -15,6 +15,17 @@ license-files = ["LICENSE", "NOTICE"]
 dependencies = ["sqlglot==30.22.0", "pyyaml==6.0.3"]
 
 authors = [{ name = "Analytically.ai" }]
+keywords = ["sql", "analytics", "data-engineering", "lint", "dbt"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+  "Topic :: Software Development :: Quality Assurance",
+]
 
 [project.urls]
 Homepage = "https://github.com/Analytically-ai/truequery"

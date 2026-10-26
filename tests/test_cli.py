@@ -202,8 +202,8 @@ def test_review_receipt_golden(tmp_path):
         "not checked  warehouse metadata and data "
         "(no warehouse adapter connected)\n"
         "not checked  integer division between columns (column types are "
-        "unknown from files alone); project rules beyond the 4 preview checks "
-        "(dbt YAML, incremental models, Airflow catchup)\n"
+        "unknown from files alone); project rules not covered by the 4 "
+        "project checks (dbt YAML, incremental models, Airflow catchup)\n"
         "findings     2 errors · 0 warnings · 0 advisories\n"
         "no contract  a, b, t\n")
 
