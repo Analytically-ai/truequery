@@ -1,5 +1,8 @@
 # Contributing to TrueQuery
 
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md). Be kind, assume good
+faith, and keep every space you'd want to ask a question in welcoming.
+
 ## Setup
 
 ```bash

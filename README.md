@@ -1,5 +1,7 @@
 # TrueQuery
 
+[![CI](https://github.com/Analytically-ai/truequery/actions/workflows/ci.yml/badge.svg)](https://github.com/Analytically-ai/truequery/actions/workflows/ci.yml)
+
 **One standard for data work, built into your AI coding agent.**
 
 TrueQuery gives AI coding agents, and the data engineers, analytics
@@ -14,8 +16,34 @@ the work as it's written.
 > `/truequery init` inside your project.
 >
 > **Status: preview (0.1).** Runs in Claude Code today, with more agents
-> on the [roadmap](#roadmap). Feedback and bug reports are welcome in
-> [issues](https://github.com/Analytically-ai/truequery/issues).
+> on the [roadmap](#roadmap). What we've measured, and what we haven't:
+> [evidence and limits](docs/evidence.md). Feedback and bug reports are
+> welcome in [issues](https://github.com/Analytically-ai/truequery/issues).
+
+## See it work
+
+On the demo shop, `/truequery ask how much money did we make last month?`
+answers:
+
+> **About $8,863 in March 2025**
+>
+> Revenue for March 2025 was $8,862.88 (US dollars). That's money from 20
+> completed, paid orders placed by 19 customers. No refunds were processed
+> against those orders.
+>
+> Why March 2025 and not last month: today is October 2026, but the shop's
+> records stop on 24 April 2025. September 2026 has no data, so I used the
+> most recent full month.
+
+## Run it on your own repo
+
+- In Claude Code: `/truequery init` in your project, then
+  `/truequery review models/` (or any SQL folder).
+- Checker only, no install: `uvx truequery detect path/to/sql/`
+- Install: `pip install truequery` or `uv tool install truequery`
+- Hit a false alarm?
+  [Report it](https://github.com/Analytically-ai/truequery/issues/new?template=false_alarm.yml).
+  It's the most useful feedback we can get.
 
 ## Why TrueQuery?
 
@@ -79,19 +107,6 @@ it up on its own.
 | `/truequery harden …` | engineers | Make a model or load production-ready: idempotency, late data, schema changes, NULL and edge guards |
 | `/truequery hooks on\|off\|status` | everyone | Turn the per-edit checker on or off |
 
-On the demo shop, `/truequery ask how much money did we make last month?`
-answers:
-
-> **About $8,863 in March 2025**
->
-> Revenue for March 2025 was $8,862.88 (US dollars). That's money from 20
-> completed, paid orders placed by 19 customers. No refunds were processed
-> against those orders.
->
-> Why March 2025 and not last month: today is October 2026, but the shop's
-> records stop on 24 April 2025. September 2026 has no data, so I used the
-> most recent full month.
-
 ## The checker
 
 Underneath the skill, the checker (`truequery`, short alias `tq`) looks for
@@ -118,7 +133,7 @@ and two kinds of check no file can settle.
 [truequery@1] receipt · mode=build · standard-0.1
 checked      1 SQL file · contracts for 0 of 3 tables
 not checked  warehouse metadata and data (no warehouse adapter connected)
-not checked  integer division between columns (column types are unknown from files alone); project rules beyond the 4 preview checks (dbt YAML, incremental models, Airflow catchup)
+not checked  integer division between columns (column types are unknown from files alone); project rules not covered by the 4 project checks (dbt YAML, incremental models, Airflow catchup)
 findings     5 errors · 2 warnings · 0 advisories
 no contract  customers, orders, staging_orders
 ```
@@ -161,7 +176,7 @@ you to change your stack. It sits alongside what you already use:
 |---|---|
 | Claude Code | Supported: skill, commands, hooks |
 | Terminal and CI (any agent, any person) | Supported: `truequery detect` / `review`, JSON and SARIF |
-| Codex, Muse Code | Hook configs exist (`truequery install --harness codex\|muse`), not yet verified live |
+| Codex, Muse Code | Hook configs included (`truequery install --harness codex\|muse`), not yet verified live |
 | Cursor, GitHub Copilot, Gemini CLI and others | Planned |
 
 ## Install
@@ -180,8 +195,14 @@ The checker ships inside the plugin, and the hooks always run the checker
 version that matches the plugin. To use `truequery` in a terminal or in CI:
 
 ```bash
-git clone https://github.com/Analytically-ai/truequery.git
-uv tool install ./truequery/plugin/engine   # installs `truequery` and the alias `tq`
+pip install truequery          # or: uv tool install truequery
+```
+
+That installs `truequery` and the alias `tq`. Contributors working from a
+clone can install the local engine instead, from the repo root:
+
+```bash
+uv tool install ./plugin/engine
 ```
 
 **Stay up to date.** TrueQuery is moving fast, and Claude Code doesn't
@@ -262,6 +283,8 @@ data lifecycle, from first draft to production.
 - The skill with 8 commands, the receipt, house definitions and contracts.
 - 25 offline checks (15 on by default) with hooks in Claude Code.
 - Terminal and CI use, with JSON and SARIF output.
+- What we've measured so far, and what we haven't:
+  [evidence and limits](docs/evidence.md).
 
 **Next**
 - **More agents:** Codex and Muse Code verified live, then Cursor, GitHub
@@ -290,6 +313,51 @@ data lifecycle, from first draft to production.
 dbt project, with house definitions and the messy data real teams have.
 [`docs/try-the-demo.md`](docs/try-the-demo.md) has a prompt for each role
 and what a good answer looks like.
+
+## FAQ
+
+**Why not just put these rules in CLAUDE.md?**
+Instructions in CLAUDE.md are a good start, but nothing checks that the
+agent followed them, and an agent reviewing its own work is blind in the
+same places as its first draft. TrueQuery gives the agent a full procedure
+and 220 sourced practices, then backs them with a deterministic checker
+that runs on every edit and a receipt that says what wasn't verified. It
+works alongside your CLAUDE.md; your house definitions go in `DATA.md`.
+
+**Why not just run SQLFluff?**
+SQLFluff checks style and layout. TrueQuery checks whether the logic
+returns the right answer: a `NOT IN` that one NULL empties, a `WHERE` that
+turns a `LEFT JOIN` into an inner join, a `COUNT(*)` that counts missing
+rows. They don't overlap, so use both.
+
+**What does it cost in tokens?**
+More per pass, fewer passes. In one hands-on test, a single pass used about
+2.6 times the tokens, but reaching merge-ready work took about 260k tokens
+with TrueQuery against about 454k without. The checker itself uses no
+tokens: it's plain code running on your machine. See
+[Evidence and limits](docs/evidence.md).
+
+**Which SQL dialects does the checker handle?**
+It parses SQL with [sqlglot](https://github.com/tobymao/sqlglot). Tested on
+real code: BigQuery, PostgreSQL and DuckDB. Snowflake, Redshift,
+Databricks and Spark, T-SQL, MySQL, Trino and sqlglot's other dialects are
+parsed too, with less test coverage, so false alarms there are especially
+welcome. `/truequery init` detects the dialect from your dbt or SQLMesh
+config. You can also set it in `DATA.md` or with `--dialect`. A file that
+doesn't parse is reported as not checked, never as clean.
+
+**What do I do about a false alarm?**
+1. [Report it](https://github.com/Analytically-ai/truequery/issues/new?template=false_alarm.yml). It's the most useful feedback we get.
+2. Ignore one line, with a reason:
+   `truequery ignore add <rule> <path:line> --reason "..."`
+3. Or switch the rule off for the project:
+   `truequery rules set <rule> --enabled off` (add `--scope user` to
+   switch it off just for you).
+
+**Does my code or data leave my machine?**
+The checker makes no network calls and sends no telemetry. Claude Code
+still talks to its model provider as it always does, and TrueQuery doesn't
+change that. TrueQuery never connects to your warehouse.
 
 ## Contributing
 

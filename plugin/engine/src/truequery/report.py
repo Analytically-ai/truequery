@@ -23,8 +23,8 @@ SARIF_LEVEL = {"error": "error", "warning": "warning",
 RECALL_LIMITS = (
     "integer division between columns (column types are unknown from "
     "files alone)",
-    "project rules beyond the 4 preview checks (dbt YAML, incremental "
-    "models, Airflow catchup)",
+    "project rules not covered by the 4 project checks (dbt YAML, "
+    "incremental models, Airflow catchup)",
 )
 
 

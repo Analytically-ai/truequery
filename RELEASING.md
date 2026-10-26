@@ -25,7 +25,11 @@ so the engine version has to change in step.
 4. **Write the change** in `CHANGELOG.md`: what users will notice, with
    any new findings called out (a new check makes clean code red).
 5. **Commit, tag `vX.Y.Z`, push.** CI must pass on all three platforms
-   before the tag is announced.
+   before the tag is announced. Publishing the GitHub Release publishes
+   the checker to PyPI: the `publish` workflow builds the sdist and wheel
+   from `plugin/engine`, fails if the release tag doesn't match the package
+   version, and uploads with trusted publishing (no tokens). There is
+   nothing else to do for PyPI.
 6. **Check an update end to end:** in a project with the previous version
    installed, run `claude plugin update truequery@analytically`, then
    `/reload-plugins`, edit a SQL file, and confirm no "checker is …

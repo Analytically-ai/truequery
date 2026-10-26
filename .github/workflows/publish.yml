@@ -1,0 +1,45 @@
+name: publish
+
+# Publishing a GitHub Release publishes the checker to PyPI. Nothing else
+# triggers this workflow, and there are no tokens to rotate: PyPI trusts
+# this workflow's identity (trusted publishing).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build
+          python -m build --outdir dist plugin/engine
+      - name: Fail if the release tag doesn't match the package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import tomllib
+          with open("plugin/engine/pyproject.toml", "rb") as handle:
+              version = tomllib.load(handle)["project"]["version"]
+          tag = os.environ["TAG"]
+          if tag != f"v{version}":
+              sys.exit(f"release tag {tag} does not match "
+                       f"package version {version}")
+          print(f"release tag {tag} matches package version {version}")
+          PY
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.3
