@@ -35,10 +35,13 @@ ATTRIBUTION_WORDS = {"new": "new", "existing": "already committed",
 
 def _divides(results) -> bool:
     """True when a checked SQL file divides (a `/` token outside comments
-    and strings). A file that can't be tokenized counts as dividing."""
+    and strings). Only files the checker read are looked at: a file it
+    skipped (over the size limit, unparseable) is listed as not checked
+    already, and must not be read here either. A file that can't be
+    tokenized counts as dividing."""
     from sqlglot.tokens import Tokenizer, TokenType
     for result in results:
-        if result.kind != "sql":
+        if result.kind != "sql" or not result.verified:
             continue
         try:
             with open(result.path, encoding="utf-8") as handle:

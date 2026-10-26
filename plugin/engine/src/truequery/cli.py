@@ -195,7 +195,9 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
 
 def _review_tables(results, dialect) -> list[str]:
-    return P.tables_in_files([r.path for r in results], dialect)
+    # Only files the checker read: a skipped file (over the size limit,
+    # unparseable) is never opened again for the receipt.
+    return P.tables_in_files([r.path for r in results if r.verified], dialect)
 
 
 def cmd_review(args: argparse.Namespace) -> int:

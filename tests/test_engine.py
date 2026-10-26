@@ -115,3 +115,15 @@ def test_run_skips_files_over_size_limit(tmp_path, monkeypatch):
     assert by_rel["small.sql"].verified
     assert [f.rule for f in by_rel["small.sql"].findings] == [
         "sql/unguarded-update-delete"]
+
+
+def test_receipt_never_reads_a_file_the_checker_skipped(tmp_path):
+    # The size limit is a safety boundary: the receipt's limit lines must
+    # not tokenize a file the checker refused (it timed out on Windows).
+    from truequery import report as RP
+    from truequery.engine import FileResult, TOO_LARGE
+    from truequery.models import Diagnostic
+    missing = str(tmp_path / "never-opened.sql")  # opening it would raise
+    skipped = FileResult(path=missing, rel="big.sql", mode="build",
+                         diagnostics=[Diagnostic("big.sql", TOO_LARGE)])
+    assert RP.recall_limits([skipped]) == []
