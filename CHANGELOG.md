@@ -20,6 +20,14 @@ checks (15 on by default), the receipt, and Claude Code hooks.
   and the agent always run the code in the plugin folder, never a stale
   cached build, even after a reinstall at the same version.
 - `truequery check` works as another name for `truequery detect`.
+- `/truequery review` follows a full review method after the checker:
+  read the whole dependency path, audit every house definition against
+  the code, check each model for grain, units, time zones, filters and
+  silent defaults, and confirm suspected bugs in the data.
+- A file of dbt macro definitions is listed as not checked (macro
+  definitions are templates, not queries) instead of failing to parse,
+  so `truequery detect` on a dbt project no longer exits 3 because of
+  `macros/`.
 - The checker installs from PyPI: `pip install truequery`
   (or `uv tool install truequery`; no install at all with
   `uvx truequery`).

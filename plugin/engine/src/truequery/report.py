@@ -232,7 +232,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
     return {
         "modes": sorted(set(modes)),
         "standard": STANDARD_VERSION,
-        "files_checked": len(results),
+        "files_checked": sum(1 for r in results if r.kind != "macro"),
         "sql_files": len(sql),
         "project_files": len(project),
         "evidence": {
@@ -247,6 +247,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
         "not_checked": {
             "unverified_files": unverified,
             "oversize_files": oversize,
+            "macro_files": sorted(r.rel for r in results if r.kind == "macro"),
             "invalid_contracts": list(invalid_contracts or []),
             "metadata": "no adapter",
             "data": "no adapter",
@@ -312,6 +313,11 @@ def render_receipt(receipt: dict) -> str:
     if oversized:
         lines.append(f"{'Not checked':<13}{_plural(len(oversized), 'file')} "
                      f"over the 10 MB limit: {_listed(oversized)}")
+    macros = nc.get("macro_files", [])
+    if macros:
+        lines.append(f"{'Not checked':<13}{_plural(len(macros), 'dbt macro file')} "
+                     f"(macro definitions are templates, not queries): "
+                     f"{_listed(macros)}")
     for problem in nc.get("invalid_contracts", []):
         lines.append(f"{'Not checked':<13}invalid contract: {problem}")
     lines.append(f"{'Not checked':<13}{DATA_LIMIT}")

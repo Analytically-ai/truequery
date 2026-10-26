@@ -51,7 +51,9 @@ class FileResult:
     diagnostics: list = field(default_factory=list)
     suppressed: list = field(default_factory=list)
     key_lookups: list = field(default_factory=list)
-    kind: str = "sql"  # "sql", or "project" for .py/.yml/.yaml files
+    # "sql"; "project" for .py/.yml/.yaml files; "macro" for a file of
+    # dbt macro definitions, which is listed as not checked.
+    kind: str = "sql"
 
     @property
     def verified(self) -> bool:
@@ -222,6 +224,24 @@ def check_file(path: str, dialect: str | None = None,
 
 NOT_UTF8 = "not UTF-8 text (not checked)"
 
+# dbt definition blocks: templates that render into other files' SQL.
+_DEFINITION_BLOCK = re.compile(
+    r"{%-?\s*(macro|test|materialization|docs)\b.*?{%-?\s*end\1\s*-?%}",
+    re.DOTALL)
+_JINJA_COMMENT = re.compile(r"{#.*?#}", re.DOTALL)
+
+
+def is_macro_file(text: str) -> bool:
+    """True when a file holds only dbt macro/test/materialization/docs
+    definitions (plus comments): templates, not queries. A file that also
+    has a query outside those blocks is checked as usual."""
+    if "{%" not in text:
+        return False
+    rest, blocks = _DEFINITION_BLOCK.subn("", _JINJA_COMMENT.sub("", text))
+    if not blocks:
+        return False
+    return not analyzer.strip_comments(rest, "generic").strip()
+
 TOO_LARGE = "file over the 10 MB size limit (not checked)"
 
 
@@ -290,6 +310,12 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             # as not checked, with the reason.
             results.append(FileResult(path=path, rel=rel, mode=file_mode,
                                       diagnostics=[Diagnostic(rel, text)]))
+            continue
+        if is_macro_file(text):
+            # Macro definitions aren't queries: listed as not checked
+            # (kind "macro"), never as a parse failure, never as clean.
+            results.append(FileResult(path=path, rel=rel, mode=file_mode,
+                                      kind="macro"))
             continue
         findings, diagnostics, key_lookups = check_file(
             path, dialect=base_dialect, mode=file_mode, tiers=tiers,
