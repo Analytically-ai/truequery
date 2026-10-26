@@ -351,7 +351,7 @@ def _rules_set(args: argparse.Namespace, root) -> int:
                 with open(data_md, encoding="utf-8") as handle:
                     text = handle.read()
             except OSError:
-                print("tq: no DATA.md here; run `tq init` first "
+                print("tq: no DATA.md here; run `truequery init` first "
                       "(or use --scope user)", file=sys.stderr)
                 return EXIT_ERROR
             with open(data_md, "w", encoding="utf-8") as handle:

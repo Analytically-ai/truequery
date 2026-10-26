@@ -63,7 +63,7 @@ def test_claude_envelope_uses_hook_specific_output(tmp_path, monkeypatch,
     assert "additionalContext" not in json.loads(out)
     assert body["hookEventName"] == "PostToolUse"
     assert body["additionalContext"].startswith(
-        "[truequery@1] 1 new finding(s) in q.sql")
+        "[TrueQuery] 1 new finding(s) in q.sql")
 
 
 def test_first_finding_triage_golden(tmp_path, monkeypatch,
@@ -75,12 +75,12 @@ def test_first_finding_triage_golden(tmp_path, monkeypatch,
     assert code == 0
     text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert text == (
-        "[truequery@1] 1 new finding(s) in q.sql\n"
+        "[TrueQuery] 1 new finding(s) in q.sql\n"
         "- q.sql:1 [sql/unguarded-update-delete] no WHERE: every row is "
         "affected (fix: add a WHERE predicate, or use TRUNCATE if you mean "
         "the whole table)\n"
         "Triage: fix it; or ignore narrowly "
-        "(`tq ignore add sql/unguarded-update-delete q.sql:1 "
+        "(`truequery ignore add sql/unguarded-update-delete q.sql:1 "
         '--reason "..."` — line scope only); or ask once. '
         "File-level ignores need a human.")
     session = json.loads(
@@ -101,14 +101,14 @@ def test_reedit_nudge_then_clean_ack(tmp_path, monkeypatch,
     code, out = _run(_event(str(target)), Args(), monkeypatch)
     assert code == 0
     text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-    assert text == ("[truequery@1] still open: sql/unguarded-update-delete "
+    assert text == ("[TrueQuery] still open: sql/unguarded-update-delete "
                     "q.sql:1 (seen)")
     target.write_text("SELECT a FROM t ORDER BY a LIMIT 1;\n",
                       encoding="utf-8")
     code, out = _run(_event(str(target)), Args(), monkeypatch)
     text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     # build mode: no explore-only judgment practices in scope
-    assert text == ("[truequery@1] checked q.sql (file evidence): "
+    assert text == ("[TrueQuery] checked q.sql (file evidence): "
                     "no new findings.")
     code, out = _run(_event(str(target)), Args(), monkeypatch)
     assert (code, out) == (0, "")  # acked once
@@ -154,7 +154,7 @@ def test_parse_diagnostic_reaches_agent(tmp_path, monkeypatch):
     code, out = _run(_event(str(target)), Args(), monkeypatch)
     assert code == 0
     body = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-    assert "[truequery@1] UNVERIFIED" in body
+    assert "[TrueQuery] UNVERIFIED" in body
 
 
 def _git(path, *args):
@@ -185,17 +185,17 @@ def test_stop_lists_every_finding_no_git(tmp_path, monkeypatch):
     old = tmp_path / "old.sql"
     old.write_text("SELECT * FROM a, b;\n", encoding="utf-8")
     new = tmp_path / "new.sql"
-    new.write_text("DELETE FROM t;\n", encoding="utf-8")
+    new.write_text("SELECT * FROM c, d;\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run(_event(str(old)), Args(), monkeypatch)
     _run(_event(str(new)), Args(), monkeypatch)
     text = _stop_text(new, monkeypatch)
-    assert text.startswith("[truequery@1] stop pass · 2 file(s) touched")
+    assert text.startswith("[TrueQuery] stop pass · 2 file(s) touched")
     # every NEW finding is listed with file:line, rule, why and fix;
     # the receipt belongs to the skill, never to the Stop hook
     assert "- old.sql:1 [sql/accidental-cross-join]" in text
-    assert "- new.sql:1 [sql/unguarded-update-delete]" in text
-    assert "[truequery@1] receipt" not in text
+    assert "- new.sql:1 [sql/accidental-cross-join]" in text
+    assert "TrueQuery receipt" not in text
     session = json.loads(
         (tmp_path / ".truequery" / "session.json").read_text(
             encoding="utf-8"))
@@ -205,11 +205,12 @@ def test_stop_lists_every_finding_no_git(tmp_path, monkeypatch):
 def test_stop_untracked_file_is_unknown(tmp_path, monkeypatch):
     _git(tmp_path, "init", "-q")
     target = tmp_path / "q.sql"
-    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    target.write_text("SELECT * FROM a, b;\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run(_event(str(target)), Args(), monkeypatch)
     text = _stop_text(target, monkeypatch)
-    assert "- q.sql:1 [sql/unguarded-update-delete]" in text
+    assert "- q.sql:1 [sql/accidental-cross-join]" in text
+    assert "(can't tell if new: no git history)" in text
 
 
 def test_stop_committed_bug_is_existing(tmp_path, monkeypatch):
@@ -235,13 +236,14 @@ def test_stop_multi_statement_attribution(tmp_path, monkeypatch):
     _git(tmp_path, "add", "q.sql")
     _git(tmp_path, "commit", "-qm", "bug in stmt 1")
     target.write_text("delete from sessions;\n"
-                      "select * from t where x = null;\n",
+                      "select * from a, b;\n",
                       encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run(_event(str(target)), Args(), monkeypatch)
     text = _stop_text(target, monkeypatch)
     # the new statement-2 bug speaks; the existing one stays silent
-    assert "- q.sql:2 [sql/null-equality-comparison]" in text
+    assert "- q.sql:2 [sql/accidental-cross-join] " in text
+    assert "(new)" in text
     assert "delete from sessions" not in text.lower()
 
 
@@ -252,11 +254,11 @@ def test_stop_worktree_bug_is_new(tmp_path, monkeypatch):
                       encoding="utf-8")
     _git(tmp_path, "add", "q.sql")
     _git(tmp_path, "commit", "-qm", "clean")
-    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    target.write_text("SELECT * FROM a, b;\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run(_event(str(target)), Args(), monkeypatch)
     text = _stop_text(target, monkeypatch)
-    assert "- q.sql:1 [sql/unguarded-update-delete]" in text
+    assert "- q.sql:1 [sql/accidental-cross-join]" in text
 
 
 def test_codex_stop_blocks_on_new_findings(tmp_path, monkeypatch):
@@ -323,11 +325,11 @@ def test_stop_speaks_once_per_finding(tmp_path, monkeypatch):
     # continuations and new turns with nothing new stay silent; a new
     # bug speaks again.
     target = tmp_path / "q.sql"
-    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    target.write_text("SELECT * FROM a, b;\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run(_event(str(target)), Args(), monkeypatch)
     first = _stop_text(target, monkeypatch)
-    assert first.startswith("[truequery@1] stop pass ·")
+    assert first.startswith("[TrueQuery] stop pass ·")
     assert "continuation" not in first.split("\n")[0]
     code, out = _run(json.dumps(
         {"hook_event_name": "Stop", "stop_hook_active": True}),
@@ -336,7 +338,7 @@ def test_stop_speaks_once_per_finding(tmp_path, monkeypatch):
     code, out = _run(_event(str(target), event="Stop"),
                      Args(), monkeypatch)
     assert (code, out) == (0, "")  # new turn, nothing new: silent
-    target.write_text("DELETE FROM t;\nSELECT * FROM a, b;\n",
+    target.write_text("SELECT * FROM a, b;\nSELECT * FROM c, d;\n",
                       encoding="utf-8")
     _run(_event(str(target)), Args(), monkeypatch)
     code, out = _run(_event(str(target), event="Stop"),
@@ -344,7 +346,20 @@ def test_stop_speaks_once_per_finding(tmp_path, monkeypatch):
     assert code == 0
     body = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "- q.sql:2 [sql/accidental-cross-join]" in body
-    assert "unguarded-update-delete" not in body  # said before: silent
+    assert "q.sql:1" not in body  # said before: silent
+
+
+def test_stop_does_not_repeat_what_the_edit_said(tmp_path, monkeypatch):
+    # Claude Code: a finding handed back right after the edit is not
+    # said again at the end of the turn (the owner's test: one warning,
+    # not two).
+    target = tmp_path / "q.sql"
+    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    _, out = _run(_event(str(target)), Args(), monkeypatch)
+    assert "[sql/unguarded-update-delete]" in out
+    code, out = _run(_event(str(target), event="Stop"), Args(), monkeypatch)
+    assert (code, out) == (0, "")
 
 
 def test_unified_diff_command_paths(tmp_path, monkeypatch,
@@ -399,11 +414,11 @@ def test_stop_passes_bounded_and_empty_silent(tmp_path, monkeypatch):
                      Args(), monkeypatch)
     assert (code, out) == (0, "")  # nothing touched: silent
     target = tmp_path / "q.sql"
-    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    target.write_text("SELECT * FROM a, b;\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run(_event(str(target)), Args(), monkeypatch)
     first = _stop_text(target, monkeypatch)
-    assert first.startswith("[truequery@1] stop pass ·")
+    assert first.startswith("[TrueQuery] stop pass ·")
     for _ in range(5):
         # every later stop with nothing new is silent (Fix 1)
         code, out = _run(_event(str(target), event="Stop"),
@@ -831,5 +846,5 @@ def test_oversize_file_reaches_agent_as_not_checked(tmp_path, monkeypatch):
     code, out = _run(_event(str(target)), Args(), monkeypatch)
     assert code == 0
     body = json.loads(out)["hookSpecificOutput"]["additionalContext"]
-    assert "[truequery@1] UNVERIFIED" in body
+    assert "[TrueQuery] UNVERIFIED" in body
     assert "big.sql" in body and "size limit" in body

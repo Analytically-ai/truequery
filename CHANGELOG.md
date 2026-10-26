@@ -10,6 +10,12 @@ checks (15 on by default), the receipt, and Claude Code hooks.
   never as clean.
 - Pinned dependencies (`pyyaml==6.0.3`; the demo uses
   `duckdb>=1.1,<2`).
+- The receipt is in plain words, and names a limit (integer division;
+  dbt, incremental-model and Airflow rules) only when it applies.
+- The plugin puts `truequery` on the agent's PATH, so the skill always
+  runs the plugin's own checker, never an older install or another `tq`.
+- Claude Code: a finding shown right after an edit isn't repeated at the
+  end of the turn. Hook messages start with `[TrueQuery]`.
 - The checker installs from PyPI: `pip install truequery`
   (or `uv tool install truequery`; no install at all with
   `uvx truequery`).

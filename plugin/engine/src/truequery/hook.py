@@ -256,32 +256,32 @@ def _finding_line(finding) -> str:
 
 
 def triage_block(rel: str, new_findings: list) -> str:
-    lines = [f"[truequery@1] {len(new_findings)} new finding(s) in {rel}"]
+    lines = [f"[TrueQuery] {len(new_findings)} new finding(s) in {rel}"]
     for finding in new_findings[:MAX_FINDING_LINES]:
         lines.append(_finding_line(finding))
     first = new_findings[0]
     lines.append(
         "Triage: fix it; or ignore narrowly "
-        f"(`tq ignore add {first.rule} {first.file}:{first.line} "
+        f"(`truequery ignore add {first.rule} {first.file}:{first.line} "
         '--reason "..."` — line scope only); or ask once. '
         "File-level ignores need a human.")
     return "\n".join(lines)
 
 
 def nudge_line(finding) -> str:
-    return (f"[truequery@1] still open: {finding.rule} "
+    return (f"[TrueQuery] still open: {finding.rule} "
             f"{finding.file}:{finding.line} (seen)")
 
 
 def clean_line(rel: str, modes=None) -> str:
     scoped = RP.judgment_in_scope(modes)
-    lines = [f"[truequery@1] checked {rel} (file evidence): no new findings."]
+    lines = [f"[TrueQuery] checked {rel} (file evidence): no new findings."]
     if scoped:
         lines.append(
             "That doesn't mean it's good — "
             f"{len(scoped)} judgment practices in scope "
             f"({', '.join(e['rule'] for e in scoped)}); "
-            "run tq review before merge.")
+            "run `truequery review` before merge.")
     return "\n".join(lines)
 
 
@@ -292,10 +292,10 @@ def unverified_block(diagnostics) -> str:
         why = "could not parse or over the size limit, not checked"
     else:
         why = "could not parse, not checked"
-    lines = [f"[truequery@1] UNVERIFIED — {why}:"]
+    lines = [f"[TrueQuery] UNVERIFIED — {why}:"]
     for diagnostic in diagnostics[:5]:
         lines.append(f"- {diagnostic.file}: {diagnostic.message}")
-    lines.append("Run `tq detect --verbose` for the full parse error.")
+    lines.append("Run `truequery detect --verbose` for the full parse error.")
     return "\n".join(lines)
 
 
@@ -360,16 +360,17 @@ def stop_block(results, chain: int, fresh: list) -> str:
     per finding, never a receipt (the receipt belongs to the skill's
     final message, e.g. `tq review`)."""
     files = len(results)
-    head = (f"[truequery@1] stop pass · {files} file(s) touched")
+    head = (f"[TrueQuery] stop pass · {files} file(s) touched")
     if chain:
         head += f" · continuation {chain}/{MAX_CHAIN}"
     lines = [head]
     for finding in fresh[:MAX_FINDING_LINES]:
+        tag = getattr(finding, "_attribution", "new")
         lines.append(_finding_line(finding) +
-                     f" ({getattr(finding, '_attribution', 'new')})")
+                     f" ({RP.ATTRIBUTION_WORDS.get(tag, tag)})")
     extra = len(fresh) - MAX_FINDING_LINES
     if extra > 0:
-        lines.append(f"- ... and {extra} more (run `tq review`)")
+        lines.append(f"- ... and {extra} more (run `truequery review`)")
     return "\n".join(lines)
 
 
@@ -477,16 +478,20 @@ def _version_notice(session) -> str | None:
         return None
     session["version_noted"] = key
     root = os.environ.get("CLAUDE_PLUGIN_ROOT", "<plugin>")
-    return (f"[truequery@1] The checker is {__version__} but the plugin is "
+    return (f"[TrueQuery] The checker is {__version__} but the plugin is "
             f"{wanted}. Results may be out of date; tell the user to run: "
             f'uv tool install --force "{root}/engine"')
 
 
 def _stop_text(root, session, dialect, continued, settings,
-               config) -> str | None:
+               config, harness="claude") -> str | None:
     """Stop speaks only for findings that are new (or unattributable) and
     not yet said this session; a clean or already-reported pass is
     silent, so the turn really ends."""
+    # In Claude Code, findings handed back right after an edit were said
+    # once: the end-of-turn pass doesn't repeat them. Codex and Muse rely
+    # on the Stop block, so it still carries every new finding there.
+    said = set(_reported_keys(session)) if harness == "claude" else set()
     results, block = stop_pass(root, session, dialect, continued,
                                settings=settings, config=config)
     if not block:
@@ -494,7 +499,7 @@ def _stop_text(root, session, dialect, continued, settings,
     seen = _blocked_sigs(session)
     fresh = [f for r in results for f in r.findings
              if getattr(f, "_attribution", "") in ("new", "attribution unknown")
-             and tuple(_sig(f)) not in seen]
+             and tuple(_sig(f)) not in seen and _key(f) not in said]
     diags = [d for r in results for d in r.diagnostics
              if ("unverified", f"{d.file}\0{d.message}") not in seen]
     if not fresh and not diags:
@@ -805,7 +810,7 @@ def main(args) -> int:
             session.pop("config_error", None)
         elif session.get("config_error") != str(problem):
             session["config_error"] = str(problem)
-            notice = (f"[truequery@1] {problem}. Checks ran on shipped "
+            notice = (f"[TrueQuery] {problem}. Checks ran on shipped "
                       "defaults until it is fixed.")
         dialect = (cfg or {}).get("dialect")
         fp = eff.fingerprint()
@@ -815,7 +820,7 @@ def main(args) -> int:
         hook_settings = eff.check_map()
         if event == "stop":
             text = _stop_text(root, session, dialect, continued,
-                              hook_settings, cfg or {})
+                              hook_settings, cfg or {}, harness)
         else:
             paths = [p for p in extract_paths(payload) if is_sql_path(p)]
             paths = [p for p in paths

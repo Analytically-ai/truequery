@@ -37,8 +37,8 @@ that form works too — same procedures. `model`, `ingest` and
    Disagreements are recorded, not hidden.
 3. The checker discovers; you interpret. Never claim a finding it
    didn't emit, and never launder its output as your own judgment.
-4. Receipts make a pass mean something. End reviews with what was
-   checked, what was **not** checked, and why.
+4. Receipts make a pass mean something. Show the checker's receipt as
+   printed, then add what was **not** checked, and why.
 5. Narrowest ignore with a reason. One line, one value, one `--reason`.
    File-level ignores are the human's call.
 
@@ -86,13 +86,13 @@ the checker's). Name the level of every claim you make.
 
 ## If the engine isn't available
 
-On claude.ai, Cowork, or a machine without it installed, say so
-once, then work by reading: apply `floor.md` and the domain
+Run the checker as `truequery` (on PATH via the plugin), never `tq`.
+If it fails, say so once, then work by reading: apply `floor.md` and the domain
 references to the code in front of you. Label every claim "reviewed
 by reading, not checked". Never print a receipt that implies checks
 ran — a reading review ends with a caveat list, not a pass.
 
-## When a `[truequery@1]` message arrives
+## When a `[TrueQuery]` message arrives
 
 Triage, in this order:
 
@@ -101,8 +101,8 @@ Triage, in this order:
    <path:line> --reason "<who>: <evidence>"`. One line, one value.
 3. Or ask once.
 
-Never broaden an ignore to a file or a rule. The Stop hook speaks at
-most once per finding: a repeat means something new changed.
+Never broaden an ignore to a file or a rule. Each finding is said
+once: a repeat means something new changed.
 
 Never change how you are checked. Human-only: `truequery rules set`;
 the `rules:`, `interrupt_edits` and `tier_overrides` keys in `DATA.md`;

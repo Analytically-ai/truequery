@@ -19,13 +19,44 @@ SARIF_LEVEL = {"error": "error", "warning": "warning",
                "advisory": "note", "info": "none"}
 
 # Static recall limits: things no file-level check can see. The receipt
-# must name them so a pass means something.
-RECALL_LIMITS = (
-    "integer division between columns (column types are unknown from "
-    "files alone)",
-    "project rules not covered by the 4 project checks (dbt YAML, "
-    "incremental models, Airflow catchup)",
-)
+# names each one that applies to the files in front of it, so a pass
+# means something and the line isn't boilerplate.
+DIVISION_LIMIT = ("integer division between columns: column types aren't "
+                  "known from files alone")
+PROJECT_LIMIT = ("dbt, incremental-model and Airflow rules beyond the 4 "
+                 "project checks")
+DATA_LIMIT = ("your data: TrueQuery reads files and never connects to "
+              "your database")
+
+# How the receipt names a finding's git attribution.
+ATTRIBUTION_WORDS = {"new": "new", "existing": "already committed",
+                     "attribution unknown": "can't tell if new: no git history"}
+
+
+def _divides(results) -> bool:
+    """True when a checked SQL file divides (a `/` token outside comments
+    and strings). A file that can't be tokenized counts as dividing."""
+    from sqlglot.tokens import Tokenizer, TokenType
+    for result in results:
+        if result.kind != "sql":
+            continue
+        try:
+            with open(result.path, encoding="utf-8") as handle:
+                tokens = Tokenizer().tokenize(handle.read())
+        except Exception:
+            return True
+        if any(t.token_type == TokenType.SLASH for t in tokens):
+            return True
+    return False
+
+
+def recall_limits(results) -> list[str]:
+    limits = []
+    if _divides(results):
+        limits.append(DIVISION_LIMIT)
+    if any(r.kind == "project" for r in results):
+        limits.append(PROJECT_LIMIT)
+    return limits
 
 
 def finding_to_dict(finding, tool_version: str) -> dict:
@@ -216,7 +247,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
             "invalid_contracts": list(invalid_contracts or []),
             "metadata": "no adapter",
             "data": "no adapter",
-            "recall_limits": list(RECALL_LIMITS),
+            "recall_limits": recall_limits(results),
         },
         "findings": counts,
         "contracts_referenced": tables_referenced,
@@ -229,22 +260,26 @@ def build_receipt(results, modes: list[str], contracts: dict,
     }
 
 
+def _listed(names: list[str]) -> str:
+    shown = ", ".join(names[:MAX_LISTED])
+    if len(names) > MAX_LISTED:
+        shown += f" and {len(names) - MAX_LISTED} more (--json lists all)"
+    return shown
+
+
 def render_receipt(receipt: dict) -> str:
-    """The receipt: what was checked, what was NOT checked and why, and
-    the findings. Column one is a fixed-width label."""
-    modes = ",".join(receipt["modes"]) or "build"
+    """The receipt, in plain words: what was checked, what it found, and
+    what was NOT checked and why. Column one is a fixed-width label."""
     ev = receipt["evidence"]
     nc = receipt["not_checked"]
-    lines = [
-        f"[truequery@1] receipt · mode={modes} · standard-{receipt['standard']}"]
+    lines = ["TrueQuery receipt"]
     if receipt.get("rule_settings"):
-        lines.append(f"{'settings':<13}{receipt['rule_settings']}")
+        lines.append(f"{'Settings':<13}{receipt['rule_settings']}")
     elif receipt.get("tier_overrides"):
-        lines.append(f"{'settings':<13}tier overrides active (testing only)")
+        lines.append(f"{'Settings':<13}tier overrides active (testing only)")
     checked = [_plural(receipt["sql_files"], "SQL file")]
     if receipt["project_files"]:
-        checked.append(_plural(receipt["project_files"], "project file")
-                       + " (preview checks)")
+        checked.append(_plural(receipt["project_files"], "project file"))
     total = len(receipt["contracts_referenced"])
     if total:
         have = total - len(receipt["contracts_missing"])
@@ -252,49 +287,44 @@ def render_receipt(receipt: dict) -> str:
         if ev["contract_consumers"]:
             contract += f" (keys used by {', '.join(ev['contract_consumers'])})"
         checked.append(contract)
-    lines.append(f"{'checked':<13}" + " · ".join(checked))
-    lines.append(f"{'not checked':<13}warehouse metadata and data "
-                 "(no warehouse adapter connected)")
-    unverified = nc["unverified_files"]
-    if unverified:
-        shown = ", ".join(unverified[:MAX_LISTED])
-        if len(unverified) > MAX_LISTED:
-            shown += f" and {len(unverified) - MAX_LISTED} more (--json lists all)"
-        lines.append(f"{'not checked':<13}could not parse "
-                     f"{_plural(len(unverified), 'file')}: {shown} "
-                     "(set `dialect` in the DATA.md tq-config if "
-                     "identifiers need one)")
-    for problem in nc.get("invalid_contracts", []):
-        lines.append(f"{'not checked':<13}invalid contract: {problem}")
-    oversized = nc.get("oversize_files", [])
-    if oversized:
-        shown = ", ".join(oversized[:MAX_LISTED])
-        if len(oversized) > MAX_LISTED:
-            shown += f" and {len(oversized) - MAX_LISTED} more (--json lists all)"
-        lines.append(f"{'not checked':<13}over the 10 MB size limit "
-                     f"{_plural(len(oversized), 'file')}: {shown}")
-    lines.append(f"{'not checked':<13}" + "; ".join(nc["recall_limits"]))
+    lines.append(f"{'Checked':<13}" + " · ".join(checked))
     counts = receipt["findings"]
     attributed = receipt.get("attribution", {})
     parts = []
     for severity in ("error", "warning", "advisory"):
-        part = _plural(counts.get(severity, 0), severity)
-        bits = [f"{attributed[tag][severity]} {tag}"
+        if not counts.get(severity):
+            continue
+        bits = [f"{attributed[tag][severity]} {ATTRIBUTION_WORDS[tag]}"
                 for tag in ("new", "existing", "attribution unknown")
                 if attributed.get(tag, {}).get(severity)]
-        parts.append(part + (f" ({'; '.join(bits)})" if bits else ""))
-    lines.append(f"{'findings':<13}" + " · ".join(parts))
+        parts.append(_plural(counts[severity], severity)
+                     + (f" ({'; '.join(bits)})" if bits else ""))
+    lines.append(f"{'Found':<13}" + (" · ".join(parts) or "no problems"))
+    unverified = nc["unverified_files"]
+    if unverified:
+        lines.append(f"{'Not checked':<13}{_plural(len(unverified), 'file')} "
+                     f"that didn't parse: {_listed(unverified)} (set "
+                     "`dialect` in the DATA.md tq-config if they need one)")
+    oversized = nc.get("oversize_files", [])
+    if oversized:
+        lines.append(f"{'Not checked':<13}{_plural(len(oversized), 'file')} "
+                     f"over the 10 MB limit: {_listed(oversized)}")
+    for problem in nc.get("invalid_contracts", []):
+        lines.append(f"{'Not checked':<13}invalid contract: {problem}")
+    lines.append(f"{'Not checked':<13}{DATA_LIMIT}")
+    for limit in nc["recall_limits"]:
+        lines.append(f"{'Not checked':<13}{limit}")
     ignores = receipt.get("ignores", {})
     if ignores.get("narrow") or ignores.get("broad"):
-        lines.append(f"{'ignores':<13}{ignores.get('narrow', 0)} narrow · "
-                     f"{ignores.get('broad', 0)} broad "
-                     "(broad ignores need a human)")
+        lines.append(f"{'Ignored':<13}{ignores.get('narrow', 0)} line · "
+                     f"{ignores.get('broad', 0)} file-wide "
+                     "(file-wide ignores need a human)")
     if receipt["contracts_missing"]:
-        lines.append(f"{'no contract':<13}"
+        lines.append(f"{'No contract':<13}"
                      + ", ".join(receipt["contracts_missing"]))
     scoped = receipt["judgment_in_scope"]
     if scoped:
-        lines.append("judgment-only practices in scope (no check runs them):")
+        lines.append("Judgment calls (no check can decide these):")
         for entry in scoped:
-            lines.append(f"  {entry['rule']} — {entry['title']}")
+            lines.append(f"  {entry['rule']}: {entry['title']}")
     return "\n".join(lines)
