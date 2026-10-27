@@ -20,6 +20,6 @@ Anyone who can write them can weaken or silence checks:
 
 Treat both as human-owned: agents may only add the narrowest ignore with a
 reason, and the hook warns when the `tq-config` rules block changes
-mid-session. `tq review` prints a `settings` line in the receipt whenever
+mid-session. `truequery review` prints a `Settings` line in the receipt whenever
 the effective rule settings differ from the shipped defaults, so a weakened
 configuration is visible at the point of use.

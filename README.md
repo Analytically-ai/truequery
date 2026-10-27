@@ -22,8 +22,8 @@ the work as it's written.
 
 ## See it work
 
-On the demo shop, `/truequery ask how much money did we make last month?`
-answers:
+In a run on the demo shop in October 2026,
+`/truequery ask how much money did we make last month?` answered:
 
 > **About $8,863 in March 2025**
 >
@@ -109,7 +109,7 @@ it up on its own.
 | `/truequery metric "…"` | BI engineers | Define a metric once; `metric check …` finds every place that computes it differently |
 | `/truequery review` | everyone | Run every check, then the receipt and a critique of what checks can't see |
 | `/truequery harden …` | engineers | Make a model or load production-ready: idempotency, late data, schema changes, NULL and edge guards |
-| `/truequery hooks on\|off\|status` | everyone | Turn the per-edit checker on or off |
+| `/truequery hooks on\|off\|status` | everyone | Show or set up per-edit checks (with the plugin they're on already; to stop them, disable the plugin) |
 
 ## The checker
 

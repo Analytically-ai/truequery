@@ -19,7 +19,7 @@ All changes backfilled downstream by default with no recorded category.
 Plan records the filter-logic change as breaking and the new-column addition as non-breaking with no downstream backfill.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: change
 - severity: change=warning
@@ -42,7 +42,7 @@ Merging a model change with no CI run, or with a failing test suite.
 PR shows green "build + test changed scope" check; merge blocked until it passes.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: change,assure
 - severity: assure=warning, change=warning
@@ -65,7 +65,7 @@ ci-command rebuilds the entire project on every pull request.
 ci-command builds state:modified+ with deferral to production state.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: change,assure
 - severity: assure=warning, change=warning
@@ -88,7 +88,7 @@ Running a new 12-month backfill with no estimate.
 Dry run reports 38 GB estimated; reviewer confirms it matches expectations before the real run.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -111,7 +111,7 @@ One threshold labeled "max cost $50" applied identically on BigQuery and Snowfla
 BigQuery job hard-blocked above its dry-run dollar estimate; Snowflake job warns on estimated scan footprint with calibration status shown.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: assure
 - severity: assure=advisory
@@ -134,7 +134,7 @@ Dev schemas persist forever after their branches are merged.
 Merging the branch triggers a job that drops its dev schema; schemas older than 30 days are flagged for removal.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: change,assure
 - severity: assure=warning, change=warning
@@ -157,7 +157,7 @@ All development runs write to the production schema.
 Branch feature-x builds into its own schema; dropping it after merge is safe and automatic.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -180,7 +180,7 @@ Full re-profile of every table on every schedule tick.
 Row-count and schema-hash time series trigger a targeted re-profile only when the trend breaks.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: assure
 - severity: assure=warning
@@ -211,7 +211,7 @@ copy dim_customers from 's3://extracts/customers.csv';
 -- rollback: alter table dim_customers swap with dim_customers_backup
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -244,7 +244,7 @@ metrics:
     description: Supersedes active_user (login-only); v1 removal 2027-01.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: change,assure
 - severity: assure=warning, change=warning
@@ -267,7 +267,7 @@ Applying local changes straight to prod with no preview step.
 Plan output lists 1 direct plus 3 indirect models and a 7-day backfill window; reviewer approves, then apply runs.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: change,assure
 - severity: assure=warning, change=warning
@@ -290,7 +290,7 @@ Deploy job ends with "build succeeded"; dashboards refresh unconditionally.
 Deploy job runs tests post-build; dashboard refresh and sync tasks depend on the test task passing.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: change,assure
 - severity: assure=warning, change=warning
@@ -313,7 +313,7 @@ Dropping and recreating a prod table in the same script with no backup step.
 Script clones the table first, records the clone name in the change ticket, then runs the overwrite.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: change
 - severity: change=warning
@@ -339,7 +339,7 @@ hook = SnowflakeHook(snowflake_conn_id="prod_dw")  # value lives in the secrets 
 # dbt: password: "{{ env_var('DBT_ENV_SECRET_PASSWORD') }}"
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -362,7 +362,7 @@ Production runs log to console only; nothing is stored after the container exits
 Each run stores manifest plus run results plus commit SHA for 90 days; any figure can be traced to its run.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: assure
 - severity: assure=warning
@@ -385,7 +385,7 @@ Upgrading the production orchestrator in place on a Friday with no backup.
 Upgrade deploys to staging, integration-test DAGs run green, metadata DB is backed up, then prod upgrades.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: change,assure
 - severity: assure=warning, change=warning

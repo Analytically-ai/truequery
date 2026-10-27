@@ -19,7 +19,7 @@ SELECT COUNT(*) FROM customers, orders;
 SELECT COUNT(*) FROM customers JOIN orders ON orders.customer_id = customers.id;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -44,7 +44,7 @@ SELECT AVG(conversions / visits) AS cvr FROM daily_funnel;
 SELECT SUM(conversions) / SUM(visits) AS cvr FROM daily_funnel;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: explore,build,change
 - severity: build=warning, change=warning, explore=warning
@@ -69,7 +69,7 @@ SELECT SUM(amount) FROM orders WHERE order_ts BETWEEN '2024-01-01' AND '2024-01-
 SELECT SUM(amount) FROM orders WHERE order_ts >= '2024-01-01' AND order_ts < '2024-02-01';
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: explore,build,change
 - severity: build=warning, change=warning, explore=warning
@@ -94,7 +94,7 @@ SELECT region, SUM(CASE WHEN type = 'sale' THEN amt END) - SUM(CASE WHEN type = 
 SELECT region, SUM(CASE WHEN type = 'sale' THEN amt ELSE 0 END) - SUM(CASE WHEN type = 'refund' THEN amt ELSE 0 END) AS net FROM tx GROUP BY region;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: explore,build,change
 - severity: build=advisory, change=advisory, explore=advisory
@@ -119,7 +119,7 @@ SELECT c.id, COUNT(*) FROM customers c LEFT JOIN orders o ON o.customer_id = c.i
 SELECT c.id, COUNT(o.order_id) FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.id;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: explore,build,change,assure
 - severity: assure=error, build=error, change=error, explore=warning
@@ -144,7 +144,7 @@ SELECT SUM(amt) FROM (SELECT DISTINCT o.cid, o.amt FROM orders o JOIN tags t ON 
 SELECT SUM(amt) FROM orders o WHERE EXISTS (SELECT 1 FROM tags t WHERE t.cid = o.cid);
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,explore
 - severity: build=warning, change=warning, explore=warning
@@ -169,7 +169,7 @@ SELECT * FROM events LIMIT 20;
 SELECT * FROM events USING SAMPLE 20 ROWS;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=advisory
@@ -192,7 +192,7 @@ SELECT SUM(amount) FROM orders WHERE country = 'US';
 SELECT country, COUNT(*), COUNT(*) - COUNT(country) AS nulls FROM orders GROUP BY country ORDER BY 2 DESC; -- then filter on the values found
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=advisory
@@ -215,7 +215,7 @@ SELECT SUM(o.amount) FROM orders o JOIN items i ON i.order_id = o.order_id;
 WITH i AS (SELECT order_id, SUM(qty) AS q FROM items GROUP BY order_id) SELECT SUM(o.amount) FROM orders o JOIN i ON i.order_id = o.order_id;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure,explore
 - severity: assure=warning, build=warning, change=warning, explore=warning
@@ -240,7 +240,7 @@ SELECT dept, emp, COUNT(*) FROM staff GROUP BY dept;
 SELECT dept, MIN(emp), COUNT(*) FROM staff GROUP BY dept;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change,assure,explore
 - severity: assure=warning, build=warning, change=warning, explore=warning
@@ -265,7 +265,7 @@ INSERT INTO customers SELECT * FROM staging_customers;
 INSERT INTO customers (first_name, last_name) SELECT first_name, last_name FROM staging_customers;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -290,7 +290,7 @@ SELECT conversions / visits AS cvr FROM daily_funnel;  -- Postgres, SQL Server, 
 SELECT conversions::numeric / visits AS cvr FROM daily_funnel;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: explore,build,change
 - severity: build=warning, change=warning, explore=warning
@@ -315,7 +315,7 @@ SELECT id FROM p ORDER BY id LIMIT 2 OFFSET 2;
 SELECT id FROM p WHERE id > 2 ORDER BY id LIMIT 2;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -340,7 +340,7 @@ SELECT c.id FROM c LEFT JOIN o ON o.cid = c.id WHERE o.status = 'done';
 SELECT c.id FROM c LEFT JOIN o ON o.cid = c.id AND o.status = 'done';
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change,assure,explore
 - severity: assure=warning, build=warning, change=warning, explore=warning
@@ -365,7 +365,7 @@ SELECT id FROM t LIMIT 2;
 SELECT id FROM t ORDER BY id LIMIT 2;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure,explore
 - severity: assure=warning, build=warning, change=warning, explore=warning
@@ -390,7 +390,7 @@ SELECT * FROM a NATURAL JOIN b;
 SELECT * FROM a JOIN b ON a.id = b.id;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -415,7 +415,7 @@ SELECT COUNT(*) FROM orders WHERE status <> 'cancelled';
 SELECT COUNT(*) FROM orders WHERE status IS DISTINCT FROM 'cancelled';
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: explore,build,change
 - severity: build=warning, change=warning, explore=warning
@@ -440,7 +440,7 @@ MERGE INTO t USING (SELECT uuid() AS uid, order_id, amt FROM s) s ON t.uid = s.u
 MERGE INTO t USING s ON t.order_id = s.order_id WHEN MATCHED THEN UPDATE SET amt = s.amt WHEN NOT MATCHED THEN INSERT (order_id, amt) VALUES (s.order_id, s.amt);
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -465,7 +465,7 @@ SELECT id FROM users WHERE id NOT IN (SELECT user_id FROM banned);
 SELECT id FROM users u WHERE NOT EXISTS (SELECT 1 FROM banned b WHERE b.user_id = u.id);
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change,assure,explore
 - severity: assure=error, build=error, change=error, explore=warning
@@ -490,7 +490,7 @@ SELECT id FROM customers WHERE email = NULL;
 SELECT id FROM customers WHERE email IS NULL;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: explore,build,change,assure
 - severity: assure=error, build=error, change=error, explore=warning
@@ -515,7 +515,7 @@ SELECT id FROM big_events ORDER BY random() LIMIT 100; -- a correct uniform samp
 SELECT id FROM big_events USING SAMPLE 100 ROWS; -- DuckDB reservoir sample of exactly 100 rows, no full sort
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: explore,build
 - severity: build=advisory, explore=advisory
@@ -538,7 +538,7 @@ SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY email ORDER BY ts) AS r
 SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY email ORDER BY ts DESC, capture_id DESC) AS rn FROM t) WHERE rn = 1;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -563,7 +563,7 @@ SELECT v FROM ev WHERE CAST(ts AS DATE) = DATE '2024-01-15';
 SELECT v FROM ev WHERE ts >= TIMESTAMP '2024-01-15' AND ts < TIMESTAMP '2024-01-16';
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -586,7 +586,7 @@ SELECT name, code FROM a UNION ALL SELECT code, name FROM b;
 SELECT name, code FROM a UNION ALL SELECT name, code FROM b;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -611,7 +611,7 @@ UPDATE acct SET bal = 0;
 UPDATE acct SET bal = 0 WHERE id = 1;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -636,7 +636,7 @@ SELECT payment_id, amount FROM card_payments UNION SELECT payment_id, amount FRO
 SELECT payment_id, amount FROM card_payments UNION ALL SELECT payment_id, amount FROM wallet_payments;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,explore
 - severity: build=warning, change=warning, explore=warning

@@ -19,7 +19,7 @@ Mutable dim_customers with no audit columns and no snapshot.
 dim_customers carries updated_at/updated_by maintained by the merge, plus a snapshot on the PII subset.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=advisory, build=advisory, change=advisory
@@ -42,7 +42,7 @@ SELECT * FROM users; with reporting_role holding SELECT on users including email
 GRANT SELECT (id, name) ON users TO support_role; queries list exactly those columns.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -65,7 +65,7 @@ marts/churn.sql ships with no group and no owner field anywhere.
 marts/churn.sql belongs to group growth with a named owner and contact.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -88,7 +88,7 @@ Public marts_orders ships with five undescribed columns including val and flag2.
 marts_orders documents every column, e.g. total_cents: charge amount in cents, tax inclusive.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=advisory, build=advisory
@@ -111,7 +111,7 @@ users classified PII; no documented deletion procedure; snapshots accumulate ind
 users documents erase_user(id) procedure deleting base rows, snapshot history entries, and the vendor-sync exposure, with a run log.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -146,7 +146,7 @@ exposures:
       - ref('marts_users')
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=advisory, build=advisory, change=advisory
@@ -169,7 +169,7 @@ access: public on stg_payments with no contract; three other groups ref it.
 stg_payments is access: private; only contracted marts_orders (public) is referenced cross-group.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=advisory, build=advisory
@@ -196,7 +196,7 @@ GRANT SELECT ON marts.orders TO reporting_reader;
 -- the CI role can write only CI schemas; the prod role is deploy-only
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -219,7 +219,7 @@ SELECT ... FROM prod.legacy.emails_dump with no source declaration.
 SELECT ... FROM {{ source('legacy', 'emails_dump') }} with the source declared, classified, and owned.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -242,7 +242,7 @@ ref to upstream int_emails model where int_emails is private.
 ref to upstream marts_customers which is public with an enforced contract.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -265,7 +265,7 @@ CREATE ROLE etl LOGIN BYPASSRLS;
 CREATE ROLE etl LOGIN; -- row policies apply to every app connection
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -288,7 +288,7 @@ GRANT SELECT ON app.users TO PUBLIC;
 GRANT SELECT ON app.users TO reporting_role;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -311,7 +311,7 @@ seeds/users.csv row: 42, maria.garcia@example.com, +1-415-555-0132.
 seeds/users.csv row: 42, user42@example.com, +1-555-010-0042 (documented fixture range).
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -334,7 +334,7 @@ schema.yml for users lists columns id, email, phone with no tags or meta.
 schema.yml tags email and phone as pii-contact and id as non-sensitive-reviewed.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: explore,build,assure
 - severity: assure=warning, build=warning, explore=warning
@@ -357,7 +357,7 @@ profiles.yml dev target: production database and schema with raw users table.
 dev target resolves users to seeds/synthetic or a redacted staging clone; mapping declared in the project.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=error, build=error
@@ -380,7 +380,7 @@ GRANT SELECT ON users TO analyst_role; analysts expected to redact manually.
 analyst_role holds SELECT on users_redacted (email hashed, phone last-four only); raw users stays with etl_owner.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -403,7 +403,7 @@ events table holds device_id with no retention note and unbounded snapshot histo
 events declares retention: 400 days via monthly partition drop plus snapshot history pruned to 13 months.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -426,7 +426,7 @@ customers classified as containing PII; no ENABLE ROW LEVEL SECURITY in DDL.
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY plus a CREATE POLICY tenant_isolation scoping rows to the current tenant.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error

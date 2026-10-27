@@ -23,9 +23,9 @@ From `examples/shop/`:
 The scripts need Python with duckdb (they use `uv` when it is installed).
 
 Install TrueQuery first (see the repository README). The plugin's hooks
-run the checker that ships inside it; to run `truequery` yourself in a
-terminal, also install the engine with `uv tool install ./plugin/engine`
-from a clone of this repository.
+and the agent run the checker that ships inside it. To run `truequery`
+yourself in a terminal, `pip install truequery`, or run it without
+installing: `uvx truequery detect .`
 
 ## Prompts to paste
 

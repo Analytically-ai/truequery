@@ -14,8 +14,7 @@ warehouse, no network.
 Most sessions start with `/truequery build …` or `/truequery ask …`,
 which follow `flow.md` (look → ask in one call → contract first → build
 → check → receipt → remember). Whatever the command, call
-`truequery context [--target <path>]` before touching data code (`tq`
-is the short alias). It returns the project truth (stack, dialect, modes), only the
+`truequery context [--target <path>]` before touching data code. It returns the project truth (stack, dialect, modes), only the
 contracts your target references, and directives (`MODE`,
 `CONTRACT_MISSING`: no contract for that table; `CONTEXT_STALE`: no
 `DATA.md`, so suggest `/truequery init`). Obey them; don't reload them.

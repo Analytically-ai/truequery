@@ -23,7 +23,8 @@ so the engine version has to change in step.
    .venv/bin/python -m pytest
    ```
 4. **Write the change** in `CHANGELOG.md`: what users will notice, with
-   any new findings called out (a new check makes clean code red).
+   any new findings called out (a new check makes clean code red). Give
+   the heading the release date, never "(unreleased)", before tagging.
 5. **Commit, tag `vX.Y.Z`, push.** CI must pass on all three platforms
    before the tag is announced. Publishing the GitHub Release publishes
    the checker to PyPI: the `publish` workflow builds the sdist and wheel

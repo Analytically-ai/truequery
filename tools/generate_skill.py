@@ -26,9 +26,9 @@ def floor_md(records: dict) -> str:
              "",
              "The skill teaches everything below; the checker proves",
              "violations. Never claim more than the registry says: only",
-             "the checked section runs in `tq` today.",
+             "the checked section runs in `truequery` today.",
              ""]
-    lines += ["## Checked by `tq` (enabled rules)", ""]
+    lines += ["## Checked by `truequery` (enabled rules)", ""]
     for rec in enforced:
         if not rec.enabled:
             continue
@@ -85,7 +85,7 @@ def reference_md(domain: str, records: dict) -> str:
             lines.append("```")
         if examples.get("bad") or examples.get("good"):
             lines.append("")
-        lines.append(f"- checked by tq: {checked}")
+        lines.append(f"- checked by truequery: {checked}")
         lines.append(f"- enforcement: {rec.enforcement}")
         lines.append(f"- modes: {modes}")
         sev = ", ".join(f"{m}={s}" for m, s in sorted(rec.severity.items()))

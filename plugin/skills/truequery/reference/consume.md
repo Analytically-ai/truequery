@@ -19,7 +19,7 @@ SELECT user_id, event FROM raw_events WHERE dt = '2026-10-01'
 SELECT user_id, event FROM raw_events WHERE dt = '2026-10-01' LIMIT 200
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: explore
 - severity: explore=warning
@@ -42,7 +42,7 @@ SELECT ts, user_id, revenue FROM fact_clicks WHERE dt >= '2026-09-01'
 SELECT DATE(ts) AS day, SUM(revenue) AS revenue FROM fact_clicks WHERE dt >= '2026-09-01' GROUP BY 1
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: build,assure
 - severity: assure=advisory, build=advisory
@@ -67,7 +67,7 @@ SELECT * FROM events_2019 CROSS JOIN events_2024
 DRY_RUN SELECT ...  -- confirmed before execution
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: explore,assure
 - severity: assure=warning, explore=warning
@@ -90,7 +90,7 @@ SELECT status, COUNT(*) FROM stg_orders GROUP BY 1
 SELECT status, COUNT(*) FROM mart_orders GROUP BY 1
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -116,7 +116,7 @@ dashboards:
     per_refresh_budget: {max_queries: 20, max_bytes_scanned: 50000000000}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -144,7 +144,7 @@ dashboards:
     max_concurrent_refreshes: 1
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -167,7 +167,7 @@ SELECT order_id, amount FROM mart_orders WHERE dt = '2026-10-01'
 SELECT order_id, amount FROM mart_orders WHERE dt = '2026-10-01' ORDER BY order_id
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -190,7 +190,7 @@ SELECT DATE(event_ts) AS day, SUM(amount) FROM mart_orders GROUP BY 1
 SELECT DATE(event_ts AT TIME ZONE 'America/Chicago') AS day, SUM(amount) FROM mart_orders GROUP BY 1
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -216,7 +216,7 @@ Query: analyses/2026-10-churn/churn_sept.sql @ commit 4f2c1a9
   -- run at 2026-10-11 09:12 UTC; fct_subscriptions max(_loaded_at) 2026-10-11 06:00 UTC
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -243,7 +243,7 @@ Assumptions: notification flag as of day 7 reflects the user's setting.
 Not checked: self-selection (engaged users opt in); iOS vs Android split.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=advisory
@@ -272,7 +272,7 @@ WHERE created_at >= TIMESTAMP('2026-09-27', 'America/New_York')
 GROUP BY 1
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -301,7 +301,7 @@ Decision per plan: do not ship.
 Exploratory (not decision-relevant): add-to-cart mobile week 2 +4.2%, 1 of 40 slices.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -328,7 +328,7 @@ WHERE created_at >= DATE '2026-10-01' AND created_at < DATE '2026-10-08'
 GROUP BY 1 ORDER BY 1;                                          -- coverage per day
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -355,7 +355,7 @@ SELECT order_id, customer_id, order_value FROM orders
 WHERE order_week = '2026-10-05' ORDER BY order_value DESC LIMIT 20;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=advisory
@@ -385,7 +385,7 @@ WHERE EXISTS (SELECT 1 FROM order_items i
 -- check after rewrite: 48,210 orders, matches COUNT(DISTINCT order_id)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -410,7 +410,7 @@ SELECT COUNT(*) FROM sessions
 WHERE account_type IS DISTINCT FROM 'internal'   -- NULL (anonymous) kept on purpose
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=advisory
@@ -440,7 +440,7 @@ SELECT * FROM mart_orders LIMIT 100
 -- Population: self-serve signups, all regions
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -468,7 +468,7 @@ FROM tickets t JOIN active_accounts_by_country a USING (country)
 GROUP BY t.country, a.active_accounts
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -496,7 +496,7 @@ WHERE paid_at >= '2026-07-01' AND paid_at < '2026-10-01' GROUP BY 1
 -- Q2 by same query = 11,236,410; Q3/Q2 = +5.9%, in line with plan
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -525,7 +525,7 @@ WHERE event_ts >= CURRENT_DATE - 30
 --  includes background sync events)"
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore
 - severity: explore=warning
@@ -554,7 +554,7 @@ exports:
     on_overflow: fail
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -582,7 +582,7 @@ dashboards:
     freshness_sla_hours: 26
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -605,7 +605,7 @@ SELECT order_id, amount FROM mart_orders ORDER BY ordered_at LIMIT 10000 OFFSET 
 SELECT order_id, amount FROM mart_orders WHERE (ordered_at, order_id) > ('2026-09-01', 0) ORDER BY ordered_at, order_id LIMIT 10000
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -628,7 +628,7 @@ query = "SELECT * FROM m WHERE store = '" + user_input + "'"
 SELECT store, revenue FROM m WHERE store = {{ bound_parameter('store') }}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=error, build=error
@@ -656,7 +656,7 @@ syncs:
     merge_key: external_user_id
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -685,7 +685,7 @@ syncs:
     pii_policy: mask-except-hashed
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=error, build=error
@@ -714,7 +714,7 @@ syncs:
       - {from: plan_tier, to: Plan__c, type: picklist}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning

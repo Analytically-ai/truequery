@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-26)
 
 First preview: the `/truequery` skill (build, ask, analyze,
 metric, review, harden, init, hooks), the offline checker with 25

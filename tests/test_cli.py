@@ -619,3 +619,19 @@ def test_dbt_macro_files_are_listed_not_failed(tmp_path):
     assert ("Not checked  1 dbt macro file (macro definitions are templates, "
             "not queries): macros/money.sql") in out
     assert "Checked      1 SQL file" in out
+
+
+def test_receipt_checked_counts_only_files_it_read(tmp_path):
+    # A pass never claims more than was verified: a file that didn't parse
+    # is listed under Not checked and is not counted under Checked.
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "good.sql").write_text("select a from t;\n", encoding="utf-8")
+    (root / "broken.sql").write_text("select from where (;\n", encoding="utf-8")
+    code, out, _ = run("review", "good.sql", "broken.sql", cwd=root)
+    assert code == 3
+    assert "Checked      1 SQL file · " in out
+    assert "Not checked  1 file that didn't parse: broken.sql" in out
+    _, out, _ = run("review", "good.sql", "broken.sql", "--json", cwd=root)
+    receipt = json.loads(out)["receipt"]
+    assert receipt["files_checked"] == 1 and receipt["sql_files"] == 1

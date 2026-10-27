@@ -477,10 +477,10 @@ def _version_notice(session) -> str | None:
     if session.get("version_noted") == key:
         return None
     session["version_noted"] = key
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "<plugin>")
     return (f"[TrueQuery] The checker is {__version__} but the plugin is "
-            f"{wanted}. Results may be out of date; tell the user to run: "
-            f'uv tool install --force "{root}/engine"')
+            f"{wanted}. Results may be out of date; tell the user to install "
+            f'uv (https://docs.astral.sh/uv/) so the plugin runs its own '
+            f'checker, or to run: pip install -U truequery=={wanted}')
 
 
 def _stop_text(root, session, dialect, continued, settings,
