@@ -22,6 +22,22 @@ the work as it's written.
 
 ## See it work
 
+There are two ways to run TrueQuery: the `/truequery` skill inside Claude
+Code, where the agent does the work, and the `truequery` checker on its own
+in a terminal or CI.
+
+### In Claude Code: `/truequery review`
+
+A real session on the demo shop, reviewing one dbt model (sped up; it pauses
+on the checker's receipt and again on the recommendation). The
+agent runs the checker, reads everything the model depends on, checks each
+house definition against the code, confirms suspected bugs in the data, and
+ends with a merge recommendation.
+
+![/truequery review in a Claude Code session: blockers, should-fix and minor findings, then "Don't merge" with the reasons](docs/demo-claude-code.gif)
+
+### In Claude Code: `/truequery ask`
+
 In a run on the demo shop in October 2026,
 `/truequery ask how much money did we make last month?` answered:
 
@@ -35,9 +51,12 @@ In a run on the demo shop in October 2026,
 > records stop on 24 April 2025. September 2026 has no data, so I used the
 > most recent full month.
 
-And the checker on a sample file, with the receipt at the end:
+### In a terminal or CI: `truequery review`
 
-![truequery detect and review on a sample file](docs/demo.gif)
+The checker on its own, with no agent: the same command the skill runs under
+the hood. Offline and deterministic, with the receipt at the end.
+
+![truequery detect and truequery review on a sample file in a terminal](docs/demo.gif)
 
 ## Run it on your own repo
 
