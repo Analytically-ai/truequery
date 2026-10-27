@@ -24,7 +24,7 @@ PythonOperator(
 )
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -52,7 +52,7 @@ def daily_report(upstream_df: pd.DataFrame):
     return upstream_df.groupby("k").sum()
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -81,7 +81,7 @@ def kpis(orders: pd.DataFrame):
     return orders.groupby("ds").sum()
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -113,7 +113,7 @@ def users(warehouse: WarehouseResource):
     return pd.read_sql("SELECT * FROM users", warehouse.get_conn())
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -141,7 +141,7 @@ def model(dbt, session):
     return df.withColumn("total", df["qty"] * df["price"])
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -171,7 +171,7 @@ def model(dbt, session):
     return df.sample(n=1000, random_state=rng)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -203,7 +203,7 @@ def warehouse_conn():
         conn.close()
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -230,7 +230,7 @@ def load_kpis(df, engine, ds):
         df.to_sql("daily_kpis", tx, if_exists="append", index=False)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -256,7 +256,7 @@ cur.execute("SELECT * FROM orders WHERE id = ANY(%s)", (order_ids,))
 rows = cur.fetchall()
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -281,7 +281,7 @@ df = context.fetchdf(
     "SELECT ds, user_id, revenue FROM events WHERE ds = '2026-10-11'")
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -304,7 +304,7 @@ df[df.region == "EU"]["vat"] = 0.2  # may write to a temp copy
 df.loc[df.region == "EU", "vat"] = 0.2
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=error, change=error
@@ -328,7 +328,7 @@ for idx, row in df.iterrows():
 df["total"] = df["qty"] * df["price"]
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -358,7 +358,7 @@ dbt-snowflake==1.8.2
 # dbt.config(packages=["numpy==1.23.1"])
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -388,7 +388,7 @@ def execute(context, start, end, execution_time, **kwargs):
 # GROUP BY ds HAVING COUNT(*) = 0
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -419,7 +419,7 @@ def execute(context, start, end, execution_time, **kwargs):
     return context.fetchdf("SELECT ds, rev FROM upstream_orders")
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning

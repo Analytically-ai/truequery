@@ -19,7 +19,7 @@ load.expand(file=files)  # 500-way fan-out, default_pool only
 load.partial(pool="warehouse_load", max_active_tis_per_dag=16).expand(file=files)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -46,7 +46,7 @@ def test_dag_bag_imports():
 # CI also runs tests/test_task_logic.py; Dagster projects run `dg check defs`
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -69,7 +69,7 @@ schedule="0 3 * * *"  # assumes upstream is done by 02:30
 schedule=[Asset("warehouse.staging_orders")]  # Airflow 3; Dagster: AutomationCondition.eager()
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore,build
 - severity: build=advisory, explore=advisory
@@ -93,7 +93,7 @@ pd.read_parquet("s3://events/raw/")  # produced by another DAG, nothing declared
 # Dagster: @asset(deps=[raw_events]); dbt: {{ source('events', 'raw') }}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -118,7 +118,7 @@ S3KeySensor(task_id="wait", bucket_key="s3://landing/orders/{{ ds }}/_SUCCESS",
             deferrable=True, poke_interval=300, timeout=6 * 3600, soft_fail=False)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -141,7 +141,7 @@ DAG("x", schedule="@daily", start_date=pendulum.datetime(2024, 1, 1, tz="UTC"))
 DAG("x", schedule="@daily", start_date=pendulum.datetime(2024, 1, 1, tz="UTC"), catchup=False)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -166,7 +166,7 @@ DAG("rev", schedule=CronTriggerTimetable("0 2 * * *", timezone="America/New_York
 # Dagster: ScheduleDefinition(..., cron_schedule="0 2 * * *", execution_timezone="America/New_York")
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -195,7 +195,7 @@ DAG("x",
 #   channel="#data-platform-alerts", webserver_base_url=...)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -221,7 +221,7 @@ airflow backfill create --dag-id orders --from-date 2026-09-01 --to-date 2026-09
 -- (in one transaction) or MERGE ... ON (order_id)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: change,assure
 - severity: assure=error, change=error
@@ -247,7 +247,7 @@ PythonOperator(task_id="load", python_callable=load, retries=3,
 # Dagster: @asset(retry_policy=RetryPolicy(max_retries=3, delay=30, backoff=Backoff.EXPONENTIAL))
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -276,7 +276,7 @@ def load_config():
 # or: BashOperator(..., bash_command="run.sh {{ var.value.tables }}")
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -303,7 +303,7 @@ for t in TABLES:
 # or: load.expand(table=list_tables())  # runtime fan-out via dynamic task mapping
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -329,7 +329,7 @@ def orders(context):
     day = context.partition_key  # reprocess a single day
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -356,7 +356,7 @@ DAG("exec_report", schedule="0 6 * * *",
                            callback=AsyncCallback(SlackWebhookNotifier, kwargs={...})))
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -384,7 +384,7 @@ COMMIT;
 -- files: write to s3://mart/_staging/{run_id}/, then write the _SUCCESS marker readers wait on
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -408,7 +408,7 @@ PythonOperator(task_id="extract", python_callable=full_dump, execution_timeout=t
 # Dagster: define_asset_job("nightly", tags={"dagster/max_runtime": 7200})
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning

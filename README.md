@@ -22,8 +22,8 @@ the work as it's written.
 
 ## See it work
 
-On the demo shop, `/truequery ask how much money did we make last month?`
-answers:
+In a run on the demo shop in October 2026,
+`/truequery ask how much money did we make last month?` answered:
 
 > **About $8,863 in March 2025**
 >
@@ -109,7 +109,7 @@ it up on its own.
 | `/truequery metric "…"` | BI engineers | Define a metric once; `metric check …` finds every place that computes it differently |
 | `/truequery review` | everyone | Run every check, then the receipt and a critique of what checks can't see |
 | `/truequery harden …` | engineers | Make a model or load production-ready: idempotency, late data, schema changes, NULL and edge guards |
-| `/truequery hooks on\|off\|status` | everyone | Turn the per-edit checker on or off |
+| `/truequery hooks on\|off\|status` | everyone | Show or set up per-edit checks (with the plugin they're on already; to stop them, disable the plugin) |
 
 ## The checker
 
@@ -178,7 +178,7 @@ you to change your stack. It sits alongside what you already use:
 
 | Where | Status |
 |---|---|
-| Claude Code | Supported: skill, commands, hooks |
+| Claude Code | Supported: skill, commands, hooks (on Windows the per-edit hooks need [Git for Windows](https://git-scm.com/download/win), which provides Git Bash) |
 | Terminal and CI (any agent, any person) | Supported: `truequery detect` / `review`, JSON and SARIF |
 | Codex, Muse Code | Hook configs included (`truequery install --harness codex\|muse`), not yet verified live |
 | Cursor, GitHub Copilot, Gemini CLI and others | Planned |
@@ -203,7 +203,8 @@ the version that matches the plugin, with nothing else to install. To use
 pip install truequery          # or: uv tool install truequery
 ```
 
-That installs `truequery` and the alias `tq`. Contributors working from a
+That installs `truequery` and the short alias `tq`. If another tool in the
+same environment already provides a `tq` command, use `truequery`. Contributors working from a
 clone can install the local engine instead, from the repo root:
 
 ```bash

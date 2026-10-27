@@ -800,7 +800,7 @@ def test_version_mismatch_is_said_once(tmp_path, monkeypatch, immediate_unguarde
     _, second = _run(_payload(tmp_path, "PostToolUse", sql), args, monkeypatch)
     text = json.loads(first)["hookSpecificOutput"]["additionalContext"]
     assert "the plugin is 9.9.9" in text
-    assert 'uv tool install --force "/plugins/truequery/engine"' in text
+    assert "pip install -U truequery==9.9.9" in text
     assert "9.9.9" not in second
 
 

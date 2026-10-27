@@ -68,7 +68,7 @@ one it did.
 
 ## 6. Receipt
 
-Every command ends with: what was built · what was checked (tq evidence
+Every command ends with: what was built · what was checked (checker evidence
 levels) · what was **not** checked, and why · assumptions (step-2
 defaults used) · **conflicts** (see the conflict rule).
 

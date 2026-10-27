@@ -21,7 +21,7 @@ intake events_raw: expected 50-80 GB/day; halt + page past 200 GB/day;
 backfills require explicit row cap and expiry
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -46,7 +46,7 @@ alter table users replica identity full;
 create publication app_pub for table users;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -72,7 +72,7 @@ spark.readStream.format("cloudFiles")
   .load("s3://landing/events/")
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=error, build=error
@@ -97,7 +97,7 @@ architecture: kafka -> flink -> warehouse (no latency note)
 fraud signals: streaming (15min SLA); reporting marts: daily batch
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore,build
 - severity: build=advisory, explore=advisory
@@ -138,7 +138,7 @@ sources:
     meta: {criticality: tier-1, owner: payments-data, alert_route: pagerduty://data-oncall}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -163,7 +163,7 @@ create table orders_landing (order_id bigint primary key, amount numeric);
 -- loader dedupes staging on order_id before merge
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: build,assure
 - severity: assure=advisory, build=advisory
@@ -190,7 +190,7 @@ spark.readStream.format("cloudFiles")
   .load("s3://landing/partner/")
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -217,7 +217,7 @@ merge into orders t using staging_orders s
 when matched then update set * when not matched then insert *;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=advisory, build=advisory, change=advisory
@@ -243,7 +243,7 @@ def load_all(): for s in SOURCES: load(s)
 @asset(owners=["team-crm"]) def raw_crm(): ...
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: build,assure
 - severity: assure=advisory, build=advisory
@@ -268,7 +268,7 @@ rebuild: snapshot + WAL replay; source retention 30d; replay runbook
 linked; last replay drill 2026-09-15
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -294,7 +294,7 @@ alert: cdc_lag_seconds > 300 for 10m on connector pg-inventory
 alert: pg_replication_slots.confirmed_flush_lag_bytes > 1GB
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -319,7 +319,7 @@ image: debezium/connect:3.7.0
 schema_version: inventory.orders-value v14 (reviewed 2026-09-30)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -344,7 +344,7 @@ select * from read_csv('s3://landing/orders.csv',
   columns = {'order_id': 'BIGINT', 'amount': 'DECIMAL(12,2)'});
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -369,7 +369,7 @@ if event.op == "d": soft_delete(event.key, deleted_at=event.ts)
 elif event.op in ("c", "u"): apply(event)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -401,7 +401,7 @@ checks for raw_orders:
 # failing rows routed to raw_orders_quarantine with reason
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -425,7 +425,7 @@ update landing.orders set status = 'fixed' where day = '2026-10-01';
 create stream landing_orders_changes on table landing.orders;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=error, change=error
@@ -451,7 +451,7 @@ checks for raw_events_daily:
 # batch fails to quarantine when outside tolerance
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -476,7 +476,7 @@ copy orders (order_id, amount, _source_file, _batch_id, _loaded_at)
 from 's3://landing/orders-2026-10-01.csv';
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -499,7 +499,7 @@ select * from analytics_raw.shopify_orders
 select * from {{ source('shopify', 'orders') }}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -525,7 +525,7 @@ sensor: s3://drops/partner/2026-10-11/_SUCCESS
 copy sales from manifest 's3://drops/partner/2026-10-11/manifest.json';
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: build
 - severity: build=advisory
@@ -552,7 +552,7 @@ landing tickets now includes agent_notes (free text)
   scan: [phone, email, national-id]
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=error, build=error
@@ -578,7 +578,7 @@ seeds:
 # clickstream arrives via the events connector, not version control
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -605,7 +605,7 @@ tests/fixtures/intake/partner_v2_new_column.csv
 tests/fixtures/intake/partner_malformed_row.csv
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=advisory, build=advisory, change=advisory
@@ -631,7 +631,7 @@ events.withWatermark("event_ts", "2 hours")
 # later-than-2h records counted to late_events side output
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning

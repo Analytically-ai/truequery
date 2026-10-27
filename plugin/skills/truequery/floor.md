@@ -2,9 +2,9 @@
 
 The skill teaches everything below; the checker proves
 violations. Never claim more than the registry says: only
-the checked section runs in `tq` today.
+the checked section runs in `truequery` today.
 
-## Checked by `tq` (enabled rules)
+## Checked by `truequery` (enabled rules)
 
 - `model/unique-key-merge-key` [error] Every model using a merge or delete-plus-insert incremental strategy must declare its merge key (unique_key) and every key column must be NOT NULL with one row per key value in each processed batch.
 - `sql/accidental-cross-join` [error] No query block joins two table expressions without an explicit linking predicate (ON/USING) unless the join is written as an explicit CROSS JOIN; comma-separated FROM lists contain at most one table expression. This record owns the comma-join ban for the whole pack.

@@ -33,11 +33,11 @@ def test_reference_files_have_teaching_content_and_size():
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
         assert len(text.encode("utf-8")) < 65536, path  # loadable alone
-        assert "Why:" in text and "checked by tq:" in text, path
+        assert "Why:" in text and "checked by truequery:" in text, path
         assert "- sources:" in text, path
     with open(os.path.join(SKILL, "floor.md"), encoding="utf-8") as handle:
         floor = handle.read()
-    assert "## Checked by `tq` (enabled rules)" in floor
+    assert "## Checked by `truequery` (enabled rules)" in floor
     assert "## Taught, not checked yet (disabled rules)" in floor
     assert "on every edit" not in floor  # N6: no overclaim
 

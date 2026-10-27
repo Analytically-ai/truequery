@@ -190,15 +190,15 @@ def guard(slug: str, updates: dict, records) -> str | None:
     safe too."""
     rec = records.get(slug)
     if rec is None:
-        return f"tq: unknown rule: {slug}"
+        return f"truequery: unknown rule: {slug}"
     if not updates:
-        return ("tq: nothing to set (pass --enabled, --tier or --severity)")
+        return ("truequery: nothing to set (pass --enabled, --tier or --severity)")
     if not rec["implemented"]:
         if updates.get("enabled") is True:
-            return (f"tq: {slug} exists as a record but no detector checks "
+            return (f"truequery: {slug} exists as a record but no detector checks "
                     "it yet; it cannot be enabled")
         if updates.get("tier") == "immediate":
-            return (f"tq: {slug} has no detector to run per-edit; "
+            return (f"truequery: {slug} has no detector to run per-edit; "
                     "tier immediate is unavailable")
     return None
 

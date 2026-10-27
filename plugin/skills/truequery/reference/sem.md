@@ -31,7 +31,7 @@ measures:
   # month-end reporting uses last-value of the period
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=error, build=error
@@ -65,7 +65,7 @@ Why: An unbounded "visited then bought" rate silently grows as late conversions 
     window: { count: 30, period: day }
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -96,7 +96,7 @@ measures:
       - email IS NOT NULL  # or activity-based filter, declared
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -129,7 +129,7 @@ Why: Without a spine, cumulative totals only advance on active days: a quiet hol
 # project includes metricflow_time_spine covering the reporting range
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -160,7 +160,7 @@ Why: A derived metric reaching past the layer into raw columns inherits none of 
     metrics: [gross_revenue, refund_total]
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -190,7 +190,7 @@ Why: An undocumented metric is a rumor with a number: two teams read different m
   meta: { owner: growth-analytics, tier: 1 }
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -217,7 +217,7 @@ dimensions:
     expr: country_code
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -250,7 +250,7 @@ semantic_models:
 # plus: unique + not_null tests on orders.order_id
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -275,7 +275,7 @@ FROM revenue_model m JOIN campaigns c ON c.name = m.campaign_name  -- undeclared
 mf query --metrics revenue --group-by campaign__channel
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -309,7 +309,7 @@ measures:
       - status != 'refunded'
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -340,7 +340,7 @@ Why: An undeclared grain invites averaging averages and summing counts that were
   description: 'Grain: order. Never average across days; re-query at day grain.'
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -366,7 +366,7 @@ Why: Even approved redefinitions blindside consumers when the size of the jump i
 # max monthly delta 0.8%, direction uniform — attached to the change record
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: change,assure
 - severity: assure=warning, change=warning
@@ -395,7 +395,7 @@ entities:
 # MetricFlow joins line-item grain up to order via the primary entity only
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -422,7 +422,7 @@ semantic_models:
     model: ref('mart_customer_activity')  # tested, contracted
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=advisory, build=advisory
@@ -454,7 +454,7 @@ measures:
     description: 'Null emails excluded; see dq validity check on users.email.'
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -484,7 +484,7 @@ measures:
     description: 'Approximate p99 (±1%). Exact available on request for audits.'
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build
 - severity: build=warning
@@ -511,7 +511,7 @@ SELECT AVG(daily_conversion_rate) AS weekly_conversion FROM daily_kpis
     denominator: visitors_count
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=error, build=error
@@ -541,7 +541,7 @@ saved_queries:
     description: Canonical monthly revenue; start here.
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,explore
 - severity: build=advisory, explore=advisory
@@ -568,7 +568,7 @@ steps:
   - dbt build --select marts
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -599,7 +599,7 @@ metrics:
 # or bind a saved query such as revenue_by_week
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -628,7 +628,7 @@ dimensions:
     # declared primary time dimension; all daily metrics use it
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -658,7 +658,7 @@ measures:
     description: 'Currency: USD, converted at daily rate. Grain: order.'
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=error, build=error

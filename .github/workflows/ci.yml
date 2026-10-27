@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -55,3 +55,25 @@ jobs:
           truequery detect samples/bad_orders.sql
           test $? -eq 1
           truequery detect samples/good_orders.sql
+          test $? -eq 0
+      - name: The plugin's launcher and hook run its own engine
+        shell: bash
+        run: |
+          python -m pip install uv
+          sh plugin/bin/truequery --version | tr -d '\r' | grep -x "truequery $(python -c 'import truequery; print(truequery.__version__)')"
+          mkdir -p "$RUNNER_TEMP/proj" && printf 'DELETE FROM t;\n' > "$RUNNER_TEMP/proj/q.sql"
+          cd "$RUNNER_TEMP/proj"
+          printf '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"q.sql"}}' \
+            | CLAUDE_PLUGIN_ROOT="$GITHUB_WORKSPACE/plugin" sh "$GITHUB_WORKSPACE/plugin/scripts/tq-hook.sh" \
+            | tee hook.out
+          grep -q "sql/unguarded-update-delete" hook.out
+      - name: The Windows launcher runs from cmd and PowerShell
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          python -m pip install uv
+          $v = cmd /c "plugin\bin\truequery.cmd --version"
+          if ($v -ne "truequery 0.1.0") { throw "cmd launcher printed: $v" }
+          $env:PATH = "$PWD\plugin\bin;$env:PATH"
+          $v = truequery --version
+          if ($v -ne "truequery 0.1.0") { throw "PowerShell launcher printed: $v" }

@@ -30,7 +30,7 @@ models:
         data_type: numeric
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -59,7 +59,7 @@ WHERE updated_at > (SELECT MAX(updated_at) - INTERVAL '3 days' FROM {{ this }})
 {% endif %};
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -87,7 +87,7 @@ SELECT order_id, status, total, updated_at FROM {{ ref('stg_orders') }};
 SELECT * FROM mart_orders LIMIT 20;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: explore,build,change
 - severity: build=warning, change=warning, explore=warning
@@ -116,7 +116,7 @@ WHERE occurred_at > (SELECT MAX(occurred_at) - INTERVAL '3 days' FROM {{ this }}
 {% endif %};
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -146,7 +146,7 @@ SELECT o.order_id, o.total, lines.line_cnt
 FROM orders o LEFT JOIN lines ON lines.order_id = o.order_id;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -175,7 +175,7 @@ WHERE occurred_at > (SELECT MAX(occurred_at) - INTERVAL '3 days' FROM {{ this }}
 {% endif %};
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -203,7 +203,7 @@ WHERE occurred_at > (SELECT MAX(occurred_at) - INTERVAL '3 days' FROM {{ this }}
 -- with unique_key + merge strategy so reprocessed rows upsert cleanly
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -231,7 +231,7 @@ WHERE occurred_at > (SELECT MAX(occurred_at) FROM {{ this }})
 {% endif %};
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -258,7 +258,7 @@ WHERE {{ col }} > '{{ cutoff }}'  -- caller passes an explicit boundary
 {% endmacro %}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -283,7 +283,7 @@ SELECT * FROM {{ ref({{ var('mart_name') }}) }};
 SELECT order_id FROM {{ resolve_mart(var('mart_name')) }};
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -310,7 +310,7 @@ SELECT id AS order_id FROM raw_orders;
 SELECT id AS order_id FROM raw_orders;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: explore,build
 - severity: build=advisory, explore=advisory
@@ -343,7 +343,7 @@ ON t.customer_id = s.customer_id
 WHEN MATCHED THEN UPDATE SET balance = s.balance;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=error, build=error
@@ -369,7 +369,7 @@ Why: Batching on processing time instead of event time reprocesses open, still-a
 SELECT * FROM raw_events WHERE occurred_at < CURRENT_TIMESTAMP;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -395,7 +395,7 @@ SELECT o.order_id, COALESCE(p.promo_name, 'no-promo') AS promo_name
 FROM orders o LEFT JOIN promotions p ON p.code = o.promo_code;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -420,7 +420,7 @@ Why: Overlapping or doubled SCD2 windows join facts to two dimension versions at
 -- enforced by snapshot unique_key + dbt_valid_from/dbt_valid_to logic
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -449,7 +449,7 @@ SELECT sku, name, price, updated_at FROM raw_products;
 {% endsnapshot %}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: explore,build
 - severity: build=warning, explore=warning
@@ -477,7 +477,7 @@ SELECT id AS order_id, status, total_cents / 100.0 AS total
 FROM raw_orders;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -500,7 +500,7 @@ SELECT ROW_NUMBER() OVER (ORDER BY email) AS customer_key, email FROM stg;
 SELECT MD5(LOWER(TRIM(email))) AS customer_key, email FROM stg;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,assure
 - severity: assure=error, build=error
@@ -525,7 +525,7 @@ SELECT email, name FROM raw_customers;  -- no unique_key, nulls allowed
 SELECT customer_id, email, name FROM raw_customers WHERE customer_id IS NOT NULL;
 ```
 
-- checked by tq: yes
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,assure
 - severity: assure=error, build=error

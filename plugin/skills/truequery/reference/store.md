@@ -19,7 +19,7 @@ CREATE TABLE orders (...) PARTITION BY DATE(order_ts); -- no clustering, queries
 CREATE TABLE orders (...) PARTITION BY DATE(order_ts) CLUSTER BY customer_id, status;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -42,7 +42,7 @@ Why: Continuous small writes accumulate thousands of tiny files; every read then
 OPTIMIZE events; -- weekly job, plus autoCompact enabled on the table
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -65,7 +65,7 @@ CREATE TABLE orders (order_id BIGINT, amount DECIMAL(18,2));
 CREATE TABLE orders (order_id BIGINT NOT NULL, amount DECIMAL(18,2) CHECK (amount >= 0));
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -88,7 +88,7 @@ CREATE TABLE metrics (ts TIMESTAMP, host STRING, v DOUBLE); -- range queries on 
 CREATE TABLE metrics (ts TIMESTAMP, host STRING, v DOUBLE) WRITE ORDERED BY (ts);
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -111,7 +111,7 @@ CREATE TABLE outbox (id BIGINT, op STRING) USING DELTA; -- consumed by streaming
 CREATE TABLE outbox (id BIGINT, op STRING) USING DELTA TBLPROPERTIES (delta.enableChangeDataFeed = true);
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build
 - severity: build=advisory
@@ -134,7 +134,7 @@ CREATE TABLE events_new PARTITIONED BY (day(ts)); INSERT OVERWRITE events_new SE
 ALTER TABLE events REPLACE PARTITION FIELD month(ts) WITH day(ts); -- metadata-only evolution
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: change
 - severity: change=advisory
@@ -157,7 +157,7 @@ CREATE TABLE t (id, amount, ts);
 CREATE TABLE t (id BIGINT NOT NULL, amount DECIMAL(18,2), ts TIMESTAMPTZ);
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -180,7 +180,7 @@ DELETE FROM marts.orders; INSERT INTO marts.orders SELECT ...;
 CREATE OR REPLACE TABLE marts.orders AS SELECT ...;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -205,7 +205,7 @@ SELECT * FROM src WHERE _ingested_at > (SELECT MAX(_ingested_at) FROM {{ this }}
 SELECT * FROM src WHERE event_date >= DATE_SUB(CURRENT_DATE, INTERVAL 3 DAY)
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -228,7 +228,7 @@ PARTITIONED BY (user_id)
 PARTITIONED BY (days(event_ts))
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -251,7 +251,7 @@ CREATE TABLE events (...) PARTITION BY DATE(ts); -- no expiry, retained forever
 CREATE TABLE events (...) PARTITION BY DATE(ts) OPTIONS (partition_expiration_days = 400);
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -274,7 +274,7 @@ CREATE TABLE events (event_ts TIMESTAMP, user_id BIGINT, payload STRING);
 CREATE TABLE events (event_ts TIMESTAMP, user_id BIGINT, payload STRING) PARTITION BY DATE(event_ts);
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -297,7 +297,7 @@ SELECT user_id, COUNT(*) FROM events GROUP BY 1; -- events partitioned by event_
 SELECT user_id, COUNT(*) FROM events WHERE event_date >= DATE '2026-09-01' GROUP BY 1;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: explore,assure
 - severity: assure=warning, explore=warning
@@ -320,7 +320,7 @@ OPTIMIZE events ZORDER BY (user_id); -- weekly cron, no benchmark on file
 ALTER TABLE events CLUSTER BY AUTO (user_id); -- platform maintains layout incrementally
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -343,7 +343,7 @@ Why: Each commit adds manifest entries; without rewrites, query planning lists t
 CALL catalog.system.rewrite_manifests('db.events'); -- weekly job
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: assure
 - severity: assure=warning
@@ -366,7 +366,7 @@ Why: Mixed formats per layer double the maintenance surface (two VACUUM/OPTIMIZE
 -- silver layer: all Iceberg; bronze→silver migration allowlist in contract tracks 2 remaining Delta tables
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: build
 - severity: build=advisory
@@ -389,7 +389,7 @@ CREATE TABLE finance.ledger (...); -- no retention declared, default applies
 CREATE TABLE finance.ledger (...) DATA_RETENTION_TIME_IN_DAYS = 30;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -412,7 +412,7 @@ CREATE TABLE staging.orders_load (...);
 CREATE TRANSIENT TABLE staging.orders_load (...);
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
@@ -435,7 +435,7 @@ VACUUM events RETAIN 0 HOURS;
 VACUUM events RETAIN 168 HOURS; -- weekly job, floor declared in contract
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: detector
 - modes: assure,change
 - severity: assure=error, change=error

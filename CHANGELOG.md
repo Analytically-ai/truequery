@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-26)
 
 First preview: the `/truequery` skill (build, ask, analyze,
 metric, review, harden, init, hooks), the offline checker with 25
@@ -28,6 +28,12 @@ checks (15 on by default), the receipt, and Claude Code hooks.
   definitions are templates, not queries) instead of failing to parse,
   so `truequery detect` on a dbt project no longer exits 3 because of
   `macros/`.
+- Windows: a `truequery.cmd` launcher for PowerShell and cmd, and shell
+  scripts keep LF line endings in any checkout.
+- `truequery context --target` accepts a folder.
+- Messages say `truequery`, not `tq`; `rules set --scope user` says when
+  a project setting overrides yours.
+- Tested on Python 3.11 to 3.14.
 - The checker installs from PyPI: `pip install truequery`
   (or `uv tool install truequery`; no install at all with
   `uvx truequery`).

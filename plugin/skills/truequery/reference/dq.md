@@ -21,7 +21,7 @@ Why: "Matches reality" cannot be derived from the data being judged; any score c
  reason: "no source of truth declared; see reconciliation config"}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: judgment
 - modes: assure
 - severity: assure=advisory
@@ -45,7 +45,7 @@ MODEL (name marts.orders, audits (assert_price_not_null, assert_no_orphans));
 -- plan halts before promotion when any audit returns rows
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,change
 - severity: build=warning, change=warning
@@ -71,7 +71,7 @@ checks for dim_customer:
 # reviewed, merged, and deployed with the model change
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,change
 - severity: build=advisory, change=advisory
@@ -96,7 +96,7 @@ SELECT COUNT(*) - COUNT(NULLIF(NULLIF(TRIM(email), ''), 'N/A')) AS missing
 FROM customers;
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -123,7 +123,7 @@ checks for customers:
   - missing_count(customer_id) = 0
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -158,7 +158,7 @@ models:
               field: customer_id
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -183,7 +183,7 @@ checks for mart_daily:
   - row_count > 0
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -209,7 +209,7 @@ WHERE NOT (end_at IS NULL OR end_at > start_at);
 -- zero rows required
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=error, build=error
@@ -237,7 +237,7 @@ WHERE c.customer_id IS NULL;
 -- zero rows required; any row fails the build
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -262,7 +262,7 @@ SELECT (SELECT SUM(amount) FROM staging_payments) AS source_total,
 -- build fails unless the two match within tolerance
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,assure
 - severity: assure=error, build=error
@@ -287,7 +287,7 @@ row_count > 0 [PASSED]
 missing_count(email) = 0 [PASSED]
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -312,7 +312,7 @@ CREATE TABLE orders (order_id INT PRIMARY KEY, ...);
 -- plus: unique + not_null tests on order_id in the pipeline suite
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -339,7 +339,7 @@ data_tests:
       combination_of_columns: [order_id, line_number]
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning
@@ -370,7 +370,7 @@ models:
           - not_null
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: runtime
 - modes: build,change,assure
 - severity: assure=error, build=error, change=error
@@ -396,7 +396,7 @@ test_rank_ties:
   outputs: {query: [{rows: [...expected winners...]}]}
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -425,7 +425,7 @@ columns:
           values: ['pending','completed','cancelled','refunded']
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
@@ -456,7 +456,7 @@ models:
         constraints: [{type: not_null}]
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,change
 - severity: build=warning, change=warning
@@ -481,7 +481,7 @@ ALTER TABLE lines ADD CONSTRAINT positive_amount CHECK (amount >= 0);
 -- plus a validity check on the pipeline for warehouses without enforcement
 ```
 
-- checked by tq: no (taught, not checked)
+- checked by truequery: no (taught, not checked)
 - enforcement: contract
 - modes: build,assure
 - severity: assure=warning, build=warning

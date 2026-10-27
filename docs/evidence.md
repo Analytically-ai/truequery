@@ -14,7 +14,7 @@ the receipt: a pass never claims more than was verified.
   We labelled every finding by hand. Checks that misfired were fixed or
   switched off by default, which is why 15 of the 25 checks are on by
   default and the other 10 wait until they prove precise.
-- **Tests.** 319 automated tests run on Linux, macOS and Windows with
+- **Tests.** More than 300 automated tests run on Linux, macOS and Windows with
   Python 3.11 to 3.13. 22 practices in the standard carry an executable
   proof that runs on every change.
 - **Never a false "clean".** A file the checker can't parse, can't decode

@@ -215,7 +215,10 @@ def build_receipt(results, modes: list[str], contracts: dict,
         if tag in ("new", "existing", "attribution unknown"):
             slot = attributed.setdefault(tag, {})
             slot[finding.severity] = slot.get(finding.severity, 0) + 1
-    sql = [r for r in results if r.kind == "sql"]
+    # "Checked" counts only files the checker actually read: a file that
+    # didn't parse, didn't decode or was over the size limit is listed
+    # under "Not checked", never counted here too.
+    sql = [r for r in results if r.kind == "sql" and r.verified]
     project = [r for r in results if r.kind == "project"]
     oversize = sorted({r.rel for r in results
                        if any(d.message == E.TOO_LARGE
@@ -232,7 +235,8 @@ def build_receipt(results, modes: list[str], contracts: dict,
     return {
         "modes": sorted(set(modes)),
         "standard": STANDARD_VERSION,
-        "files_checked": sum(1 for r in results if r.kind != "macro"),
+        "files_checked": sum(1 for r in results
+                             if r.kind != "macro" and r.verified),
         "sql_files": len(sql),
         "project_files": len(project),
         "evidence": {
@@ -288,7 +292,7 @@ def render_receipt(receipt: dict) -> str:
     if total:
         have = total - len(receipt["contracts_missing"])
         contract = f"contracts for {have} of {_plural(total, 'table')}"
-        if ev["contract_consumers"]:
+        if ev["contract_consumers"] and have:
             contract += f" (keys used by {', '.join(ev['contract_consumers'])})"
         checked.append(contract)
     lines.append(f"{'Checked':<13}" + " · ".join(checked))
