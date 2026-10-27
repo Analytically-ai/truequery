@@ -356,11 +356,10 @@ turns a `LEFT JOIN` into an inner join, a `COUNT(*)` that counts missing
 rows. They don't overlap, so use both.
 
 **What does it cost in tokens?**
-More per pass, fewer passes. In one hands-on test, a single pass used about
-2.6 times the tokens, but reaching merge-ready work took about 260k tokens
-with TrueQuery against about 454k without. The checker itself uses no
-tokens: it's plain code running on your machine. See
-[Evidence and limits](docs/evidence.md).
+A little more. On 10 vague, realistic requests, TrueQuery cost about 19% more
+than plain Claude Code in tokens, and made no silent mistakes where plain
+Claude Code made three. The checker itself uses no tokens: it's plain code running
+on your machine. See [Evidence and limits](docs/evidence.md).
 
 **Which SQL dialects does the checker handle?**
 It parses SQL with [sqlglot](https://github.com/tobymao/sqlglot). Tested on
