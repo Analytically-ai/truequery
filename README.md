@@ -178,7 +178,7 @@ you to change your stack. It sits alongside what you already use:
 
 | Where | Status |
 |---|---|
-| Claude Code | Supported: skill, commands, hooks |
+| Claude Code | Supported: skill, commands, hooks (on Windows the per-edit hooks need [Git for Windows](https://git-scm.com/download/win), which provides Git Bash) |
 | Terminal and CI (any agent, any person) | Supported: `truequery detect` / `review`, JSON and SARIF |
 | Codex, Muse Code | Hook configs included (`truequery install --harness codex\|muse`), not yet verified live |
 | Cursor, GitHub Copilot, Gemini CLI and others | Planned |
@@ -203,7 +203,8 @@ the version that matches the plugin, with nothing else to install. To use
 pip install truequery          # or: uv tool install truequery
 ```
 
-That installs `truequery` and the alias `tq`. Contributors working from a
+That installs `truequery` and the short alias `tq`. If another tool in the
+same environment already provides a `tq` command, use `truequery`. Contributors working from a
 clone can install the local engine instead, from the repo root:
 
 ```bash

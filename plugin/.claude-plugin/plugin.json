@@ -5,6 +5,8 @@
   "author": {
     "name": "Analytically.ai"
   },
+  "homepage": "https://analytically.ai/truequery",
+  "repository": "https://github.com/Analytically-ai/truequery",
   "license": "Apache-2.0",
   "keywords": [
     "data",

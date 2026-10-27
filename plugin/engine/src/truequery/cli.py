@@ -1,4 +1,4 @@
-"""tq: deterministic SQL checks for the agent edit loop. Offline, no LLM."""
+"""truequery: deterministic SQL checks for the agent edit loop. Offline, no LLM."""
 
 from __future__ import annotations
 
@@ -181,7 +181,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
     modes = [r.mode for r in results]
     findings = RP.all_findings(results)
     if not results:
-        note = "tq detect: no SQL files found"
+        note = "truequery detect: no SQL files found"
         if args.sarif:
             print(RP.render_sarif(results, ENGINE_VERSION))
         elif args.json:
@@ -284,17 +284,29 @@ def cmd_context(args: argparse.Namespace) -> int:
     stale = config is None
     if stale:
         config = P.default_config(P.detect_stack(root), None)
+    dialect = (config or {}).get("dialect")
     rel, target_text = None, ""
-    if args.target:
+    if args.target and os.path.isdir(args.target):
+        # A folder: every SQL file in it. One MODE when they agree, else
+        # "mixed" with the modes listed.
         rel = P._rel(os.path.abspath(args.target), root)
-        try:
-            with open(args.target, encoding="utf-8") as handle:
-                target_text = handle.read()
-        except OSError:
-            print(f"tq: no such file: {args.target}", file=sys.stderr)
-            return EXIT_ERROR
-    mode = P.resolve_mode(rel or "", config, None)
-    tables = P.referenced_tables(target_text, (config or {}).get("dialect"))
+        files = P.discover([args.target])
+        modes = sorted({P.resolve_mode(P._rel(f, root), config, None)
+                        for f in files}) or [P.resolve_mode("", config, None)]
+        mode = modes[0] if len(modes) == 1 else "mixed (" + ", ".join(modes) + ")"
+        tables = P.tables_in_files(files, dialect)
+    else:
+        if args.target:
+            rel = P._rel(os.path.abspath(args.target), root)
+            try:
+                with open(args.target, encoding="utf-8") as handle:
+                    target_text = handle.read()
+            except OSError:
+                print(f"truequery: no such file or folder: {args.target}",
+                      file=sys.stderr)
+                return EXIT_ERROR
+        mode = P.resolve_mode(rel or "", config, None)
+        tables = P.referenced_tables(target_text, dialect)
     contracts = P.load_contracts(root)
     directives = [f"MODE: {mode}", "STANDARD: 0.1",
                   "EVIDENCE_AVAILABLE: file"]
@@ -317,7 +329,7 @@ def cmd_context(args: argparse.Namespace) -> int:
     elif args.json:
         print(json.dumps(doc, indent=2, sort_keys=True))
     else:
-        print(f"# tq context (project root: {root})")
+        print(f"# truequery context (project root: {root})")
         print(f"stack={config.get('stack')} "
               f"dialect={config.get('dialect') or 'auto'}")
         if rel:
@@ -360,20 +372,25 @@ def _rules_set(args: argparse.Namespace, root) -> int:
                 with open(data_md, encoding="utf-8") as handle:
                     text = handle.read()
             except OSError:
-                print("tq: no DATA.md here; run `truequery init` first "
+                print("truequery: no DATA.md here; run `truequery init` first "
                       "(or use --scope user)", file=sys.stderr)
                 return EXIT_ERROR
             with open(data_md, "w", encoding="utf-8") as handle:
                 handle.write(S.data_md_with_rule(text, slug, updates))
             where = data_md
     except ValueError as exc:
-        print(f"tq: {exc}", file=sys.stderr)
+        print(f"truequery: {exc}", file=sys.stderr)
         return EXIT_ERROR
     eff = S.effective(root=root).rules[slug]
     state = ("on" if eff["enabled"] else "off") + f" tier={eff['tier']}"
     if eff["severity"]:
         state += f" severity={eff['severity']}"
-    print(f"set {slug}: {state} (source: {eff['source']}, wrote {where})")
+    print(f"wrote {where}")
+    print(f"{slug} is now {state} (effective, from the {eff['source']} "
+          "settings)")
+    if args.scope == "user" and eff["source"] == "project":
+        print("note: DATA.md in this project sets this rule too, and a "
+              "project setting overrides your user setting here.")
     return EXIT_CLEAN
 
 
@@ -384,12 +401,12 @@ def cmd_rules(args: argparse.Namespace) -> int:
     if args.slug:
         slug = args.slug
         if slug not in records:
-            print(f"tq: unknown rule: {slug}", file=sys.stderr)
+            print(f"truequery: unknown rule: {slug}", file=sys.stderr)
             return EXIT_ERROR
         try:
             full = schema.load_all()[slug]
         except (schema.SchemaError, KeyError, OSError) as exc:
-            print(f"tq: cannot load {slug}: {exc}", file=sys.stderr)
+            print(f"truequery: cannot load {slug}: {exc}", file=sys.stderr)
             return EXIT_ERROR
         if args.sarif:
             print(RP.render_sarif([], ENGINE_VERSION))
@@ -436,7 +453,7 @@ def cmd_rules(args: argparse.Namespace) -> int:
     try:
         eff, _ = _effective_for(args, os.path.abspath("."))
     except ValueError as exc:
-        print(f"tq: {exc}", file=sys.stderr)
+        print(f"truequery: {exc}", file=sys.stderr)
         return EXIT_ERROR
     if args.json:
         print(json.dumps(
@@ -491,15 +508,15 @@ def cmd_ignore_add(args: argparse.Namespace) -> int:
     may self-serve only one line; broader ignores are the user's call
     (hand-edit .truequery/ignores.json)."""
     if args.rule not in std_registry.RECORDS:
-        print(f"tq: unknown rule: {args.rule}", file=sys.stderr)
+        print(f"truequery: unknown rule: {args.rule}", file=sys.stderr)
         return EXIT_ERROR
     if not args.reason or not args.reason.strip():
-        print("tq: --reason is required (who and what evidence)",
+        print("truequery: --reason is required (who and what evidence)",
               file=sys.stderr)
         return EXIT_ERROR
     match = re.match(r"^(.*):(\d+)$", args.target)
     if not match:
-        print("tq: target must be path:line — narrowest scope only; "
+        print("truequery: target must be path:line — narrowest scope only; "
               "file-level ignores need a human", file=sys.stderr)
         return EXIT_ERROR
     raw_path, line = match.group(1), int(match.group(2))
@@ -514,12 +531,12 @@ def cmd_ignore_add(args: argparse.Namespace) -> int:
                    encoding="utf-8") as handle:
             text = handle.read()
     except OSError:
-        print(f"tq: no such file: {raw_path}", file=sys.stderr)
+        print(f"truequery: no such file: {raw_path}", file=sys.stderr)
         return EXIT_ERROR
     spans = E._chunk_hashes(text, (config or {}).get("dialect"))
     digest = E.stmt_hash_at(spans, line)
     if digest is None:
-        print(f"tq: line {line} is not inside a SQL statement",
+        print(f"truequery: line {line} is not inside a SQL statement",
               file=sys.stderr)
         return EXIT_ERROR
     state_dir = os.path.join(root, ".truequery")
@@ -592,7 +609,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_context = sub.add_parser(
         "context", help="DATA.md summary + referenced contracts + directives")
     p_context.add_argument("--target", default=None,
-                           help="only contracts this SQL file references")
+                           help="only contracts this SQL file (or the SQL "
+                                "files in this folder) references")
     p_context.add_argument("--json", action="store_true")
     p_context.add_argument("--sarif", action="store_true")
     p_context.set_defaults(func=cmd_context)
@@ -600,7 +618,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rules = sub.add_parser(
         "rules", help="list rules with effective settings; "
                        "'set' adjusts a rule (human only)",
-        epilog="tq rules set <slug> --enabled on|off --tier T "
+        epilog="truequery rules set <slug> --enabled on|off --tier T "
                "--severity S [--scope project|user]  # human-only "
                "command; agents must never change rule settings.")
     p_rules.add_argument("--all", action="store_true",
@@ -609,7 +627,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="show one record (statement, fix, proof); "
                               "'set' writes rule settings")
     p_rules.add_argument("target", nargs="?",
-                         help="slug for 'tq rules set'")
+                         help="slug for 'truequery rules set'")
     p_rules.add_argument("--json", action="store_true")
     p_rules.add_argument("--sarif", action="store_true")
     p_rules.add_argument("--enabled", choices=["on", "off"],
@@ -684,7 +702,7 @@ def main(argv: list[str] | None = None) -> int:
     except P.ContextError as exc:
         # Unreadable DATA.md / user config: say so, never fall back to
         # defaults silently.
-        print(f"tq: {exc}", file=sys.stderr)
+        print(f"truequery: {exc}", file=sys.stderr)
         return EXIT_ERROR
 
 

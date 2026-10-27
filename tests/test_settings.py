@@ -92,8 +92,8 @@ def test_rules_set_round_trip_project(tmp_path):
                        "--tier", "stop", "--severity", "advisory",
                        cwd=root, env=env)
     assert code == 0
-    assert f"set {SETOP}: on tier=stop severity=advisory" in out
-    assert "source: project" in out
+    assert f"{SETOP} is now on tier=stop severity=advisory" in out
+    assert "from the project settings" in out
     # written into the tq-config fence
     text = (root / "DATA.md").read_text(encoding="utf-8")
     assert "rules:" in text and SETOP in text
@@ -109,7 +109,8 @@ def test_rules_set_round_trip_user(tmp_path):
     code, out, _ = run("rules", "set", NOTIN, "--tier", "stop",
                        "--severity", "warning", "--scope", "user",
                        cwd=root, env=env)
-    assert code == 0 and "source: user" in out
+    assert code == 0 and "from the user settings" in out
+    assert "overrides your user setting" not in out
     cfg = tmp_path / "xdg" / "truequery" / "config.yaml"
     assert NOTIN in cfg.read_text(encoding="utf-8")
     text = subprocess.run(CLI + ["rules", "--json"], cwd=root,
@@ -197,3 +198,14 @@ def test_config_change_notice(tmp_path, monkeypatch):
     # and the notice does not repeat on the next event
     code, out2 = _run(_event(str(target)), Args(), monkeypatch)
     assert "rule settings changed this session" not in out2
+
+
+def test_rules_set_user_says_when_the_project_overrides_it(tmp_path):
+    root = project(tmp_path)
+    env = env_with_config(tmp_path)
+    run("rules", "set", NOTIN, "--severity", "warning", cwd=root, env=env)
+    code, out, _ = run("rules", "set", NOTIN, "--severity", "advisory",
+                       "--scope", "user", cwd=root, env=env)
+    assert code == 0
+    assert "from the project settings" in out
+    assert "a project setting overrides your user setting here" in out

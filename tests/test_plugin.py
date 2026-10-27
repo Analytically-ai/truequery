@@ -28,6 +28,7 @@ def test_plugin_is_self_contained():
     # runs (manifest, skill, hooks, shim, engine) must live inside it.
     for rel in (".claude-plugin/plugin.json", "skills/truequery/SKILL.md",
                 "hooks/hooks.json", "scripts/tq-hook.sh", "bin/truequery",
+                "bin/truequery.cmd",
                 "engine/pyproject.toml", "engine/src/truequery/cli.py"):
         assert os.path.isfile(os.path.join(PLUGIN, rel)), rel
 
@@ -179,3 +180,22 @@ def test_launcher_is_executable_in_git():
                          cwd=ROOT, capture_output=True, text=True).stdout
     assert out.startswith("100755"), out
 
+
+
+def test_windows_launcher_runs_the_plugins_own_engine():
+    with open(os.path.join(PLUGIN, "bin", "truequery.cmd"),
+              encoding="utf-8") as handle:
+        cmd = handle.read()
+    assert ('uv run --quiet --no-project --python ">=3.11" --with-editable '
+            '"%~dp0..\\engine" -- truequery %*') in cmd
+    assert "docs.astral.sh/uv" in cmd and "exit /b 127" in cmd
+
+
+def test_scripts_keep_their_line_endings_on_windows():
+    # A CRLF checkout breaks sh scripts under Git Bash.
+    with open(os.path.join(ROOT, ".gitattributes"), encoding="utf-8") as handle:
+        rules = handle.read()
+    for line in ("*.sh                  text eol=lf",
+                 "plugin/bin/truequery  text eol=lf",
+                 "*.cmd                 text eol=crlf"):
+        assert line in rules

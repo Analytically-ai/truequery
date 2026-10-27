@@ -635,3 +635,19 @@ def test_receipt_checked_counts_only_files_it_read(tmp_path):
     _, out, _ = run("review", "good.sql", "broken.sql", "--json", cwd=root)
     receipt = json.loads(out)["receipt"]
     assert receipt["files_checked"] == 1 and receipt["sql_files"] == 1
+
+
+def test_context_target_can_be_a_folder(tmp_path):
+    root = tmp_path / "proj"
+    (root / "models").mkdir(parents=True)
+    (root / "models" / "a.sql").write_text("select * from orders\n",
+                                           encoding="utf-8")
+    (root / "models" / "b.sql").write_text("select * from customers\n",
+                                           encoding="utf-8")
+    code, out, _ = run("context", "--target", "models", "--json", cwd=root)
+    assert code == 0
+    doc = json.loads(out)
+    assert doc["target"] == "models"
+    assert sorted(doc["tables_referenced"]) == ["customers", "orders"]
+    code, _, err = run("context", "--target", "nope", cwd=root)
+    assert code == 2 and "no such file or folder" in err

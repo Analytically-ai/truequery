@@ -102,7 +102,7 @@ def discover(paths: list[str]) -> list[str]:
             if is_sql_path(path):
                 collected.append(os.path.abspath(path))
         else:
-            raise ContextError(f"tq: no such file or directory: {path}")
+            raise ContextError(f"truequery: no such file or directory: {path}")
     return sorted(set(collected))
 
 

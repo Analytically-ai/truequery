@@ -654,7 +654,7 @@ def install(args) -> int:
     settings are kept. A config we can't parse is left untouched."""
     targets = _targets(args, default_all=False)
     if "claude" in targets and _plugin_enabled(args):
-        print("tq install: the truequery plugin is enabled, and its hooks "
+        print("truequery install: the truequery plugin is enabled, and its hooks "
               "are already active; not installing a second copy")
         targets.remove("claude")
     for name in targets:
@@ -662,15 +662,15 @@ def install(args) -> int:
         try:
             config = _read_config(path)
         except ConfigShapeError as exc:
-            print(f"tq install: {exc}. Nothing was changed; fix the file "
+            print(f"truequery install: {exc}. Nothing was changed; fix the file "
                   "and run install again.", file=sys.stderr)
             return 2
         command = _hook_command(name)
         _write_config(path, _with_our_hooks(config, HARNESSES[name][1],
                                             command))
-        print(f"tq install: wrote {path}")
-        print(f"tq install: hook command is {command}")
-        print(f"tq install: {HARNESSES[name][2]}")
+        print(f"truequery install: wrote {path}")
+        print(f"truequery install: hook command is {command}")
+        print(f"truequery install: {HARNESSES[name][2]}")
     return 0
 
 
@@ -693,7 +693,7 @@ def scan(args) -> dict:
                     break
             except ConfigShapeError:
                 continue
-        out[name] = (("tq-install", f"tq install hooks ({found})") if found
+        out[name] = (("tq-install", f"hooks written by truequery install ({found})") if found
                      else ("off", "no truequery hooks"))
     return out
 
@@ -702,10 +702,10 @@ def status(args) -> int:
     """Report hook state per harness. Never writes."""
     found_plugin = False
     for name, (state, detail) in scan(args).items():
-        print(f"tq status: {name}: {state} — {detail}")
+        print(f"truequery status: {name}: {state} — {detail}")
         found_plugin = found_plugin or state == "plugin"
     if found_plugin:
-        print("tq status: plugin hooks are active; do not also run "
+        print("truequery status: plugin hooks are active; do not also run "
               "`tq install` (never double-install)")
     return 0
 
@@ -749,16 +749,16 @@ def uninstall(args) -> int:
             try:
                 config = _read_config(path)
             except ConfigShapeError as exc:
-                print(f"tq uninstall: skipped {exc}", file=sys.stderr)
+                print(f"truequery uninstall: skipped {exc}", file=sys.stderr)
                 continue
             count = _without_our_hooks(config) if config else 0
             if count:
                 _write_config(path, config)
                 removed += count
     if _plugin_enabled(args):
-        print("tq uninstall: the truequery plugin is enabled; its hooks are "
+        print("truequery uninstall: the truequery plugin is enabled; its hooks are "
               "left alone (disable the plugin to turn them off)")
-    print(f"tq uninstall: removed {removed} tq-install entr"
+    print(f"truequery uninstall: removed {removed} tq-install entr"
           f"{'y' if removed == 1 else 'ies'}")
     return 0
 
