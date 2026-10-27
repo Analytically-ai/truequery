@@ -28,7 +28,8 @@ in a terminal or CI.
 
 ### In Claude Code: `/truequery review`
 
-A real session on the demo shop, reviewing one dbt model (sped up). The
+A real session on the demo shop, reviewing one dbt model (sped up; it pauses
+on the checker's receipt and again on the recommendation). The
 agent runs the checker, reads everything the model depends on, checks each
 house definition against the code, confirms suspected bugs in the data, and
 ends with a merge recommendation.
