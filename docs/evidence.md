@@ -25,14 +25,13 @@ the answers were graded with the arm hidden.
 | Cost for the 10 tasks | $2.59 | $3.08 (+19%) |
 
 **The three mistakes:**
-- a monthly revenue figure that counted deleted customers' orders and bucketed
-  days in the wrong time zone;
+- a monthly revenue figure that put orders in the wrong month, because the
+  warehouse build cuts days in Los Angeles time while the house rule says UTC;
 - two answers that reported Czech crowns as dollars, because the data
   dictionary says USD.
 
-**Why TrueQuery avoided them:** `/truequery init` found the time-zone and
-deleted-customer problems and asked about the currency once, then recorded
-the answers in `DATA.md`. Every later request used them. A plain agent
+**Why TrueQuery avoided them:** `/truequery init` found the time-zone problem
+and asked about the currency once, then recorded both in `DATA.md`. Every later request used them. A plain agent
 rediscovers the data from scratch each time, and sometimes misses.
 
 **Reviews:** in `/truequery review`, TrueQuery found about 16 of the 18 known
