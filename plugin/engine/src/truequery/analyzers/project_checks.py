@@ -168,13 +168,14 @@ def check_schema_yaml(text, path, mode="build", registry=None,
     return out
 
 
-def check_python(text, path, mode="build", registry=None, settings=None):
-    """orch/explicit-catchup-policy: Airflow DAG without catchup."""
-    out = []
+def _dag_calls(text):
+    """Airflow DAG call nodes; the one detection check_python and
+    applies_to_file share so counting can't drift from checking."""
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        return out
+        return []
+    out = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -183,6 +184,186 @@ def check_python(text, path, mode="build", registry=None, settings=None):
                 else func.attr if isinstance(func, ast.Attribute) else "")
         if name not in ("DAG", "dag"):  # DAG(...), models.DAG, @dag(...)
             continue
+        out.append(node)
+    return out
+
+
+def _schema_doc(text):
+    """Parsed YAML mapping, or None when it isn't one."""
+    try:
+        doc = yaml.safe_load(text)
+    except Exception:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def applies_to_file(path, text):
+    """True when a preview project check applies to this file.
+
+    A .py file counts only when it's an Airflow DAG; a YAML file
+    counts only when it's a dbt schema/sources file or dbt_project.yml.
+    Detection mirrors check_python/check_schema_yaml so the receipt
+    never counts a file no check reads.
+    """
+    if path.endswith(".py"):
+        return bool(_dag_calls(text))
+    if path.endswith((".yml", ".yaml")):
+        if os.path.basename(path) == "dbt_project.yml":
+            return True
+        doc = _schema_doc(text)
+        return doc is not None and ("models" in doc or "sources" in doc)
+    return False
+
+
+SQL_KEYWORDS = ("SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "MERGE",
+                "CREATE", "REPLACE", "DROP")
+
+# Call sites where a string literal is plausibly SQL. Matched by function
+# name only (pd.read_sql, conn.execute, spark.sql, sqlalchemy text, ...);
+# the string content decides, so a non-SQL use never matches.
+SQL_CALL_NAMES = frozenset({
+    "execute", "executemany", "executescript", "exec_driver_sql",
+    "read_sql", "read_sql_query", "read_sql_table", "text", "sql",
+})
+
+
+def _strip_leading_sql_comments(s):
+    i, n = 0, len(s)
+    while True:
+        while i < n and s[i].isspace():
+            i += 1
+        if s.startswith("--", i):
+            j = s.find("\n", i)
+            i = n if j == -1 else j + 1
+            continue
+        if s.startswith("/*", i):
+            j = s.find("*/", i + 2)
+            if j == -1:
+                return ""
+            i = j + 2
+            continue
+        if i < n and s[i] == "#":
+            j = s.find("\n", i)
+            i = n if j == -1 else j + 1
+            continue
+        break
+    return s[i:]
+
+
+def _starts_with_sql_keyword(s):
+    rest = _strip_leading_sql_comments(s)
+    upper = rest.upper()
+    for kw in SQL_KEYWORDS:
+        if upper.startswith(kw):
+            after = rest[len(kw):len(kw) + 1]
+            if not after or not (after.isalnum() or after == "_"):
+                return True
+    return False
+
+
+def _lead_text(node):
+    """Static leading text of a string expression, or None.
+
+    Constants give their value; f-strings give the literal prefix before
+    the first placeholder; `+` concatenation gives the left prefix (or the
+    right when the left has none). Anything dynamic yields None.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(
+                    value.value, str):
+                parts.append(value.value)
+            else:
+                break
+        return "".join(parts) if parts else ""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _lead_text(node.left)
+        if left:
+            return left
+        return _lead_text(node.right)
+    return None
+
+
+def _node_is_sql_string(node):
+    lead = _lead_text(node)
+    return bool(lead) and _starts_with_sql_keyword(lead)
+
+
+def _assigned_values(tree):
+    """Name -> value nodes assigned to it in this file.
+
+    Only plain `name = value` and `name: type = value` with a single
+    `Name` target: same-file, by-name lookup. No data flow, no imports.
+    """
+    out: dict[str, list] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                out.setdefault(target.id, []).append(node.value)
+        elif (isinstance(node, ast.AnnAssign)
+              and isinstance(node.target, ast.Name)
+              and node.value is not None):
+            out.setdefault(node.target.id, []).append(node.value)
+    return out
+
+
+def _resolves_to_sql(node, assigned, seen=frozenset()):
+    """True when a call-site argument is (or names) a SQL string.
+
+    A bare `Name` resolves to the string assigned to it in the same
+    file, then gets the same keyword test. Anything else (including a
+    docstring, which is never assigned or passed) never matches.
+    """
+    if isinstance(node, ast.Name):
+        if node.id in seen:
+            return False
+        return any(_resolves_to_sql(value, assigned, seen | {node.id})
+                   for value in assigned.get(node.id, []))
+    return _node_is_sql_string(node)
+
+
+def has_embedded_sql(text):
+    """True when a .py file holds SQL strings at known call sites.
+
+    Detection only: a string counts as SQL when it starts (after
+    whitespace and SQL comments) with a SQL keyword. A bare name at a
+    call site resolves to the string assigned to it in the same file.
+    The SQL inside is never parsed or checked here; callers list such
+    files as not checked.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    assigned = _assigned_values(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute) else "")
+        args = list(node.args)
+        for kw in node.keywords:
+            if kw.arg == "sql":
+                args.append(kw.value)
+        if not args:
+            continue
+        if name in SQL_CALL_NAMES or any(
+                kw.arg == "sql" for kw in node.keywords):
+            for arg in args:
+                if _resolves_to_sql(arg, assigned):
+                    return True
+    return False
+
+
+def check_python(text, path, mode="build", registry=None, settings=None):
+    """orch/explicit-catchup-policy: Airflow DAG without catchup."""
+    out = []
+    for node in _dag_calls(text):
         kws = {k.arg for k in node.keywords if k.arg}
         if "catchup" in kws:
             continue

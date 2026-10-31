@@ -22,6 +22,9 @@ CASES = [
     ("redshift", "qualify", "sql/null-equality-comparison"),
     ("redshift", "distkey_sortkey", "sql/not-in-nullable-subquery"),
     ("redshift", "delete_using", "sql/unguarded-update-delete"),
+    ("sqlite", "insert_replace", "sql/null-equality-comparison"),
+    ("sqlite", "string_concat", "sql/not-in-nullable-subquery"),
+    ("sqlite", "autoincrement_typeof", "sql/unguarded-update-delete"),
 ]
 
 

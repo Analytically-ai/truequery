@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.1 (2026-10-31)
+
+Honest counts: the checker only counts files a check actually applies to.
+
+- A `.py` file counts as a project file only when it's an Airflow DAG, and
+  a YAML file only when it's a dbt schema/sources file or `dbt_project.yml`.
+  Plain app code and other YAML files no longer inflate the "checked" count.
+- SQL inside Python files (at `execute`, `read_sql`, `text()`, `.sql()` and
+  `sql=` call sites, including a query held in a same-file variable) is
+  listed as not checked yet, in the receipt and in the summary line, and
+  never as clean. The SQL inside isn't parsed or checked yet; that's a
+  later feature. An Airflow DAG that holds SQL stays counted as a checked
+  project file and is also listed as not checked.
+- SQLite joins the tested synthetic dialects (`INSERT OR REPLACE`,
+  `strftime`, `datetime('now')`, `||`, `LIMIT … OFFSET`, `typeof()`,
+  `AUTOINCREMENT`), alongside Snowflake and Redshift.
+- The SARIF driver name is `truequery` (was `tq`), and so is the JSON
+  report's top-level `"tool"` field.
+
 ## 0.1.0 (2026-10-26)
 
 First preview: the `/truequery` skill (build, ask, analyze,

@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 
+from truequery import __version__ as TOOL_VERSION
+
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 CLI = [sys.executable, "-m", "truequery.cli"]
@@ -77,7 +79,7 @@ def test_detect_json_shape(tmp_path):
         "why": "no WHERE: every row is affected",
         "fix": "add a WHERE predicate, or use TRUNCATE if you mean the whole table",
         "standard_ref": "sql/unguarded-update-delete (standard-0.1)",
-        "tool_version": "0.1.0",
+        "tool_version": TOOL_VERSION,
     }
 
 
@@ -89,7 +91,7 @@ def test_detect_sarif_shape(tmp_path):
     assert doc["version"] == "2.1.0"
     assert doc["$schema"].endswith("sarif-2.1.0.json")
     driver = doc["runs"][0]["tool"]["driver"]
-    assert driver["name"] == "tq" and driver["version"] == "0.1.0"
+    assert driver["name"] == "truequery" and driver["version"] == TOOL_VERSION
     ids = [r["id"] for r in driver["rules"]]
     assert ids == sorted(ids) and "parse-error" in ids
     assert len(doc["runs"][0]["results"]) == 1
@@ -635,6 +637,199 @@ def test_receipt_checked_counts_only_files_it_read(tmp_path):
     _, out, _ = run("review", "good.sql", "broken.sql", "--json", cwd=root)
     receipt = json.loads(out)["receipt"]
     assert receipt["files_checked"] == 1 and receipt["sql_files"] == 1
+
+
+def test_honest_counts_lists_embedded_sql_not_clean(tmp_path):
+    # Repro from the 0.1.1 report: 5 app .py files with `= NULL` inside
+    # strings, one plain config.yaml, one buggy sql/q.sql. Only the SQL
+    # file counts as checked; the Python files are listed as not checked.
+    root = tmp_path / "proj"
+    (root / "app").mkdir(parents=True)
+    (root / "sql").mkdir()
+    for i in range(1, 6):
+        (root / "app" / f"m{i}.py").write_text(
+            "import sqlite3\n"
+            "con.execute(\"\"\"SELECT * FROM orders "
+            "WHERE customer_id = NULL\"\"\")\n",
+            encoding="utf-8")
+    (root / "config.yaml").write_text("key: value\n", encoding="utf-8")
+    (root / "sql" / "q.sql").write_text(
+        "SELECT * FROM orders WHERE id = NULL;\n", encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 1  # the = NULL in sql/q.sql, not the Python strings
+    assert out.strip().endswith(
+        "1 error, 0 warnings in 1 file checked offline · "
+        "SQL inside 5 Python files not checked")
+    assert "clean" not in out
+    code, out, _ = run("review", ".", cwd=root)
+    assert code == 1
+    assert "Checked      1 SQL file" in out
+    assert ("Not checked  SQL inside 5 Python files (not checked yet): "
+            "app/m1.py, app/m2.py, app/m3.py, app/m4.py, app/m5.py") in out
+    code, out, _ = run("review", ".", "--json", cwd=root)
+    assert code == 1
+    receipt = json.loads(out)["receipt"]
+    assert receipt["files_checked"] == 1 and receipt["sql_files"] == 1
+    assert receipt["project_files"] == 0
+    assert receipt["not_checked"]["embedded_sql_files"] == [
+        "app/m1.py", "app/m2.py", "app/m3.py", "app/m4.py", "app/m5.py"]
+    # Embedded files never change the exit code on their own.
+    for i in range(1, 6):
+        (root / "app" / f"m{i}.py").write_text(
+            "import sqlite3\ncon.execute(\"SELECT * FROM orders\")\n",
+            encoding="utf-8")
+    (root / "sql" / "q.sql").write_text("select a from t\n",
+                                       encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert out.strip() == ("no findings in 1 file checked offline · "
+                           "SQL inside 5 Python files not checked")
+
+
+def test_dag_and_schema_yaml_still_count(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "dag.py").write_text(
+        "from airflow import DAG\ndag = DAG('x', start_date=None)\n",
+        encoding="utf-8")
+    (root / "schema.yml").write_text(
+        "models:\n  - name: orders\n    columns:\n"
+        "      - name: order_id\n        tests: [unique]\n",
+        encoding="utf-8")
+    (root / "q.sql").write_text("select a from t\n", encoding="utf-8")
+    code, out, _ = run("review", ".", "--json", "--enable-rule",
+                       "orch/explicit-catchup-policy", "--enable-rule",
+                       "dq/uniqueness-key-no-duplicates", "--fail-on",
+                       "warning", cwd=root)
+    assert code == 1
+    receipt = json.loads(out)["receipt"]
+    assert receipt["project_files"] == 2
+    assert receipt["files_checked"] == 3
+    assert sorted(json.loads(out)["files"]) == ["dag.py", "q.sql",
+                                               "schema.yml"]
+    # Explicit catchup is clean but still counted.
+    (root / "dag.py").write_text(
+        "from airflow import DAG\ndag = DAG('x', catchup=False)\n",
+        encoding="utf-8")
+    code, out, _ = run("review", ".", "--json", "--enable-rule",
+                       "orch/explicit-catchup-policy", "--enable-rule",
+                       "dq/uniqueness-key-no-duplicates", "--fail-on",
+                       "warning", cwd=root)
+    receipt = json.loads(out)["receipt"]
+    assert receipt["project_files"] == 2
+    assert receipt["files_checked"] == 3
+
+
+def test_plain_py_and_yaml_are_neither_counted_nor_listed(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "config.yaml").write_text("key: value\n", encoding="utf-8")
+    (root / "q.sql").write_text("select a from t\n", encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert out == "clean: 1 file checked offline, no findings\n"
+    code, out, _ = run("review", ".", "--json", cwd=root)
+    assert code == 0
+    doc = json.loads(out)
+    assert doc["files"] == ["q.sql"]
+    assert doc["receipt"]["files_checked"] == 1
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == []
+
+
+def test_fstring_and_concatenation_count_as_embedded(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "q1.py").write_text(
+        "import pandas as pd\n"
+        "df = pd.read_sql(f\"SELECT * FROM t WHERE x={y}\", con)\n",
+        encoding="utf-8")
+    (root / "q2.py").write_text(
+        "con.execute(\"SELECT \" + \"* FROM t\")\n", encoding="utf-8")
+    (root / "q.sql").write_text("select a from t\n", encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert ("SQL inside 2 Python files not checked") in out
+    assert "clean" not in out
+    code, out, _ = run("review", ".", "--json", cwd=root)
+    assert json.loads(out)["receipt"]["not_checked"][
+        "embedded_sql_files"] == ["q1.py", "q2.py"]
+
+
+def test_dag_with_sql_is_counted_and_listed(tmp_path):
+    root = tmp_path / "proj"
+    (root / "dags").mkdir(parents=True)
+    (root / "dags" / "load.py").write_text(
+        "from airflow import DAG\n"
+        "from airflow.providers.common.sql.operators.sql import "
+        "SQLExecuteQueryOperator\n"
+        'with DAG("load", catchup=False) as dag:\n'
+        '    SQLExecuteQueryOperator(task_id="t", '
+        'sql="DELETE FROM orders WHERE customer_id = NULL")\n',
+        encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert out.strip() == ("no findings in 1 file checked offline · "
+                           "SQL inside 1 Python file not checked")
+    assert "clean" not in out
+    code, out, _ = run("review", ".", cwd=root)
+    assert code == 0
+    assert "Checked      0 SQL files · 1 project file" in out
+    assert ("Not checked  SQL inside 1 Python file (not checked yet): "
+            "dags/load.py") in out
+    code, out, _ = run("review", ".", "--json", cwd=root)
+    assert code == 0
+    doc = json.loads(out)
+    assert doc["receipt"]["files_checked"] == 1
+    assert doc["receipt"]["project_files"] == 1
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == [
+        "dags/load.py"]
+
+
+def test_dag_without_catchup_reports_finding_and_embedded(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "dag.py").write_text(
+        "from airflow import DAG\n"
+        'dag = DAG("x", start_date=None)\n'
+        'con.execute("SELECT * FROM t")\n',
+        encoding="utf-8")
+    code, out, _ = run("review", ".", "--json", "--enable-rule",
+                       "orch/explicit-catchup-policy", "--fail-on",
+                       "warning", cwd=root)
+    assert code == 1
+    doc = json.loads(out)
+    assert [f["rule"] for f in doc["findings"]] == [
+        "orch/explicit-catchup-policy"]
+    assert doc["receipt"]["project_files"] == 1
+    assert doc["receipt"]["files_checked"] == 1
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == ["dag.py"]
+
+
+def test_variable_sql_is_listed_as_embedded(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "q.py").write_text(
+        'QUERY = """\nSELECT * FROM orders WHERE customer_id = NULL\n"""\n'
+        "def load(con):\n"
+        "    return con.execute(QUERY).fetchall()\n",
+        encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert "SQL inside 1 Python file not checked" in out
+    code, out, _ = run("review", ".", "--json", cwd=root)
+    assert json.loads(out)["receipt"]["not_checked"][
+        "embedded_sql_files"] == ["q.py"]
+
+
+def test_docstring_only_py_is_neither_counted_nor_listed(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "d.py").write_text(
+        '"""Select the best row."""\nx = 1\n', encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert out == "truequery detect: no SQL files found\n"
 
 
 def test_context_target_can_be_a_folder(tmp_path):

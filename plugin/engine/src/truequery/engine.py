@@ -51,13 +51,28 @@ class FileResult:
     diagnostics: list = field(default_factory=list)
     suppressed: list = field(default_factory=list)
     key_lookups: list = field(default_factory=list)
-    # "sql"; "project" for .py/.yml/.yaml files; "macro" for a file of
-    # dbt macro definitions, which is listed as not checked.
+    # "sql"; "project" for DAG/schema .py/.yml/.yaml files; "macro"
+    # for a file of dbt macro definitions; "embedded" for a .py file with
+    # SQL strings inside. Macro and embedded files are listed as not
+    # checked.
     kind: str = "sql"
+    # True when a counted .py result (e.g. an Airflow DAG) also holds
+    # embedded SQL: it stays counted, and is also listed as not checked.
+    embedded_sql: bool = False
 
     @property
     def verified(self) -> bool:
         return not self.diagnostics
+
+
+def is_embedded(result: "FileResult") -> bool:
+    """One source of truth for "this result's SQL is not checked".
+
+    Covers the standalone embedded kind and any counted result (a DAG)
+    that also holds embedded SQL, so the receipt, JSON and summary
+    can't drift apart.
+    """
+    return result.kind == "embedded" or result.embedded_sql
 
 
 def load_ignores(root: str) -> list[dict]:
@@ -335,12 +350,24 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             continue
         rel = P._rel(path, root)
         file_mode = P.resolve_mode(rel, config, mode)
-        result = FileResult(path=path, rel=rel, mode=file_mode,
-                            kind="project")
-        # Project files have no statements: ignores match on rule + file
-        # + line.
-        _apply_ignores(result, _aux_findings(text, path, file_mode, tiers,
-                                             settings), [], ignores)
-        results.append(result)
+        if project_checks.applies_to_file(path, text):
+            # A DAG with SQL inside stays counted (the project check
+            # really ran on it) and is also listed as not checked.
+            embedded = (path.endswith(".py")
+                        and project_checks.has_embedded_sql(text))
+            result = FileResult(path=path, rel=rel, mode=file_mode,
+                                kind="project", embedded_sql=embedded)
+            # Project files have no statements: ignores match on rule + file
+            # + line.
+            _apply_ignores(result, _aux_findings(text, path, file_mode,
+                                                 tiers, settings), [],
+                           ignores)
+            results.append(result)
+        elif path.endswith(".py") and project_checks.has_embedded_sql(text):
+            # SQL inside Python is detected but never parsed or checked
+            # here: listed as not checked (kind "embedded"), like macros.
+            results.append(FileResult(path=path, rel=rel, mode=file_mode,
+                                      kind="embedded", embedded_sql=True))
+        # Other .py and YAML files apply to no check: not counted at all.
     results.sort(key=lambda r: r.rel)
     return results

@@ -72,8 +72,9 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install uv
-          $v = cmd /c "plugin\bin\truequery.cmd --version"
-          if ($v -ne "truequery 0.1.0") { throw "cmd launcher printed: $v" }
+          $expected = "truequery $((python -c 'import truequery; print(truequery.__version__)').Trim())"
+          $v = (cmd /c "plugin\bin\truequery.cmd --version").Trim()
+          if ($v -ne $expected) { throw "cmd launcher printed: $v (want $expected)" }
           $env:PATH = "$PWD\plugin\bin;$env:PATH"
-          $v = truequery --version
-          if ($v -ne "truequery 0.1.0") { throw "PowerShell launcher printed: $v" }
+          $v = (truequery --version).Trim()
+          if ($v -ne $expected) { throw "PowerShell launcher printed: $v (want $expected)" }

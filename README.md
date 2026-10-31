@@ -164,7 +164,8 @@ No contract  customers, orders, staging_orders
 - **Offline and deterministic.** No LLM in the check path and no network
   calls. Your code never leaves your machine.
 - **Never a false "clean".** A file it couldn't parse is listed as not
-  checked, and the exit code says so.
+  checked, and the exit code says so. SQL embedded in Python files is
+  reported as not checked yet.
 - **Runs as the agent works.** Hooks check each SQL edit for bugs that are
   never intended (`= NULL`, an unguarded `DELETE`, a `WHERE` that empties a
   left join). At the end of each turn they run every enabled check over the
@@ -363,12 +364,13 @@ on your machine. See [Evidence and limits](docs/evidence.md).
 
 **Which SQL dialects does the checker handle?**
 It parses SQL with [sqlglot](https://github.com/tobymao/sqlglot). Tested on
-real code: BigQuery, PostgreSQL and DuckDB. Snowflake, Redshift,
-Databricks and Spark, T-SQL, MySQL, Trino and sqlglot's other dialects are
-parsed too, with less test coverage, so false alarms there are especially
-welcome. `/truequery init` detects the dialect from your dbt or SQLMesh
-config. You can also set it in `DATA.md` or with `--dialect`. A file that
-doesn't parse is reported as not checked, never as clean.
+real code: BigQuery, PostgreSQL and DuckDB. Tested on synthetic workloads:
+Snowflake, Redshift and SQLite. Databricks and Spark, T-SQL, MySQL, Trino
+and sqlglot's other dialects are parsed too, with less test coverage, so
+false alarms there are especially welcome. `/truequery init` detects the
+dialect from your dbt or SQLMesh config. You can also set it in `DATA.md`
+or with `--dialect`. A file that doesn't parse is reported as not
+checked, never as clean.
 
 **What do I do about a false alarm?**
 1. [Report it](https://github.com/Analytically-ai/truequery/issues/new?template=false_alarm.yml). It's the most useful feedback we get.

@@ -113,7 +113,8 @@ def _unverified_reason(results) -> str:
 def _summary_line(results, findings) -> str:
     """Never print 'clean' unless every file was verified."""
     macros = sum(1 for r in results if r.kind == "macro")
-    results = [r for r in results if r.kind != "macro"]
+    embedded = sum(1 for r in results if E.is_embedded(r))
+    results = [r for r in results if r.kind not in ("macro", "embedded")]
     verified = sum(1 for r in results if r.verified)
     unverified = len(results) - verified
     checked = RP._plural(verified, "file")
@@ -122,12 +123,16 @@ def _summary_line(results, findings) -> str:
     reason = _unverified_reason(results)
     skipped = (f" · {RP._plural(macros, 'dbt macro file')} not checked "
                "(macro definitions)") if macros else ""
+    embedded_note = (f" · SQL inside {RP._plural(embedded, 'Python file')} "
+                     "not checked") if embedded else ""
     if not findings:
         if unverified:
             return (f"no findings in {checked} checked{ignored} · "
-                    f"{unverified} not checked ({reason}){skipped}")
-        if skipped:
-            return f"no findings in {checked} checked offline{ignored}{skipped}"
+                    f"{unverified} not checked ({reason})"
+                    f"{skipped}{embedded_note}")
+        if skipped or embedded_note:
+            return (f"no findings in {checked} checked offline{ignored}"
+                    f"{skipped}{embedded_note}")
         if hidden:
             return f"no findings in {checked} checked offline{ignored}"
         return f"clean: {checked} checked offline, no findings"
@@ -139,7 +144,7 @@ def _summary_line(results, findings) -> str:
     line = f"{', '.join(counts)} in {checked} checked offline{ignored}"
     if unverified:
         line += f" ({unverified} not checked: {reason})"
-    return line + skipped
+    return line + skipped + embedded_note
 
 
 def _dialect_arg(value: str) -> str | None:

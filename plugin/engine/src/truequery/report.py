@@ -105,7 +105,7 @@ def render_json(results, tool_version: str, modes: list[str],
     doc = {
         "schema_version": 1,
         "standard": STANDARD_VERSION,
-        "tool": "tq",
+        "tool": "truequery",
         "tool_version": tool_version,
         "offline": True,
         "modes": sorted(set(modes)),
@@ -170,7 +170,7 @@ def render_sarif(results, tool_version: str) -> str:
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "runs": [{
             "tool": {"driver": {
-                "name": "tq",
+                "name": "truequery",
                 "version": tool_version,
                 "informationUri": "https://github.com/Analytically-ai/truequery",
                 "rules": rules,
@@ -236,7 +236,8 @@ def build_receipt(results, modes: list[str], contracts: dict,
         "modes": sorted(set(modes)),
         "standard": STANDARD_VERSION,
         "files_checked": sum(1 for r in results
-                             if r.kind != "macro" and r.verified),
+                             if r.kind not in ("macro", "embedded")
+                             and r.verified),
         "sql_files": len(sql),
         "project_files": len(project),
         "evidence": {
@@ -252,6 +253,8 @@ def build_receipt(results, modes: list[str], contracts: dict,
             "unverified_files": unverified,
             "oversize_files": oversize,
             "macro_files": sorted(r.rel for r in results if r.kind == "macro"),
+            "embedded_sql_files": sorted(
+                r.rel for r in results if E.is_embedded(r)),
             "invalid_contracts": list(invalid_contracts or []),
             "metadata": "no adapter",
             "data": "no adapter",
@@ -322,6 +325,11 @@ def render_receipt(receipt: dict) -> str:
         lines.append(f"{'Not checked':<13}{_plural(len(macros), 'dbt macro file')} "
                      f"(macro definitions are templates, not queries): "
                      f"{_listed(macros)}")
+    embedded = nc.get("embedded_sql_files", [])
+    if embedded:
+        lines.append(f"{'Not checked':<13}SQL inside "
+                     f"{_plural(len(embedded), 'Python file')} "
+                     f"(not checked yet): {_listed(embedded)}")
     for problem in nc.get("invalid_contracts", []):
         lines.append(f"{'Not checked':<13}invalid contract: {problem}")
     lines.append(f"{'Not checked':<13}{DATA_LIMIT}")
