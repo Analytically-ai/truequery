@@ -78,9 +78,10 @@ right.
 - **Tests.** More than 300 automated tests run on Linux, macOS and Windows
   with Python 3.11 to 3.14, including the plugin's own scripts end to end. 22
   practices in the standard carry an executable proof that runs on every
-  change. Snowflake, Redshift and SQLite syntax (QUALIFY, FLATTEN, IFF,
-  DISTKEY and SORTKEY, DELETE USING, INSERT OR REPLACE, strftime,
-  AUTOINCREMENT) has its own tests, contributed from outside the team.
+  change. Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF,
+  DISTKEY and SORTKEY, DELETE USING) has its own tests, contributed from
+  outside the team, and so does SQLite (INSERT OR REPLACE, strftime,
+  AUTOINCREMENT).
 - **Never a false "clean".** A file the checker can't parse, can't decode or
   that is over the 10 MB limit is listed as not checked, never as clean.
 

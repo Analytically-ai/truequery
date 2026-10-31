@@ -254,7 +254,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
             "oversize_files": oversize,
             "macro_files": sorted(r.rel for r in results if r.kind == "macro"),
             "embedded_sql_files": sorted(
-                r.rel for r in results if r.kind == "embedded"),
+                r.rel for r in results if E.is_embedded(r)),
             "invalid_contracts": list(invalid_contracts or []),
             "metadata": "no adapter",
             "data": "no adapter",

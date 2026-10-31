@@ -56,10 +56,23 @@ class FileResult:
     # SQL strings inside. Macro and embedded files are listed as not
     # checked.
     kind: str = "sql"
+    # True when a counted .py result (e.g. an Airflow DAG) also holds
+    # embedded SQL: it stays counted, and is also listed as not checked.
+    embedded_sql: bool = False
 
     @property
     def verified(self) -> bool:
         return not self.diagnostics
+
+
+def is_embedded(result: "FileResult") -> bool:
+    """One source of truth for "this result's SQL is not checked".
+
+    Covers the standalone embedded kind and any counted result (a DAG)
+    that also holds embedded SQL, so the receipt, JSON and summary
+    can't drift apart.
+    """
+    return result.kind == "embedded" or result.embedded_sql
 
 
 def load_ignores(root: str) -> list[dict]:
@@ -338,8 +351,12 @@ def run(paths: list[str], root: str, dialect: str | None = None,
         rel = P._rel(path, root)
         file_mode = P.resolve_mode(rel, config, mode)
         if project_checks.applies_to_file(path, text):
+            # A DAG with SQL inside stays counted (the project check
+            # really ran on it) and is also listed as not checked.
+            embedded = (path.endswith(".py")
+                        and project_checks.has_embedded_sql(text))
             result = FileResult(path=path, rel=rel, mode=file_mode,
-                                kind="project")
+                                kind="project", embedded_sql=embedded)
             # Project files have no statements: ignores match on rule + file
             # + line.
             _apply_ignores(result, _aux_findings(text, path, file_mode,
@@ -350,7 +367,7 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             # SQL inside Python is detected but never parsed or checked
             # here: listed as not checked (kind "embedded"), like macros.
             results.append(FileResult(path=path, rel=rel, mode=file_mode,
-                                      kind="embedded"))
+                                      kind="embedded", embedded_sql=True))
         # Other .py and YAML files apply to no check: not counted at all.
     results.sort(key=lambda r: r.rel)
     return results

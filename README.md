@@ -367,9 +367,10 @@ It parses SQL with [sqlglot](https://github.com/tobymao/sqlglot). Tested on
 real code: BigQuery, PostgreSQL and DuckDB. Tested on synthetic workloads:
 Snowflake, Redshift and SQLite. Databricks and Spark, T-SQL, MySQL, Trino
 and sqlglot's other dialects are parsed too, with less test coverage, so
-false alarms there are especially welcome. `/truequery init` detects the dialect from your dbt or SQLMesh
-config. You can also set it in `DATA.md` or with `--dialect`. A file that
-doesn't parse is reported as not checked, never as clean.
+false alarms there are especially welcome. `/truequery init` detects the
+dialect from your dbt or SQLMesh config. You can also set it in `DATA.md`
+or with `--dialect`. A file that doesn't parse is reported as not
+checked, never as clean.
 
 **What do I do about a false alarm?**
 1. [Report it](https://github.com/Analytically-ai/truequery/issues/new?template=false_alarm.yml). It's the most useful feedback we get.

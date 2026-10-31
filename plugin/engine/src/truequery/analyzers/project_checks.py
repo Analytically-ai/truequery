@@ -292,17 +292,54 @@ def _node_is_sql_string(node):
     return bool(lead) and _starts_with_sql_keyword(lead)
 
 
+def _assigned_values(tree):
+    """Name -> value nodes assigned to it in this file.
+
+    Only plain `name = value` and `name: type = value` with a single
+    `Name` target: same-file, by-name lookup. No data flow, no imports.
+    """
+    out: dict[str, list] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                out.setdefault(target.id, []).append(node.value)
+        elif (isinstance(node, ast.AnnAssign)
+              and isinstance(node.target, ast.Name)
+              and node.value is not None):
+            out.setdefault(node.target.id, []).append(node.value)
+    return out
+
+
+def _resolves_to_sql(node, assigned, seen=frozenset()):
+    """True when a call-site argument is (or names) a SQL string.
+
+    A bare `Name` resolves to the string assigned to it in the same
+    file, then gets the same keyword test. Anything else (including a
+    docstring, which is never assigned or passed) never matches.
+    """
+    if isinstance(node, ast.Name):
+        if node.id in seen:
+            return False
+        return any(_resolves_to_sql(value, assigned, seen | {node.id})
+                   for value in assigned.get(node.id, []))
+    return _node_is_sql_string(node)
+
+
 def has_embedded_sql(text):
     """True when a .py file holds SQL strings at known call sites.
 
     Detection only: a string counts as SQL when it starts (after
-    whitespace and SQL comments) with a SQL keyword. The SQL inside is
-    never parsed or checked here; callers list such files as not checked.
+    whitespace and SQL comments) with a SQL keyword. A bare name at a
+    call site resolves to the string assigned to it in the same file.
+    The SQL inside is never parsed or checked here; callers list such
+    files as not checked.
     """
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return False
+    assigned = _assigned_values(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -318,7 +355,7 @@ def has_embedded_sql(text):
         if name in SQL_CALL_NAMES or any(
                 kw.arg == "sql" for kw in node.keywords):
             for arg in args:
-                if _node_is_sql_string(arg):
+                if _resolves_to_sql(arg, assigned):
                     return True
     return False
 

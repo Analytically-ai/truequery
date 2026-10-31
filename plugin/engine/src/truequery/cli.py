@@ -113,7 +113,7 @@ def _unverified_reason(results) -> str:
 def _summary_line(results, findings) -> str:
     """Never print 'clean' unless every file was verified."""
     macros = sum(1 for r in results if r.kind == "macro")
-    embedded = sum(1 for r in results if r.kind == "embedded")
+    embedded = sum(1 for r in results if E.is_embedded(r))
     results = [r for r in results if r.kind not in ("macro", "embedded")]
     verified = sum(1 for r in results if r.verified)
     unverified = len(results) - verified

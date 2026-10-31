@@ -756,6 +756,82 @@ def test_fstring_and_concatenation_count_as_embedded(tmp_path):
         "embedded_sql_files"] == ["q1.py", "q2.py"]
 
 
+def test_dag_with_sql_is_counted_and_listed(tmp_path):
+    root = tmp_path / "proj"
+    (root / "dags").mkdir(parents=True)
+    (root / "dags" / "load.py").write_text(
+        "from airflow import DAG\n"
+        "from airflow.providers.common.sql.operators.sql import "
+        "SQLExecuteQueryOperator\n"
+        'with DAG("load", catchup=False) as dag:\n'
+        '    SQLExecuteQueryOperator(task_id="t", '
+        'sql="DELETE FROM orders WHERE customer_id = NULL")\n',
+        encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert out.strip() == ("no findings in 1 file checked offline · "
+                           "SQL inside 1 Python file not checked")
+    assert "clean" not in out
+    code, out, _ = run("review", ".", cwd=root)
+    assert code == 0
+    assert "Checked      0 SQL files · 1 project file" in out
+    assert ("Not checked  SQL inside 1 Python file (not checked yet): "
+            "dags/load.py") in out
+    code, out, _ = run("review", ".", "--json", cwd=root)
+    assert code == 0
+    doc = json.loads(out)
+    assert doc["receipt"]["files_checked"] == 1
+    assert doc["receipt"]["project_files"] == 1
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == [
+        "dags/load.py"]
+
+
+def test_dag_without_catchup_reports_finding_and_embedded(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "dag.py").write_text(
+        "from airflow import DAG\n"
+        'dag = DAG("x", start_date=None)\n'
+        'con.execute("SELECT * FROM t")\n',
+        encoding="utf-8")
+    code, out, _ = run("review", ".", "--json", "--enable-rule",
+                       "orch/explicit-catchup-policy", "--fail-on",
+                       "warning", cwd=root)
+    assert code == 1
+    doc = json.loads(out)
+    assert [f["rule"] for f in doc["findings"]] == [
+        "orch/explicit-catchup-policy"]
+    assert doc["receipt"]["project_files"] == 1
+    assert doc["receipt"]["files_checked"] == 1
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == ["dag.py"]
+
+
+def test_variable_sql_is_listed_as_embedded(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "q.py").write_text(
+        'QUERY = """\nSELECT * FROM orders WHERE customer_id = NULL\n"""\n'
+        "def load(con):\n"
+        "    return con.execute(QUERY).fetchall()\n",
+        encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert "SQL inside 1 Python file not checked" in out
+    code, out, _ = run("review", ".", "--json", cwd=root)
+    assert json.loads(out)["receipt"]["not_checked"][
+        "embedded_sql_files"] == ["q.py"]
+
+
+def test_docstring_only_py_is_neither_counted_nor_listed(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "d.py").write_text(
+        '"""Select the best row."""\nx = 1\n', encoding="utf-8")
+    code, out, _ = run("detect", ".", cwd=root)
+    assert code == 0
+    assert out == "truequery detect: no SQL files found\n"
+
+
 def test_context_target_can_be_a_folder(tmp_path):
     root = tmp_path / "proj"
     (root / "models").mkdir(parents=True)
