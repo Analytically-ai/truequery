@@ -51,8 +51,10 @@ class FileResult:
     diagnostics: list = field(default_factory=list)
     suppressed: list = field(default_factory=list)
     key_lookups: list = field(default_factory=list)
-    # "sql"; "project" for .py/.yml/.yaml files; "macro" for a file of
-    # dbt macro definitions, which is listed as not checked.
+    # "sql"; "project" for DAG/schema .py/.yml/.yaml files; "macro"
+    # for a file of dbt macro definitions; "embedded" for a .py file with
+    # SQL strings inside. Macro and embedded files are listed as not
+    # checked.
     kind: str = "sql"
 
     @property
@@ -335,12 +337,20 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             continue
         rel = P._rel(path, root)
         file_mode = P.resolve_mode(rel, config, mode)
-        result = FileResult(path=path, rel=rel, mode=file_mode,
-                            kind="project")
-        # Project files have no statements: ignores match on rule + file
-        # + line.
-        _apply_ignores(result, _aux_findings(text, path, file_mode, tiers,
-                                             settings), [], ignores)
-        results.append(result)
+        if project_checks.applies_to_file(path, text):
+            result = FileResult(path=path, rel=rel, mode=file_mode,
+                                kind="project")
+            # Project files have no statements: ignores match on rule + file
+            # + line.
+            _apply_ignores(result, _aux_findings(text, path, file_mode,
+                                                 tiers, settings), [],
+                           ignores)
+            results.append(result)
+        elif path.endswith(".py") and project_checks.has_embedded_sql(text):
+            # SQL inside Python is detected but never parsed or checked
+            # here: listed as not checked (kind "embedded"), like macros.
+            results.append(FileResult(path=path, rel=rel, mode=file_mode,
+                                      kind="embedded"))
+        # Other .py and YAML files apply to no check: not counted at all.
     results.sort(key=lambda r: r.rel)
     return results

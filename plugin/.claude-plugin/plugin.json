@@ -1,6 +1,6 @@
 {
   "name": "truequery",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TrueQuery: one standard for data work, built into your AI coding agent. A skill that teaches the agent the procedure, and an offline checker that verifies the work as it's written.",
   "author": {
     "name": "Analytically.ai"

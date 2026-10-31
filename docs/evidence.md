@@ -78,8 +78,9 @@ right.
 - **Tests.** More than 300 automated tests run on Linux, macOS and Windows
   with Python 3.11 to 3.14, including the plugin's own scripts end to end. 22
   practices in the standard carry an executable proof that runs on every
-  change. Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF, DISTKEY and
-  SORTKEY, DELETE USING) has its own tests, contributed from outside the team.
+  change. Snowflake, Redshift and SQLite syntax (QUALIFY, FLATTEN, IFF,
+  DISTKEY and SORTKEY, DELETE USING, INSERT OR REPLACE, strftime,
+  AUTOINCREMENT) has its own tests, contributed from outside the team.
 - **Never a false "clean".** A file the checker can't parse, can't decode or
   that is over the 10 MB limit is listed as not checked, never as clean.
 
@@ -92,9 +93,9 @@ right.
   ([#12](https://github.com/Analytically-ai/truequery/issues/12)).
 - **Outside testers.** Preview testers are the next step.
 - **Dialects.** Tested on real code in BigQuery, PostgreSQL and DuckDB, and on
-  synthetic Snowflake and Redshift workloads. Databricks and Spark, T-SQL,
-  MySQL, Trino and the other dialects sqlglot supports are parsed, with less
-  test coverage.
+  synthetic Snowflake, Redshift and SQLite workloads. Databricks and Spark,
+  T-SQL, MySQL, Trino and the other dialects sqlglot supports are parsed,
+  with less test coverage.
 - **Your warehouse.** The checker reads files. It doesn't connect to a
   warehouse, so it can't see column types, data or row counts, and the
   receipt says so every time.
