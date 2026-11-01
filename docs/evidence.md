@@ -75,7 +75,17 @@ right.
   labelled every finding by hand. Checks that misfired were fixed or switched
   off by default, which is why 15 of the 25 checks are on by default and the
   other 10 wait until they prove precise.
-- **Tests.** More than 300 automated tests run on Linux, macOS and Windows
+- **SQL inside Python.** We ran the checker over 12 public Python projects
+  that run SQL from code: Apache Superset, PostHog, Zulip, Redash, Datasette,
+  Frappe, Feast, Mage, beets, Databricks Labs' UCX, Apache Airflow's
+  provider DAGs and a Streamlit app. It found 5,642 queries and checked 77%
+  of them; the rest are built at run time or don't parse, and the receipt
+  lists them as not checked. We labelled all 285 findings by hand: 279 were
+  accurate and 6 were false alarms, all from three rules. The accurate
+  findings were fragile patterns in working code, mostly `INSERT`s without
+  a column list and deliberate whole-table deletes, not bugs in shipped
+  code.
+- **Tests.** About 500 automated tests run on Linux, macOS and Windows
   with Python 3.11 to 3.14, including the plugin's own scripts end to end. 22
   practices in the standard carry an executable proof that runs on every
   change. Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF,
