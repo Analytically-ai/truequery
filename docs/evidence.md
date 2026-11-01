@@ -97,6 +97,10 @@ right.
   synthetic Snowflake, Redshift and SQLite workloads. Databricks and Spark,
   T-SQL, MySQL, Trino and the other dialects sqlglot supports are parsed,
   with less test coverage.
+- **SQL built at run time in Python.** SQL strings written in a `.py` file
+  are checked; SQL the program assembles while it runs (in a loop, returned
+  by a function, imported from another module) isn't in the file to read.
+  The receipt names those files, and they're never counted as clean.
 - **Your warehouse.** The checker reads files. It doesn't connect to a
   warehouse, so it can't see column types, data or row counts, and the
   receipt says so every time.

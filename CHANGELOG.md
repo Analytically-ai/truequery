@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.1.2 (2026-11-01)
+
+The SQL inside Python files is checked now, not just listed.
+
+- SQL strings passed to `execute`, `executemany`, `executescript`,
+  `exec_driver_sql`, `read_sql`, `read_sql_query`, SQLAlchemy `text()`,
+  `.sql()` (Spark, DuckDB) or a `sql=` keyword get every SQL check a `.sql`
+  file gets. That covers plain and triple-quoted strings, implicit and `+`
+  concatenation, a query held in a same-file variable (each value when
+  `if`/`else` assigns several), f-strings, `.format()`, `%` and psycopg's
+  `sql.SQL("...")`. Placeholders become neutral names, and driver
+  parameters (`?`, `:name`, `$1`, `%s`, `%(name)s`) parse.
+- **New findings:** Python files that were listed as not checked in 0.1.1
+  can now report findings (and exit 1). In the 0.1.1 repro, the 5 Python
+  files with `= NULL` now report 5 errors.
+- Findings point at the Python file, line and column where the SQL is
+  written (for a variable, where the string is assigned), with the SQL line
+  as the snippet. `truequery ignore add` works on a Python line, and the
+  ignore stays attached when lines above it move.
+- The dialect for Python SQL comes from `--dialect`, then DATA.md, then the
+  file's imports (`sqlite3`, `duckdb`, `psycopg`/`psycopg2`/`asyncpg`,
+  `pymysql`/`mysql.connector`/`MySQLdb`, `pyspark`, `snowflake.connector`/
+  `snowflake.snowpark`, `google.cloud.bigquery`), then auto.
+- The receipt counts the Python SQL it checked
+  (`SQL in 5 Python files (31 queries)`) and names what it couldn't:
+  `SQL built at run time in …` and `SQL that doesn't parse in …`. A file
+  can be both counted and listed. Neither ever causes exit 3: finding SQL
+  in Python is a heuristic, so text like `text("Select an option")` is
+  listed, not treated as a broken SQL file.
+- JSON adds `python_sql` (per file: `checked`, `static`, `templated`,
+  `dynamic`, `unparsed`, and where the unchecked SQL is) and
+  `receipt.not_checked.embedded_sql_reasons`; `embedded_sql_files` still
+  lists every file with SQL that wasn't checked. Nothing was removed or
+  renamed.
+- Hooks: editing a Python file with SQL inside is checked like a SQL edit;
+  editing one without SQL stays silent. The end-of-turn pass includes the
+  Python files touched.
+- An Airflow DAG's SQL is checked too; the DAG still counts as a project
+  file.
+
 ## 0.1.1 (2026-10-31)
 
 Honest counts: the checker only counts files a check actually applies to.
