@@ -174,9 +174,10 @@ No contract  customers, orders, staging_orders
   as clean.
 - **Runs as the agent works.** Hooks check each edit to a SQL file (or a
   Python file with SQL inside) for bugs that are never intended (`= NULL`,
-  an unguarded `DELETE`, a `WHERE` that empties a left join). At the end of each turn they run every enabled check over the
-  files touched. New findings go back to the agent once, a clean pass is
-  silent, and no edit is ever refused.
+  an unguarded `DELETE`, a `WHERE` that empties a left join). At the end
+  of each turn they run every enabled check over the files touched. New
+  findings go back to the agent once, a clean pass is silent, and no edit
+  is ever refused.
 - **Works anywhere SQL lives.** In a terminal and in CI, for any agent or
   person: text, JSON or SARIF output. Exit codes: 0 means clean; 1 means
   findings at or above `--fail-on` (default `error`); 2 is a usage or config

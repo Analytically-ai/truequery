@@ -111,10 +111,12 @@ _BUILDERS = frozenset({
 _SQL_ONLY_SITES = frozenset({"read_sql", "read_sql_query", "exec_driver_sql",
                              "executescript", "text"})
 # A receiver that looks like a database handle (cursor, conn, session,
-# db, engine, spark, ...), matched per identifier in the chain.
+# db, engine, spark, ...), matched per identifier in the chain. Alembic's
+# `op` counts only when imported from alembic (an Airflow `op` is an
+# operator).
 _DB_HANDLE = re.compile(
     r"(?:^|_)(?:cur|cursor|conn|connection|con|cx|cnx|db|database|session|"
-    r"sess|engine|spark|client|backend|op|hook|warehouse|bq|pg|ch|duck|"
+    r"sess|engine|spark|client|backend|hook|warehouse|bq|pg|ch|duck|"
     r"duckdb|sqlite|snowflake|redshift|trino|presto|hive|athena|dbapi)"
     r"(?:_|\d|$)|sql", re.IGNORECASE)
 # Calls that only change whitespace: the SQL inside is checked as written.
@@ -122,7 +124,7 @@ _TRANSPARENT_METHODS = frozenset({"strip", "lstrip", "rstrip"})
 _TRANSPARENT_FUNCS = frozenset({"dedent", "cleandoc"})
 
 # Cheap pre-filter: a file with none of these can't hold a fragment.
-_MAYBE = re.compile(r"execute|exec_driver_sql|read_sql|\btext\s*\(|"
+_MAYBE = re.compile(r"execute|exec_driver_sql|read_sql|text\s*\(|"
                     r"\bsql\s*[(=]")
 
 
@@ -544,6 +546,11 @@ class _Context:
         self.modules = modules
         self.uses_sql = any(
             _matches_module(m, lib) for m in modules for lib in SQL_LIBRARIES)
+        self.alembic_op = any(
+            isinstance(node, ast.ImportFrom) and node.module == "alembic"
+            and any(a.name == "op" and (a.asname or "op") == "op"
+                    for a in node.names)
+            for node in ast.walk(tree))
         self.sa_text, self.sa_modules = set(), set()
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and (
@@ -563,6 +570,8 @@ class _Context:
     # -- call sites --
     def site(self, call):
         name = _callee(call.func)
+        if isinstance(call.func, ast.Name) and call.func.id in self.sa_text:
+            name = "text"  # from sqlalchemy import text as sql_text
         sql_kw = [kw.value for kw in call.keywords if kw.arg == "sql"]
         args = []
         if name in SQL_CALL_NAMES and call.args:
@@ -570,6 +579,8 @@ class _Context:
         args += sql_kw
         if not args:
             return
+        if name == "text" and not sql_kw and not self._sa_text(call.func):
+            return  # st.text("Delete from your history") is UI text, not SQL
         dynamic_ok = self._dynamic_ok(call, name)
         strong = (name in _SQL_ONLY_SITES or bool(sql_kw)
                   or self._db_receiver(call.func))
@@ -592,8 +603,7 @@ class _Context:
                 if strong and (named or self.uses_sql or frags):
                     self._add(self._dynamic(node))
 
-    @staticmethod
-    def _db_receiver(func):
+    def _db_receiver(self, func):
         """True when the call has no receiver (`execute(sql)`) or its
         receiver chain names a database handle."""
         if not isinstance(func, ast.Attribute):
@@ -612,16 +622,23 @@ class _Context:
                 break
             else:
                 break
+        if names == ["op"] and self.alembic_op:
+            return True
         return any(_DB_HANDLE.search(n) for n in names)
+
+    def _sa_text(self, func):
+        """SQLAlchemy's text(): imported from sqlalchemy, or reached
+        through a sqlalchemy module alias (sa.text, sqlalchemy.sql.text).
+        `text` is too common a name to mean SQL otherwise."""
+        if isinstance(func, ast.Name):
+            return func.id in self.sa_text
+        return _root_name(func) in self.sa_modules
 
     def _dynamic_ok(self, call, name):
         if name == "read_sql_table":
             return False  # takes a table name, not SQL
-        if name == "text":  # too common a name: SQLAlchemy's text only
-            func = call.func
-            if isinstance(func, ast.Name):
-                return func.id in self.sa_text
-            return _root_name(func) in self.sa_modules
+        if name == "text":
+            return self._sa_text(call.func)
         return True
 
     # -- expressions --

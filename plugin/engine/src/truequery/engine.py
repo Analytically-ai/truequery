@@ -7,6 +7,7 @@ results in a stable order. Zero network, zero LLM in this path.
 
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import hashlib
 import json
@@ -284,6 +285,10 @@ _CONDITION_RULES = frozenset({"sql/unguarded-update-delete",
 _ORDER_RULES = frozenset({"sql/row-number-dedupe-tiebreaker"})
 
 
+_TRAILING_PLACEHOLDER = re.compile(
+    re.escape(python_sql.PLACEHOLDER) + r"\d+(?=[\s;]*$)")
+
+
 def _is_placeholder(node) -> bool:
     from sqlglot import exp
     return (isinstance(node, exp.Column)
@@ -307,6 +312,23 @@ def _unknown_parts(sql: str, dialect: str | None) -> dict:
         for stmt in stmts:
             if stmt is None:
                 continue
+            # A placeholder after the target, standing for a whole clause
+            # (`DELETE FROM t {where}`): it parses as a table alias, or it
+            # is the statement's last token without being a table name.
+            # A trailing placeholder that is a table name (`DELETE FROM
+            # {t}`) or a value (`SET a = {v}`) is not a clause.
+            tail = _TRAILING_PLACEHOLDER.search(chunk)
+            if tail:
+                name = tail.group(0)
+                if name in {t.name for t in stmt.find_all(exp.Table)} or any(
+                        c.name == name and isinstance(
+                            c.parent, (exp.Binary, exp.Func, exp.Tuple))
+                        for c in stmt.find_all(exp.Column)):
+                    tail = None
+            if tail or any(a.name.startswith(python_sql.PLACEHOLDER)
+                           for a in stmt.find_all(exp.TableAlias)):
+                for rule in _CONDITION_RULES:
+                    out.setdefault(rule, []).append(span)
             for col in stmt.find_all(exp.Column):
                 if not _is_placeholder(col):
                     continue
@@ -325,6 +347,31 @@ def _unknown_parts(sql: str, dialect: str | None) -> dict:
                     for rule in _ORDER_RULES:
                         out.setdefault(rule, []).append(span)
     return out
+
+
+def _original_offset(sql: str, cleaned: str, offset: int) -> int:
+    """Map an offset in the analyzer's cleaned text back to the fragment's
+    own text. Cleaning keeps every newline, so the line is exact; within
+    the line, Jinja (`{{ ds }}` -> one placeholder, `{{ ref('x') }}` ->
+    `x`) changes lengths, so the column is aligned on the unchanged text
+    around it. Inside a replaced tag, the tag's start."""
+    if len(sql) == len(cleaned) and "{" not in sql:
+        return offset  # nothing changed length
+    offset = min(max(offset, 0), len(cleaned))
+    row = cleaned.count("\n", 0, offset)
+    c_start = cleaned.rfind("\n", 0, offset) + 1
+    starts = [0] + [i + 1 for i, ch in enumerate(sql) if ch == "\n"]
+    o_start = starts[min(row, len(starts) - 1)]
+    c_line = cleaned[c_start:].split("\n", 1)[0]
+    o_line = sql[o_start:].split("\n", 1)[0]
+    col = offset - c_start
+    if c_line == o_line:
+        return o_start + col
+    matcher = difflib.SequenceMatcher(None, c_line, o_line, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if i1 <= col < i2 or (col == i2 == len(c_line)):
+            return o_start + (j1 + (col - i1) if tag == "equal" else j1)
+    return o_start
 
 
 def check_python_source(text: str, path: str, dialect: str | None = None,
@@ -367,16 +414,20 @@ def check_python_source(text: str, path: str, dialect: str | None = None,
         sql_spans = _chunk_hashes(frag.sql, dialect)
         for first, last, digest in sql_spans:
             spans.append((*frag.python_lines(first, last), digest))
+        cleaned = analyzer.strip_comments(analyzer.strip_jinja(frag.sql),
+                                          dialect or "generic")
         for f in res["findings"]:
             if "offset" in f:
-                line, col = frag.at_offset(f["offset"])
+                line, col = frag.at_offset(
+                    _original_offset(frag.sql, cleaned, f["offset"]))
             else:
                 line, col = frag.at(f["line"], f["col"])
             finding = Finding(rule=f["rule"], severity=f["severity"],
                               mode=f["mode"], evidence=f["evidence"],
                               file=path, line=line, col=col,
                               snippet=frag.show(f["snippet"]),
-                              why=f["why"], fix=f["fix"])
+                              why=frag.show(f["why"]),
+                              fix=frag.show(f["fix"]))
             finding._stmt = stmt_hash_at(sql_spans, f["line"])
             findings.append(finding)
     findings.sort(key=Finding.sort_key)

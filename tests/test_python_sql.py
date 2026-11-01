@@ -576,6 +576,9 @@ def test_psycopg_sql_composable_is_templated():
     "import pandas as pd\nnode.execute(context)\n",
     "import pandas as pd\ndf = pd.DataFrame()\naction.execute(df)\n",
     "import sqlite3\nself.tool.execute(Args(q))\n",
+    # an Airflow operator, not Alembic's op
+    "import pandas as pd\nop = MyOperator()\nop.execute(context)\n",
+    "import sqlite3\ndbt_op.execute(MagicMock())\n",
 ])
 def test_execute_on_something_that_is_not_a_database(src):
     assert statuses(src) == []
@@ -585,7 +588,8 @@ def test_execute_on_something_that_is_not_a_database(src):
     "import pandas as pd\ncursor.execute(make(x))\n",
     "import sqlite3\nself._conn.cursor().execute(stmt)\n",
     "import pandas as pd\npd.read_sql(q, con)\n",
-    "op.execute(build_sql())\n",
+    "from alembic import op\nop.execute(sql_for(x))\n",
+    "from alembic import op\nop.execute(make(x))\nimport sqlalchemy\n",
 ])
 def test_execute_on_a_database_handle(src):
     assert statuses(src) == ["dynamic"]
@@ -614,3 +618,125 @@ def test_placeholder_window_order_is_unknown_not_missing():
     src = src.replace("{order}", "ts")
     assert [f.rule for f in checked(src)[0]] == [
         "sql/row-number-dedupe-tiebreaker"]
+
+
+# -- review of PR #19 ---------------------------------------------------------
+REVIEW_DAG = '''from airflow import DAG
+from airflow.providers.postgres.operators.postgres import PostgresOperator
+
+with DAG("load") as dag:
+    t = PostgresOperator(
+        task_id="t",
+        sql="""
+SELECT * FROM {{ params.schema_name_that_is_long }}.orders o
+WHERE o.dt = '{{ macros.ds_add(ds, -1) }}' AND o.region = '{{ params.region }}'
+  AND o.customer_id = NULL
+""",
+    )
+'''
+
+
+def test_jinja_on_earlier_lines_keeps_the_line(tmp_path):
+    assert where(REVIEW_DAG) == [(10, 7)]
+    (tmp_path / "dag.py").write_text(REVIEW_DAG, encoding="utf-8")
+    code, out, _ = cli("detect", ".", cwd=tmp_path)
+    assert code == 1
+    assert out.startswith("dag.py:10:7 [error] sql/null-equality-comparison")
+
+
+@pytest.mark.parametrize("tag", [
+    "{{ ds }}",                                   # shorter than __tq_jinja
+    "{{ macros.ds_add(ds, -1) }}",                # longer
+    "{{ params.region }}",
+])
+def test_jinja_earlier_on_the_same_line(tag):
+    line = f"con.execute(\"SELECT * FROM t WHERE dt = '{tag}' AND a = NULL\")"
+    assert where(line + "\n") == [(1, line.index("a = NULL") + 1)]
+
+
+@pytest.mark.parametrize("tag", ["{{ ref('orders') }}",
+                                 "{{ source('shop', 'orders') }}",
+                                 "{{ x }}"])
+def test_jinja_table_before_the_finding(tag):
+    line = f'con.execute("SELECT * FROM {tag} WHERE a = NULL")'
+    assert where(line + "\n") == [(1, line.index("a = NULL") + 1)]
+    src = f'con.execute("""\nSELECT *\nFROM {tag} o, {tag} p\nWHERE a = NULL\n""")\n'
+    assert where(src) == [(4, 7)]
+
+
+@pytest.mark.parametrize("src", [
+    'import streamlit as st\nst.text("Delete from your history")\n',
+    'import streamlit as st\nst.text("Select a file from the list below")\n',
+    'text("DELETE FROM t")\n',               # a text() of unknown origin
+    'import sqlite3\nui.text("SELECT a FROM t")\n',
+])
+def test_text_that_is_not_sqlalchemy_is_not_a_site(src):
+    assert X.extract(src).fragments == []
+    assert checked(src) == ([], [])
+
+
+def test_streamlit_text_is_not_checked_listed_or_counted(tmp_path):
+    (tmp_path / "app.py").write_text(
+        "import streamlit as st\n"
+        'st.text("Delete from your history")\n'
+        'st.text("Select a file from the list below")\n', encoding="utf-8")
+    (tmp_path / "q.sql").write_text("select a from t\n", encoding="utf-8")
+    code, out, _ = cli("detect", ".", cwd=tmp_path)
+    assert (code, out) == (0, "clean: 1 file checked offline, no findings\n")
+    code, out, _ = cli("review", ".", "--json", cwd=tmp_path)
+    doc = json.loads(out)
+    assert doc["python_sql"] == {}
+    assert doc["receipt"]["python_files"] == 0
+    assert doc["receipt"]["python_queries"] == 0
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == []
+
+
+@pytest.mark.parametrize("src", [
+    "from sqlalchemy import text\nconn.execute(text(\"DELETE FROM t\"))\n",
+    "from sqlalchemy.sql import text as sql_text\nq = sql_text(\"DELETE FROM t\")\n",
+    "import sqlalchemy as sa\nq = sa.text(\"DELETE FROM t\")\n",
+    "import sqlalchemy\nq = sqlalchemy.sql.text(\"DELETE FROM t\")\n",
+])
+def test_sqlalchemy_text_still_reports(src):
+    assert [f.rule for f in checked(src)[0]] == ["sql/unguarded-update-delete"]
+
+
+@pytest.mark.parametrize("src", [
+    'con.execute(f"DELETE FROM events {where_clause}")\n',
+    'con.execute(f"SELECT a.id FROM a, b {filters}")\n',
+    'con.execute(f"SELECT a.id FROM a JOIN b {join_and_where}")\n',
+    'con.execute("DELETE FROM events " + where)\n',
+    'con.execute("DELETE FROM events {}".format(where))\n',
+    'con.execute(f"DELETE FROM events {where};")\n',
+])
+def test_placeholder_clause_is_unknown_not_missing(src):
+    findings, frags = checked(src)
+    assert findings == [] and frags[0].status == "templated"
+
+
+@pytest.mark.parametrize("src", [
+    'con.execute(f"DELETE FROM {table}")\n',
+    'con.execute(f"DELETE FROM {schema}.{table}")\n',
+    'con.execute(f"UPDATE {table} SET a = 1")\n',
+    'con.execute(f"UPDATE {table} SET uuid = {expr}")\n',  # a value, not a clause
+    'con.execute(f"UPDATE t SET a = {v}, b = {w}")\n',
+])
+def test_placeholder_target_with_nothing_after_still_reports(src):
+    assert [f.rule for f in checked(src)[0]] == ["sql/unguarded-update-delete"]
+
+
+def test_why_names_the_placeholder_by_its_source():
+    findings, _ = checked('con.execute(f"SELECT * FROM a, {other}")\n')
+    assert [f.rule for f in findings] == ["sql/accidental-cross-join"]
+    assert "{other}" in findings[0].why
+    assert X.PLACEHOLDER not in findings[0].why + findings[0].fix
+
+
+def test_ignore_add_outside_sql_in_a_plain_python_file(tmp_path):
+    (tmp_path / "app.py").write_text(
+        'x = 1\ncon.execute("DELETE FROM t")\n', encoding="utf-8")
+    code, _, err = cli("ignore", "add", "sql/unguarded-update-delete",
+                       "app.py:1", "--reason", "agent: test", cwd=tmp_path)
+    assert code == 2
+    assert "line 1 is not inside a SQL statement" in err
+    assert not (tmp_path / ".truequery" / "ignores.json").exists()

@@ -550,7 +550,10 @@ def cmd_ignore_add(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     spans = E.statement_spans(path, text, (config or {}).get("dialect"))
     digest = E.stmt_hash_at(spans, line)
-    if digest is None and not path.endswith(".py"):
+    # Outside any SQL statement, only an Airflow DAG has findings a line
+    # ignore can cover (the DAG check).
+    if digest is None and not (path.endswith(".py") and
+                               E.project_checks.applies_to_file(path, text)):
         print(f"truequery: line {line} is not inside a SQL statement",
               file=sys.stderr)
         return EXIT_ERROR
