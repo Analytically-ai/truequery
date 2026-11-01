@@ -414,8 +414,8 @@ def referenced_tables(text: str, dialect: str | None = None) -> list[str]:
     ordered = []
     for ref in refs:
         # Jinja placeholders are template artifacts, not tables.
-        if analyzer.JINJA_PH in ref.lower():
-            continue
+        if analyzer.JINJA_PH in ref.lower() or "__tq_p" in ref.lower():
+            continue  # placeholders (Jinja, Python templates) aren't tables
         if ref.lower() not in seen:
             seen.add(ref.lower())
             ordered.append(ref)

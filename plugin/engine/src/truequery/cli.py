@@ -208,8 +208,18 @@ def cmd_detect(args: argparse.Namespace) -> int:
 def _review_tables(results, dialect) -> list[str]:
     # Only files the checker read: a skipped file (over the size limit,
     # unparseable) is never opened again for the receipt.
-    return P.tables_in_files([r.path for r in results
-                              if r.kind == "sql" and r.verified], dialect)
+    tables = P.tables_in_files([r.path for r in results
+                                if r.kind == "sql" and r.verified], dialect)
+    seen = {t.lower() for t in tables}
+    for result in results:  # the SQL checked inside Python files
+        for frag in result.fragments:
+            if not frag.checked:
+                continue
+            for table in P.referenced_tables(frag.sql, dialect):
+                if table.lower() not in seen:
+                    seen.add(table.lower())
+                    tables.append(table)
+    return tables
 
 
 def cmd_review(args: argparse.Namespace) -> int:
@@ -538,9 +548,9 @@ def cmd_ignore_add(args: argparse.Namespace) -> int:
     except OSError:
         print(f"truequery: no such file: {raw_path}", file=sys.stderr)
         return EXIT_ERROR
-    spans = E._chunk_hashes(text, (config or {}).get("dialect"))
+    spans = E.statement_spans(path, text, (config or {}).get("dialect"))
     digest = E.stmt_hash_at(spans, line)
-    if digest is None:
+    if digest is None and not path.endswith(".py"):
         print(f"truequery: line {line} is not inside a SQL statement",
               file=sys.stderr)
         return EXIT_ERROR
@@ -558,6 +568,10 @@ def cmd_ignore_add(args: argparse.Namespace) -> int:
     entry = {"rule": args.rule, "path": path, "line": line,
              "stmt": digest, "offset": E.stmt_offset(spans, line),
              "reason": args.reason.strip()}
+    if digest is None:
+        # A Python line outside its SQL (an Airflow DAG finding): that
+        # one line, matched by rule + file + line.
+        del entry["stmt"], entry["offset"]
     if entry not in entries:
         entries.append(entry)
     with open(ignores_path, "w", encoding="utf-8") as handle:

@@ -329,6 +329,9 @@ class Locator:
                 nth = self.used.get((rule, None), 0)
                 off = self._locate_anchor(rule, nth)
                 self.used[(rule, None)] = nth + 1
+        # Offset inside the statement text, for callers that map
+        # positions back to another file (SQL inside Python).
+        self.last_offset = off
         pre = self.text[:off]
         return (self.start_line + pre.count("\n"),
                 off - (pre.rfind("\n") + 1) + 1)
@@ -489,7 +492,9 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
     active = _active_checks(registry, settings, tiers, include_disabled)
     ctx = checks.CheckContext(dialect=dialect, path=path, mode=mode,
                               keys=keylookup.declared_keys_for(path))
+    base = 0  # offset of the chunk in the cleaned text (chunks are contiguous)
     for chunk, start_line in chunks:
+        chunk_base, base = base, base + len(chunk)
         try:
             stmts = sqlglot.parse(chunk, read=dialect or None)
         except Exception as exc:
@@ -521,6 +526,7 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
                     findings.append(_finding(
                         slug, _severity(record, setting, mode), mode, path,
                         chunk, start_line, line, col, why, fix))
+                    findings[-1]["offset"] = chunk_base + loc.last_offset
             for suppressed in loc.suppressed:
                 if suppressed not in key_lookups:
                     key_lookups.append(suppressed)

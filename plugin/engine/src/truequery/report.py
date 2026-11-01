@@ -41,15 +41,20 @@ def _divides(results) -> bool:
     tokenized counts as dividing."""
     from sqlglot.tokens import Tokenizer, TokenType
     for result in results:
-        if result.kind != "sql" or not result.verified:
-            continue
-        try:
-            with open(result.path, encoding="utf-8") as handle:
-                tokens = Tokenizer().tokenize(handle.read())
-        except Exception:
-            return True
-        if any(t.token_type == TokenType.SLASH for t in tokens):
-            return True
+        texts = [f.sql for f in result.fragments if f.checked]
+        if result.kind == "sql" and result.verified:
+            try:
+                with open(result.path, encoding="utf-8") as handle:
+                    texts.append(handle.read())
+            except Exception:
+                return True
+        for text in texts:
+            try:
+                tokens = Tokenizer().tokenize(text)
+            except Exception:
+                return True
+            if any(t.token_type == TokenType.SLASH for t in tokens):
+                return True
     return False
 
 
@@ -100,6 +105,23 @@ def render_text(results, tool_version: str) -> str:
     return "\n".join(lines)
 
 
+def python_sql_summary(results) -> dict:
+    """Per .py file: fragment counts, and where the unchecked SQL is."""
+    out = {}
+    for result in results:
+        if not result.fragments:
+            continue
+        entry = E.fragment_counts(result)
+        for status in ("static", "templated"):  # how the checked SQL was built
+            entry[status] = sum(1 for f in result.fragments
+                                if f.status == status)
+        entry["not_checked"] = [
+            {"line": f.line, "col": f.col, "reason": f.reason}
+            for f in result.fragments if not f.checked]
+        out[result.rel] = entry
+    return out
+
+
 def render_json(results, tool_version: str, modes: list[str],
                 receipt: dict | None = None) -> str:
     doc = {
@@ -115,6 +137,7 @@ def render_json(results, tool_version: str, modes: list[str],
         "diagnostics": [{"file": d.file, "message": d.message,
                            "detail": d.detail}
                         for d in all_diagnostics(results)],
+        "python_sql": python_sql_summary(results),
     }
     if receipt is not None:
         doc["receipt"] = receipt
@@ -220,6 +243,8 @@ def build_receipt(results, modes: list[str], contracts: dict,
     # under "Not checked", never counted here too.
     sql = [r for r in results if r.kind == "sql" and r.verified]
     project = [r for r in results if r.kind == "project"]
+    python = [r for r in results if E.fragment_counts(r)["checked"]]
+    queries = sum(E.fragment_counts(r)["checked"] for r in python)
     oversize = sorted({r.rel for r in results
                        if any(d.message == E.TOO_LARGE
                               for d in r.diagnostics)})
@@ -240,8 +265,13 @@ def build_receipt(results, modes: list[str], contracts: dict,
                              and r.verified),
         "sql_files": len(sql),
         "project_files": len(project),
+        "python_files": len(python),
+        "python_queries": queries,
         "evidence": {
             "file": f"{len(sql)} SQL file(s)",
+            "python": (f"SQL in {len(python)} Python file(s), "
+                       f"{queries} quer{'y' if queries == 1 else 'ies'}"
+                       if python else "no SQL in Python files checked"),
             "project": (f"{len(project)} project file(s), preview checks"
                         if project else "no project files in scope"),
             "contract": f"{len(present)}/{len(tables_referenced)} tables",
@@ -255,6 +285,9 @@ def build_receipt(results, modes: list[str], contracts: dict,
             "macro_files": sorted(r.rel for r in results if r.kind == "macro"),
             "embedded_sql_files": sorted(
                 r.rel for r in results if E.is_embedded(r)),
+            "embedded_sql_reasons": {
+                r.rel: E.unchecked_reasons(r) or ["not checked"]
+                for r in results if E.is_embedded(r)},
             "invalid_contracts": list(invalid_contracts or []),
             "metadata": "no adapter",
             "data": "no adapter",
@@ -289,6 +322,10 @@ def render_receipt(receipt: dict) -> str:
     elif receipt.get("tier_overrides"):
         lines.append(f"{'Settings':<13}tier overrides active (testing only)")
     checked = [_plural(receipt["sql_files"], "SQL file")]
+    if receipt.get("python_files"):
+        queries = receipt["python_queries"]
+        checked.append(f"SQL in {_plural(receipt['python_files'], 'Python file')}"
+                       f" ({queries} quer{'y' if queries == 1 else 'ies'})")
     if receipt["project_files"]:
         checked.append(_plural(receipt["project_files"], "project file"))
     total = len(receipt["contracts_referenced"])
@@ -326,10 +363,19 @@ def render_receipt(receipt: dict) -> str:
                      f"(macro definitions are templates, not queries): "
                      f"{_listed(macros)}")
     embedded = nc.get("embedded_sql_files", [])
-    if embedded:
+    reasons = nc.get("embedded_sql_reasons", {})
+    for reason, words in (("built at run time", "SQL built at run time in"),
+                          ("doesn't parse as SQL", "SQL that doesn't parse in")):
+        files = [f for f in embedded if reason in reasons.get(f, [])]
+        if files:
+            lines.append(f"{'Not checked':<13}{words} "
+                         f"{_plural(len(files), 'Python file')}: "
+                         f"{_listed(files)}")
+    other = [f for f in embedded if not set(reasons.get(f, [])) & {
+        "built at run time", "doesn't parse as SQL"}]
+    if other:
         lines.append(f"{'Not checked':<13}SQL inside "
-                     f"{_plural(len(embedded), 'Python file')} "
-                     f"(not checked yet): {_listed(embedded)}")
+                     f"{_plural(len(other), 'Python file')}: {_listed(other)}")
     for problem in nc.get("invalid_contracts", []):
         lines.append(f"{'Not checked':<13}invalid contract: {problem}")
     lines.append(f"{'Not checked':<13}{DATA_LIMIT}")

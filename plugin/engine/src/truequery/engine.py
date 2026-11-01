@@ -20,6 +20,7 @@ from truequery import settings as S
 from truequery import std_registry
 from truequery.analyzers import project_checks
 from truequery.analyzers import sql as analyzer
+from truequery.extractors import python_sql
 from truequery.models import Diagnostic, Finding
 
 ENGINE_VERSION = __version__
@@ -52,13 +53,17 @@ class FileResult:
     suppressed: list = field(default_factory=list)
     key_lookups: list = field(default_factory=list)
     # "sql"; "project" for DAG/schema .py/.yml/.yaml files; "macro"
-    # for a file of dbt macro definitions; "embedded" for a .py file with
-    # SQL strings inside. Macro and embedded files are listed as not
-    # checked.
+    # for a file of dbt macro definitions; "python" for a .py file with
+    # at least one checked SQL fragment; "embedded" for a .py file whose
+    # SQL fragments were all left unchecked. Macro and embedded files are
+    # listed as not checked.
     kind: str = "sql"
-    # True when a counted .py result (e.g. an Airflow DAG) also holds
-    # embedded SQL: it stays counted, and is also listed as not checked.
+    # True when a .py result holds SQL that wasn't checked (built at run
+    # time, or doesn't parse). A counted result (a DAG, a Python file
+    # with other checked SQL) stays counted and is also listed.
     embedded_sql: bool = False
+    # SQL fragments of a .py file (python_sql.Fragment), by position.
+    fragments: list = field(default_factory=list)
 
     @property
     def verified(self) -> bool:
@@ -73,6 +78,22 @@ def is_embedded(result: "FileResult") -> bool:
     can't drift apart.
     """
     return result.kind == "embedded" or result.embedded_sql
+
+
+def fragment_counts(result: "FileResult") -> dict:
+    """{checked, dynamic, unparsed} fragment counts for a .py result."""
+    counts = {"checked": 0, "dynamic": 0, "unparsed": 0}
+    for frag in result.fragments:
+        counts["checked" if frag.checked else frag.status] += 1
+    return counts
+
+
+def unchecked_reasons(result: "FileResult") -> list[str]:
+    """Why some of a .py result's SQL wasn't checked, in a fixed order."""
+    statuses = {frag.status for frag in result.fragments}
+    return [python_sql.REASONS[s] for s in (python_sql.DYNAMIC,
+                                            python_sql.UNPARSED)
+            if s in statuses]
 
 
 def load_ignores(root: str) -> list[dict]:
@@ -213,6 +234,163 @@ def _aux_findings(text, path, mode, tiers, settings):
     return kept
 
 
+def python_dialect(dialect: str | None, extraction) -> str | None:
+    """--dialect, then DATA.md (both already in `dialect`), then the
+    file's imports, then auto."""
+    return dialect or extraction.dialect
+
+
+_FROM = re.compile(r"\bfrom\b", re.IGNORECASE)
+
+
+def _reads_as_prose(sql: str, dialect: str | None) -> bool:
+    """True for text that parses only by accident: a lone SELECT of bare
+    words, no FROM and no other clause ("Select an option" is SELECT an
+    AS option). Columns with no table can't run, so it isn't SQL."""
+    if _FROM.search(sql):
+        return False
+    import sqlglot
+    from sqlglot import exp
+    try:
+        stmts = sqlglot.parse(analyzer.strip_comments(sql, "generic"),
+                              read=dialect or None)
+    except Exception:
+        return False
+    placeholders = (python_sql.PLACEHOLDER, analyzer.JINJA_PH)
+    for stmt in stmts:
+        if not isinstance(stmt, exp.Select) or any(
+                stmt.args.get(k) for k in ("from", "where", "group",
+                                           "having", "order", "limit")):
+            continue
+        cols = []
+        for item in stmt.expressions:
+            item = item.this if isinstance(item, exp.Alias) else item
+            if not isinstance(item, exp.Column):
+                break
+            cols.append(item)
+        else:
+            if cols and not any(c.name.startswith(placeholders)
+                                for c in cols):
+                return True
+    return False
+
+
+# Rules that report something missing (a condition, a tiebreaker). Where
+# a template placeholder stands for that whole part (`WHERE {cond}`,
+# `ON {join}`, `OVER (ORDER BY {order})`), the real text is unknown, so
+# these can't say it's missing.
+_CONDITION_RULES = frozenset({"sql/unguarded-update-delete",
+                              "sql/accidental-cross-join"})
+_ORDER_RULES = frozenset({"sql/row-number-dedupe-tiebreaker"})
+
+
+def _is_placeholder(node) -> bool:
+    from sqlglot import exp
+    return (isinstance(node, exp.Column)
+            and node.name.startswith(python_sql.PLACEHOLDER))
+
+
+def _unknown_parts(sql: str, dialect: str | None) -> dict:
+    """{rule: [(first, last) SQL lines]} of statements where a placeholder
+    stands for the part that rule looks for."""
+    import sqlglot
+    from sqlglot import exp
+    cleaned = analyzer.strip_comments(analyzer.strip_jinja(sql),
+                                      dialect or "generic")
+    out: dict[str, list] = {}
+    for chunk, start in analyzer.split_statements(cleaned):
+        try:
+            stmts = sqlglot.parse(chunk, read=dialect or None)
+        except Exception:
+            continue
+        span = (start, start + chunk.count("\n"))
+        for stmt in stmts:
+            if stmt is None:
+                continue
+            for col in stmt.find_all(exp.Column):
+                if not _is_placeholder(col):
+                    continue
+                parent = col.parent
+                while isinstance(parent, exp.Paren):
+                    parent = parent.parent
+                if (isinstance(parent, (exp.Where, exp.Having, exp.And,
+                                        exp.Or, exp.Not))
+                        or (isinstance(parent, exp.Join)
+                            and parent.args.get("on") is col)):
+                    for rule in _CONDITION_RULES:
+                        out.setdefault(rule, []).append(span)
+                if isinstance(parent, exp.Ordered) and isinstance(
+                        parent.parent, exp.Order) and isinstance(
+                        parent.parent.parent, exp.Window):
+                    for rule in _ORDER_RULES:
+                        out.setdefault(rule, []).append(span)
+    return out
+
+
+def check_python_source(text: str, path: str, dialect: str | None = None,
+                        mode: str = "build", tiers=None, settings=None,
+                        extraction=None):
+    """(findings, fragments, spans) for the SQL inside one .py file.
+
+    Each static/templated fragment goes through the same SQL checks as a
+    .sql file; one that doesn't parse becomes `unparsed` (listed, never
+    a parse failure: detection is a heuristic). Findings point at the
+    Python line and column where the SQL is written; spans are per
+    statement, in Python lines, so ignores stay attached when lines
+    above move. File-level dbt checks don't apply to fragments.
+    """
+    if extraction is None:
+        extraction = python_sql.extract(text)
+    dialect = python_dialect(dialect, extraction)
+    findings, spans = [], []
+    for frag in extraction.fragments:
+        if not frag.checked:
+            continue
+        res = analyzer.check_text(frag.sql, dialect=dialect, path=path,
+                                  mode=mode, tiers=tiers, settings=settings)
+        prose = not res["diagnostics"] and _reads_as_prose(frag.sql, dialect)
+        if prose:
+            res["findings"] = []  # not SQL: nothing it says is a finding
+        if res["diagnostics"] or prose:
+            # Not checked (in full). Findings from statements of it that
+            # did parse are still real and still reported.
+            frag.status = python_sql.UNPARSED
+            frag.reason = python_sql.REASONS[python_sql.UNPARSED]
+        if frag.status == python_sql.TEMPLATED and any(
+                f["rule"] in _CONDITION_RULES | _ORDER_RULES
+                for f in res["findings"]):
+            unknown = _unknown_parts(frag.sql, dialect)
+            res["findings"] = [
+                f for f in res["findings"]
+                if not any(a <= f["line"] <= b
+                           for a, b in unknown.get(f["rule"], ()))]
+        sql_spans = _chunk_hashes(frag.sql, dialect)
+        for first, last, digest in sql_spans:
+            spans.append((*frag.python_lines(first, last), digest))
+        for f in res["findings"]:
+            if "offset" in f:
+                line, col = frag.at_offset(f["offset"])
+            else:
+                line, col = frag.at(f["line"], f["col"])
+            finding = Finding(rule=f["rule"], severity=f["severity"],
+                              mode=f["mode"], evidence=f["evidence"],
+                              file=path, line=line, col=col,
+                              snippet=frag.show(f["snippet"]),
+                              why=f["why"], fix=f["fix"])
+            finding._stmt = stmt_hash_at(sql_spans, f["line"])
+            findings.append(finding)
+    findings.sort(key=Finding.sort_key)
+    return findings, extraction.fragments, spans
+
+
+def statement_spans(path: str, text: str, dialect: str | None) -> list:
+    """Statement spans for ignores and baselines: per SQL statement in a
+    SQL file, per statement of each SQL fragment in a .py file."""
+    if path.endswith(".py"):
+        return check_python_source(text, path, dialect)[2]
+    return _chunk_hashes(text, dialect)
+
+
 def check_file(path: str, dialect: str | None = None,
                mode: str = "build", tiers=None,
                settings=None, text: str | None = None
@@ -279,7 +457,8 @@ def _apply_ignores(result: FileResult, findings: list, spans, ignores) -> None:
     suppressed by .truequery/ignores.json."""
     for finding in findings:
         finding.file = result.rel
-        finding._stmt = stmt_hash_at(spans, finding.line)
+        if getattr(finding, "_stmt", None) is None:
+            finding._stmt = stmt_hash_at(spans, finding.line)
         entry = _suppressed_by(finding, result.rel, ignores, spans)
         if entry is None:
             result.findings.append(finding)
@@ -350,24 +529,29 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             continue
         rel = P._rel(path, root)
         file_mode = P.resolve_mode(rel, config, mode)
+        findings, fragments, spans = [], [], []
+        if path.endswith(".py"):
+            findings, fragments, spans = check_python_source(
+                text, path, base_dialect, file_mode, tiers, settings)
+        unchecked = any(not f.checked for f in fragments)
         if project_checks.applies_to_file(path, text):
-            # A DAG with SQL inside stays counted (the project check
-            # really ran on it) and is also listed as not checked.
-            embedded = (path.endswith(".py")
-                        and project_checks.has_embedded_sql(text))
-            result = FileResult(path=path, rel=rel, mode=file_mode,
-                                kind="project", embedded_sql=embedded)
-            # Project files have no statements: ignores match on rule + file
-            # + line.
-            _apply_ignores(result, _aux_findings(text, path, file_mode,
-                                                 tiers, settings), [],
-                           ignores)
-            results.append(result)
-        elif path.endswith(".py") and project_checks.has_embedded_sql(text):
-            # SQL inside Python is detected but never parsed or checked
-            # here: listed as not checked (kind "embedded"), like macros.
-            results.append(FileResult(path=path, rel=rel, mode=file_mode,
-                                      kind="embedded", embedded_sql=True))
-        # Other .py and YAML files apply to no check: not counted at all.
+            # A DAG stays a project file (the project check really ran
+            # on it); its SQL is checked like any Python SQL, and SQL it
+            # couldn't check is also listed.
+            kind = "project"
+            findings += _aux_findings(text, path, file_mode, tiers, settings)
+        elif any(f.checked for f in fragments):
+            kind = "python"
+        elif fragments:
+            # Every fragment unchecked: listed as not checked, not counted.
+            kind = "embedded"
+        else:
+            continue  # other .py and YAML files apply to no check
+        result = FileResult(path=path, rel=rel, mode=file_mode, kind=kind,
+                            embedded_sql=unchecked, fragments=fragments)
+        # Python SQL matches ignores per statement; project findings
+        # (outside any statement) on rule + file + line.
+        _apply_ignores(result, findings, spans, ignores)
+        results.append(result)
     results.sort(key=lambda r: r.rel)
     return results
