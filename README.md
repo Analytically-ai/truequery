@@ -164,13 +164,20 @@ No contract  customers, orders, staging_orders
 - **Offline and deterministic.** No LLM in the check path and no network
   calls. Your code never leaves your machine.
 - **Never a false "clean".** A file it couldn't parse is listed as not
-  checked, and the exit code says so. SQL embedded in Python files is
-  reported as not checked yet.
-- **Runs as the agent works.** Hooks check each SQL edit for bugs that are
-  never intended (`= NULL`, an unguarded `DELETE`, a `WHERE` that empties a
-  left join). At the end of each turn they run every enabled check over the
-  files touched. New findings go back to the agent once, a clean pass is
-  silent, and no edit is ever refused.
+  checked, and the exit code says so.
+- **Checks the SQL inside Python too.** SQL strings passed to `execute`,
+  `read_sql`, `text()`, `.sql()` or `sql=` (including f-strings,
+  `.format()`, `%` and a query held in a same-file variable) get the same
+  checks as `.sql` files, and findings point at the Python line and column.
+  SQL your program builds at run time (in a loop, in another function or
+  module) can't be read from the file: it's listed as not checked, never
+  as clean.
+- **Runs as the agent works.** Hooks check each edit to a SQL file (or a
+  Python file with SQL inside) for bugs that are never intended (`= NULL`,
+  an unguarded `DELETE`, a `WHERE` that empties a left join). At the end
+  of each turn they run every enabled check over the files touched. New
+  findings go back to the agent once, a clean pass is silent, and no edit
+  is ever refused.
 - **Works anywhere SQL lives.** In a terminal and in CI, for any agent or
   person: text, JSON or SARIF output. Exit codes: 0 means clean; 1 means
   findings at or above `--fail-on` (default `error`); 2 is a usage or config

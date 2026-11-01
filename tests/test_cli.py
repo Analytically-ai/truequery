@@ -639,10 +639,11 @@ def test_receipt_checked_counts_only_files_it_read(tmp_path):
     assert receipt["files_checked"] == 1 and receipt["sql_files"] == 1
 
 
-def test_honest_counts_lists_embedded_sql_not_clean(tmp_path):
+def test_honest_counts_checks_the_sql_in_python(tmp_path):
     # Repro from the 0.1.1 report: 5 app .py files with `= NULL` inside
-    # strings, one plain config.yaml, one buggy sql/q.sql. Only the SQL
-    # file counts as checked; the Python files are listed as not checked.
+    # strings, one plain config.yaml, one buggy sql/q.sql. 0.1.1 listed
+    # the Python files as not checked; 0.1.2 checks their SQL: 6 errors,
+    # each at its own file and line, and nothing left unchecked.
     root = tmp_path / "proj"
     (root / "app").mkdir(parents=True)
     (root / "sql").mkdir()
@@ -656,24 +657,29 @@ def test_honest_counts_lists_embedded_sql_not_clean(tmp_path):
     (root / "sql" / "q.sql").write_text(
         "SELECT * FROM orders WHERE id = NULL;\n", encoding="utf-8")
     code, out, _ = run("detect", ".", cwd=root)
-    assert code == 1  # the = NULL in sql/q.sql, not the Python strings
-    assert out.strip().endswith(
-        "1 error, 0 warnings in 1 file checked offline · "
-        "SQL inside 5 Python files not checked")
-    assert "clean" not in out
+    assert code == 1
+    located = [line.split(" ")[0] for line in out.splitlines()
+               if "[error] sql/null-equality-comparison" in line]
+    assert located == [f"app/m{i}.py:2:43" for i in range(1, 6)] + [
+        "sql/q.sql:1:28"]
+    assert out.strip().endswith("6 errors, 0 warnings in 6 files checked "
+                                "offline")
     code, out, _ = run("review", ".", cwd=root)
     assert code == 1
-    assert "Checked      1 SQL file" in out
-    assert ("Not checked  SQL inside 5 Python files (not checked yet): "
-            "app/m1.py, app/m2.py, app/m3.py, app/m4.py, app/m5.py") in out
+    assert ("Checked      1 SQL file · SQL in 5 Python files (5 queries)"
+            in out)
+    assert "Found        6 errors" in out
+    assert "Python file" not in out.split("Found")[1]  # nothing listed
     code, out, _ = run("review", ".", "--json", cwd=root)
-    assert code == 1
-    receipt = json.loads(out)["receipt"]
-    assert receipt["files_checked"] == 1 and receipt["sql_files"] == 1
-    assert receipt["project_files"] == 0
-    assert receipt["not_checked"]["embedded_sql_files"] == [
-        "app/m1.py", "app/m2.py", "app/m3.py", "app/m4.py", "app/m5.py"]
-    # Embedded files never change the exit code on their own.
+    doc = json.loads(out)
+    receipt = doc["receipt"]
+    assert receipt["files_checked"] == 6 and receipt["sql_files"] == 1
+    assert receipt["python_files"] == 5 and receipt["python_queries"] == 5
+    assert receipt["not_checked"]["embedded_sql_files"] == []
+    assert doc["python_sql"]["app/m1.py"] == {
+        "checked": 1, "dynamic": 0, "unparsed": 0, "static": 1,
+        "templated": 0, "not_checked": []}
+    # Clean SQL in Python is clean.
     for i in range(1, 6):
         (root / "app" / f"m{i}.py").write_text(
             "import sqlite3\ncon.execute(\"SELECT * FROM orders\")\n",
@@ -682,8 +688,7 @@ def test_honest_counts_lists_embedded_sql_not_clean(tmp_path):
                                        encoding="utf-8")
     code, out, _ = run("detect", ".", cwd=root)
     assert code == 0
-    assert out.strip() == ("no findings in 1 file checked offline · "
-                           "SQL inside 5 Python files not checked")
+    assert out.strip() == "clean: 6 files checked offline, no findings"
 
 
 def test_dag_and_schema_yaml_still_count(tmp_path):
@@ -737,7 +742,7 @@ def test_plain_py_and_yaml_are_neither_counted_nor_listed(tmp_path):
     assert doc["receipt"]["not_checked"]["embedded_sql_files"] == []
 
 
-def test_fstring_and_concatenation_count_as_embedded(tmp_path):
+def test_fstring_and_concatenation_are_checked(tmp_path):
     root = tmp_path / "proj"
     root.mkdir()
     (root / "q1.py").write_text(
@@ -749,14 +754,16 @@ def test_fstring_and_concatenation_count_as_embedded(tmp_path):
     (root / "q.sql").write_text("select a from t\n", encoding="utf-8")
     code, out, _ = run("detect", ".", cwd=root)
     assert code == 0
-    assert ("SQL inside 2 Python files not checked") in out
-    assert "clean" not in out
+    assert out.strip() == "clean: 3 files checked offline, no findings"
     code, out, _ = run("review", ".", "--json", cwd=root)
-    assert json.loads(out)["receipt"]["not_checked"][
-        "embedded_sql_files"] == ["q1.py", "q2.py"]
+    doc = json.loads(out)
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == []
+    assert doc["receipt"]["python_files"] == 2
 
 
-def test_dag_with_sql_is_counted_and_listed(tmp_path):
+def test_dag_sql_is_checked_and_dag_still_counts(tmp_path):
+    # The 0.1.1 DAG: its `= NULL` is now reported, at the line and column
+    # where the SQL is written, and the DAG is still a project file.
     root = tmp_path / "proj"
     (root / "dags").mkdir(parents=True)
     (root / "dags" / "load.py").write_text(
@@ -768,45 +775,45 @@ def test_dag_with_sql_is_counted_and_listed(tmp_path):
         'sql="DELETE FROM orders WHERE customer_id = NULL")\n',
         encoding="utf-8")
     code, out, _ = run("detect", ".", cwd=root)
-    assert code == 0
-    assert out.strip() == ("no findings in 1 file checked offline · "
-                           "SQL inside 1 Python file not checked")
-    assert "clean" not in out
+    assert code == 1
+    assert out.startswith("dags/load.py:4:72 [error] "
+                          "sql/null-equality-comparison")
+    assert out.strip().endswith("1 error, 0 warnings in 1 file checked "
+                                "offline")
     code, out, _ = run("review", ".", cwd=root)
-    assert code == 0
-    assert "Checked      0 SQL files · 1 project file" in out
-    assert ("Not checked  SQL inside 1 Python file (not checked yet): "
-            "dags/load.py") in out
+    assert code == 1
+    assert ("Checked      0 SQL files · SQL in 1 Python file (1 query) · "
+            "1 project file") in out
+    assert "dags/load.py" not in out.split("Found")[1]
     code, out, _ = run("review", ".", "--json", cwd=root)
-    assert code == 0
     doc = json.loads(out)
     assert doc["receipt"]["files_checked"] == 1
     assert doc["receipt"]["project_files"] == 1
-    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == [
-        "dags/load.py"]
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == []
 
 
-def test_dag_without_catchup_reports_finding_and_embedded(tmp_path):
+def test_dag_without_catchup_reports_both_findings(tmp_path):
     root = tmp_path / "proj"
     root.mkdir()
     (root / "dag.py").write_text(
         "from airflow import DAG\n"
         'dag = DAG("x", start_date=None)\n'
-        'con.execute("SELECT * FROM t")\n',
+        'con.execute("SELECT * FROM t WHERE a = NULL")\n',
         encoding="utf-8")
     code, out, _ = run("review", ".", "--json", "--enable-rule",
                        "orch/explicit-catchup-policy", "--fail-on",
                        "warning", cwd=root)
     assert code == 1
     doc = json.loads(out)
-    assert [f["rule"] for f in doc["findings"]] == [
-        "orch/explicit-catchup-policy"]
+    assert [(f["rule"], f["location"]["line"]) for f in doc["findings"]] == [
+        ("orch/explicit-catchup-policy", 2),
+        ("sql/null-equality-comparison", 3)]
     assert doc["receipt"]["project_files"] == 1
     assert doc["receipt"]["files_checked"] == 1
-    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == ["dag.py"]
+    assert doc["receipt"]["not_checked"]["embedded_sql_files"] == []
 
 
-def test_variable_sql_is_listed_as_embedded(tmp_path):
+def test_variable_sql_is_checked_at_its_assignment(tmp_path):
     root = tmp_path / "proj"
     root.mkdir()
     (root / "q.py").write_text(
@@ -815,11 +822,8 @@ def test_variable_sql_is_listed_as_embedded(tmp_path):
         "    return con.execute(QUERY).fetchall()\n",
         encoding="utf-8")
     code, out, _ = run("detect", ".", cwd=root)
-    assert code == 0
-    assert "SQL inside 1 Python file not checked" in out
-    code, out, _ = run("review", ".", "--json", cwd=root)
-    assert json.loads(out)["receipt"]["not_checked"][
-        "embedded_sql_files"] == ["q.py"]
+    assert code == 1
+    assert out.startswith("q.py:2:28 [error] sql/null-equality-comparison")
 
 
 def test_docstring_only_py_is_neither_counted_nor_listed(tmp_path):

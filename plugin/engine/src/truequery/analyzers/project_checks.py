@@ -12,6 +12,8 @@ import re
 
 import yaml
 
+from truequery.extractors import python_sql
+
 INCREMENTAL = re.compile(r"materialized\s*=\s*['\"]incremental['\"]")
 UNIQUE_KEY = re.compile(r"unique_key\s*=")
 
@@ -215,149 +217,11 @@ def applies_to_file(path, text):
     return False
 
 
-SQL_KEYWORDS = ("SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "MERGE",
-                "CREATE", "REPLACE", "DROP")
-
-# Call sites where a string literal is plausibly SQL. Matched by function
-# name only (pd.read_sql, conn.execute, spark.sql, sqlalchemy text, ...);
-# the string content decides, so a non-SQL use never matches.
-SQL_CALL_NAMES = frozenset({
-    "execute", "executemany", "executescript", "exec_driver_sql",
-    "read_sql", "read_sql_query", "read_sql_table", "text", "sql",
-})
-
-
-def _strip_leading_sql_comments(s):
-    i, n = 0, len(s)
-    while True:
-        while i < n and s[i].isspace():
-            i += 1
-        if s.startswith("--", i):
-            j = s.find("\n", i)
-            i = n if j == -1 else j + 1
-            continue
-        if s.startswith("/*", i):
-            j = s.find("*/", i + 2)
-            if j == -1:
-                return ""
-            i = j + 2
-            continue
-        if i < n and s[i] == "#":
-            j = s.find("\n", i)
-            i = n if j == -1 else j + 1
-            continue
-        break
-    return s[i:]
-
-
-def _starts_with_sql_keyword(s):
-    rest = _strip_leading_sql_comments(s)
-    upper = rest.upper()
-    for kw in SQL_KEYWORDS:
-        if upper.startswith(kw):
-            after = rest[len(kw):len(kw) + 1]
-            if not after or not (after.isalnum() or after == "_"):
-                return True
-    return False
-
-
-def _lead_text(node):
-    """Static leading text of a string expression, or None.
-
-    Constants give their value; f-strings give the literal prefix before
-    the first placeholder; `+` concatenation gives the left prefix (or the
-    right when the left has none). Anything dynamic yields None.
-    """
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.JoinedStr):
-        parts = []
-        for value in node.values:
-            if isinstance(value, ast.Constant) and isinstance(
-                    value.value, str):
-                parts.append(value.value)
-            else:
-                break
-        return "".join(parts) if parts else ""
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left = _lead_text(node.left)
-        if left:
-            return left
-        return _lead_text(node.right)
-    return None
-
-
-def _node_is_sql_string(node):
-    lead = _lead_text(node)
-    return bool(lead) and _starts_with_sql_keyword(lead)
-
-
-def _assigned_values(tree):
-    """Name -> value nodes assigned to it in this file.
-
-    Only plain `name = value` and `name: type = value` with a single
-    `Name` target: same-file, by-name lookup. No data flow, no imports.
-    """
-    out: dict[str, list] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-            if isinstance(target, ast.Name):
-                out.setdefault(target.id, []).append(node.value)
-        elif (isinstance(node, ast.AnnAssign)
-              and isinstance(node.target, ast.Name)
-              and node.value is not None):
-            out.setdefault(node.target.id, []).append(node.value)
-    return out
-
-
-def _resolves_to_sql(node, assigned, seen=frozenset()):
-    """True when a call-site argument is (or names) a SQL string.
-
-    A bare `Name` resolves to the string assigned to it in the same
-    file, then gets the same keyword test. Anything else (including a
-    docstring, which is never assigned or passed) never matches.
-    """
-    if isinstance(node, ast.Name):
-        if node.id in seen:
-            return False
-        return any(_resolves_to_sql(value, assigned, seen | {node.id})
-                   for value in assigned.get(node.id, []))
-    return _node_is_sql_string(node)
-
-
-def has_embedded_sql(text):
-    """True when a .py file holds SQL strings at known call sites.
-
-    Detection only: a string counts as SQL when it starts (after
-    whitespace and SQL comments) with a SQL keyword. A bare name at a
-    call site resolves to the string assigned to it in the same file.
-    The SQL inside is never parsed or checked here; callers list such
-    files as not checked.
-    """
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return False
-    assigned = _assigned_values(tree)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = (func.id if isinstance(func, ast.Name)
-                else func.attr if isinstance(func, ast.Attribute) else "")
-        args = list(node.args)
-        for kw in node.keywords:
-            if kw.arg == "sql":
-                args.append(kw.value)
-        if not args:
-            continue
-        if name in SQL_CALL_NAMES or any(
-                kw.arg == "sql" for kw in node.keywords):
-            for arg in args:
-                if _resolves_to_sql(arg, assigned):
-                    return True
-    return False
+# SQL inside Python: detection and extraction live in one place
+# (truequery.extractors.python_sql); re-exported for older callers.
+SQL_KEYWORDS = python_sql.SQL_KEYWORDS
+SQL_CALL_NAMES = python_sql.SQL_CALL_NAMES
+has_embedded_sql = python_sql.has_embedded_sql
 
 
 def check_python(text, path, mode="build", registry=None, settings=None):

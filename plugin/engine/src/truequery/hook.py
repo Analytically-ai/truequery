@@ -8,7 +8,8 @@ of a turn, new findings are handed back to the agent once (Claude:
 additionalContext; Codex and Muse: decision "block").
 
 Routing: a PostToolUse event runs the immediate tier (rules with
-tier == immediate in the registry) over the edited SQL files; a Stop
+tier == immediate in the registry) over the edited SQL files and
+Python files with SQL inside; a Stop
 event runs the full enabled set over every file touched this session,
 deduplicated, with baseline attribution. Session state lives in
 .truequery/session.json.
@@ -31,6 +32,7 @@ from truequery import report as RP
 from truequery import settings as S
 from truequery.analyzers import sql as analyzer
 from truequery.engine import run
+from truequery.extractors import python_sql
 
 TIMEOUT_SECONDS = 10
 MAX_FINDING_LINES = 20
@@ -159,6 +161,28 @@ def _paths_from_command(command) -> list[str]:
 
 
 is_sql_path = P.is_sql_path
+
+
+def _has_python_sql(path: str) -> bool:
+    """A .py file holding SQL fragments (checked like a SQL edit)."""
+    try:
+        if os.path.getsize(path) > E.MAX_FILE_BYTES:
+            return False
+        with open(path, encoding="utf-8") as handle:
+            return python_sql.has_embedded_sql(handle.read())
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def is_checked_path(path: str, root: str) -> bool:
+    """SQL files, and .py files with SQL inside; anything else is a
+    silent no-op for the hook."""
+    if is_sql_path(path):
+        return True
+    if not path.lower().endswith(".py"):
+        return False
+    full = path if os.path.isabs(path) else os.path.join(root, path)
+    return _has_python_sql(full)
 
 
 # -- session state ------------------------------------------------------------
@@ -323,6 +347,12 @@ def _head_signatures(root: str, rel: str, dialect, mode) -> set | None:
     head = _git(root, "show", f"HEAD:{rel}")
     if head is None:
         return None
+    if rel.endswith(".py"):
+        try:
+            findings, _, _ = E.check_python_source(head, rel, dialect, mode)
+        except Exception:
+            return None
+        return {(f.rule, getattr(f, "_stmt", None)) for f in findings}
     try:
         res = analyzer.check_text(head, dialect=dialect, path=rel, mode=mode)
     except Exception:
@@ -439,7 +469,8 @@ def stop_pass(root: str, session: dict, dialect, continued: bool,
     turn always gets its Stop pass. Callers render per harness.
     """
     touched = [p for p in session.get("touched", [])
-               if is_sql_path(p) and os.path.isfile(os.path.join(root, p))]
+               if (is_sql_path(p) or p.lower().endswith(".py"))
+               and os.path.isfile(os.path.join(root, p))]
     if not touched:
         return None, False  # nothing to pass over: silent
     if continued:
@@ -822,12 +853,14 @@ def main(args) -> int:
             text = _stop_text(root, session, dialect, continued,
                               hook_settings, cfg or {}, harness)
         else:
-            paths = [p for p in extract_paths(payload) if is_sql_path(p)]
+            paths = [p for p in extract_paths(payload)
+                     if is_sql_path(p) or p.lower().endswith(".py")]
             paths = [p for p in paths
-                     if os.path.isfile(os.path.join(root, p))
-                     or os.path.isfile(p)]
+                     if (os.path.isfile(os.path.join(root, p))
+                         or os.path.isfile(p))
+                     and is_checked_path(p, root)]
             if not paths:
-                return 0  # non-SQL edit = silent no-op
+                return 0  # no SQL in the edited files = silent no-op
             rels = [P._rel(p if os.path.isabs(p) else os.path.join(root, p),
                            root) for p in paths]
             for rel in rels:
