@@ -701,6 +701,14 @@ def test_sqlalchemy_text_still_reports(src):
     assert [f.rule for f in checked(src)[0]] == ["sql/unguarded-update-delete"]
 
 
+def test_aliased_text_inside_execute_is_not_also_dynamic():
+    src = ("import sqlite3\nfrom sqlalchemy import text as sql_text\n"
+           "con.execute(sql_text(\"DELETE FROM t\"))\n")
+    findings, frags = checked(src)
+    assert [f.rule for f in findings] == ["sql/unguarded-update-delete"]
+    assert [f.status for f in frags] == ["static"]
+
+
 @pytest.mark.parametrize("src", [
     'con.execute(f"DELETE FROM events {where_clause}")\n',
     'con.execute(f"SELECT a.id FROM a, b {filters}")\n',

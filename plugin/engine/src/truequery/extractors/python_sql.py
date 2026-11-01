@@ -705,7 +705,9 @@ class _Context:
             return self.expr(node.args[0], seen)
         if callee == "format" and isinstance(node.func, ast.Attribute):
             return self._template(node.func.value, seen, node, "format")
-        if callee in _BUILDERS or callee in SQL_CALL_NAMES:
+        if (callee in _BUILDERS or callee in SQL_CALL_NAMES
+                or (isinstance(node.func, ast.Name)
+                    and node.func.id in self.sa_text)):
             return [], []  # a query object, or a site of its own
         return [], [(node, bool(_SQL_CALLEE.search(callee)))]
 
