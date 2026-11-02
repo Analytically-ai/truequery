@@ -377,7 +377,7 @@ def accidental_cross_join(stmt, loc, ctx):
         if join.args.get("using"):
             continue  # JOIN ... USING names explicit keys
         right_alias = _alias_key(join.this)
-        sel = _owning_select(join)
+        sel = _join_scope(join)
         others = _from_keys(sel, join, right_alias) if sel is not None else set()
         if _is_correlated(join.this, others, ctx.dialect):
             continue  # LATERAL / function over earlier columns: linked
@@ -445,8 +445,48 @@ def _qualifiers(node):
     return {_ident_key(c.args.get("table")) for c in node.find_all(exp.Column)}
 
 
+def _join_scope(join):
+    """The query level a join belongs to: its SELECT, or the UPDATE /
+    DELETE whose FROM / USING holds it. sqlglot hangs Postgres
+    `UPDATE t ... FROM a JOIN b` and `DELETE FROM t USING a JOIN b`
+    joins on the FROM / USING table, with no SELECT around them."""
+    node = getattr(join, "parent", None)
+    while node is not None:
+        if isinstance(node, exp.Select):
+            return node
+        if isinstance(node, (exp.Update, exp.Delete)):
+            return node
+        node = getattr(node, "parent", None)
+    return None
+
+
+def _dml_from_keys(dml, join, this_alias):
+    """Alias keys an UPDATE / DELETE join can link to: the target, the
+    FROM / USING items and their other joins."""
+    items = [dml.this]
+    sources = dml.args.get("from_") if isinstance(dml, exp.Update) else None
+    if sources is not None:
+        items.append(sources.this)
+        items.extend(sources.expressions or [])
+    items.extend(dml.args.get("using") or [])
+    others = set()
+    for item in items:
+        if item is None:
+            continue
+        name = _alias_key(item)
+        if name and name != this_alias:
+            others.add(name)
+        for other in item.args.get("joins") or []:
+            name = _alias_key(other.this) if other is not join else ""
+            if name and name != this_alias:
+                others.add(name)
+    return others
+
+
 def _from_keys(sel, join, this_alias):
     """Alias keys of every top-level FROM item except this one."""
+    if isinstance(sel, (exp.Update, exp.Delete)):
+        return _dml_from_keys(sel, join, this_alias)
     others = set()
     frm = sel.args.get("from_")
     if frm is not None and frm.this is not None:
@@ -465,7 +505,7 @@ def _from_keys(sel, join, this_alias):
 def _joined_on_ast(join, this_alias):
     """True when some predicate links this table to another FROM table,
     judged on column qualifiers — never on text substrings."""
-    sel = _owning_select(join)
+    sel = _join_scope(join)
     if sel is None:
         return False
     others = _from_keys(sel, join, this_alias)
@@ -524,7 +564,7 @@ def _on_links_both_sides(join, right_alias):
     (`ON key = t.key` can only resolve against the remaining FROM scope),
     so requiring both qualifiers misfires on ordinary joins. `ON a.flag
     = 1` still crosses: it never references the joined table at all."""
-    sel = _owning_select(join)
+    sel = _join_scope(join)
     if sel is None or not right_alias:
         return False
     others = _from_keys(sel, join, right_alias)
@@ -984,6 +1024,8 @@ def distinct_dedup_bandaid(stmt, loc, ctx):
 def insert_explicit_column_list(stmt, loc, ctx):
     out = []
     for insert in stmt.find_all(exp.Insert):
+        if insert.args.get("default"):
+            continue  # INSERT INTO t DEFAULT VALUES: no values, no order
         if isinstance(insert.this, exp.Table):
             out.append((insert,
                         "INSERT without a column list breaks silently when columns are added or reordered",
@@ -1147,6 +1189,72 @@ def _qualify_filters(qualify):
                for node in qualify.find_all(exp.EQ, exp.LT, exp.LTE))
 
 
+_ORDINALITY = "U:ordinality"  # the column's name when none is declared
+
+
+def _ordinality_names(item, stmt, depth=0):
+    """{(name, qualifier)} of WITH ORDINALITY numbers a FROM item exposes,
+    unique per row of it. Declared name (`AS u(v, n)`, the last column)
+    or the default `ordinality`. A CTE or subquery passes the column
+    through when it reads that one source alone (no join to repeat it)
+    and selects it by name."""
+    if depth > 4 or item is None:
+        return set()
+    qual = _alias_key(item)
+    inner = item.this if isinstance(item, exp.Lateral) else item
+    if isinstance(inner, exp.Unnest):
+        offset = inner.args.get("offset")
+        if isinstance(offset, exp.Identifier):
+            return {(_ident_key(offset), qual)}
+        return {(_ORDINALITY, qual)} if offset is True else set()
+    if item.args.get("ordinality"):
+        alias = item.args.get("alias")
+        cols = alias.args.get("columns") if alias is not None else None
+        name = _ident_key(cols[-1]) if cols else _ORDINALITY
+        return {(name, qual)}
+    sel = None
+    if isinstance(item, exp.Subquery):
+        sel = item.this
+    elif isinstance(item, exp.Table) and not item.args.get("db"):
+        sel = _cte_select(stmt, _ident_key(item.this))
+    if not isinstance(sel, exp.Select) or sel.args.get("joins"):
+        return set()
+    frm = sel.args.get("from_")
+    source = _ordinality_names(frm.this if frm is not None else None, stmt,
+                               depth + 1)
+    names = {name for name, _ in source}
+    out = set()
+    for proj in sel.expressions:
+        col = proj.this if isinstance(proj, exp.Alias) else proj
+        if isinstance(col, exp.Column) and _ident_key(col.this) in names:
+            out.add((_ident_key(proj.args.get("alias"))
+                     if isinstance(proj, exp.Alias) else _ident_key(col.this),
+                     qual))
+    return out
+
+
+def _cte_select(stmt, name):
+    for cte in stmt.find_all(exp.CTE):
+        if _ident_key(cte.args.get("alias").this) == name:
+            return cte.this
+    return None
+
+
+def _orders_by_ordinality(window, key):
+    """The single ORDER BY key is a WITH ORDINALITY number of the one
+    source the window's SELECT reads: unique, so no ties to break."""
+    col = key.this if isinstance(key, exp.Ordered) else key
+    sel = _owning_select(window)
+    if not isinstance(col, exp.Column) or sel is None or sel.args.get("joins"):
+        return False
+    frm = sel.args.get("from_")
+    stmt = sel.root()
+    names = _ordinality_names(frm.this if frm is not None else None, stmt)
+    name = _ident_key(col.this)
+    qual = _ident_key(col.args.get("table"))
+    return any(name == n and (not qual or qual == q) for n, q in names)
+
+
 def row_number_dedupe_tiebreaker(stmt, loc, ctx):
     out = []
     for window in stmt.find_all(exp.Window):
@@ -1162,7 +1270,8 @@ def row_number_dedupe_tiebreaker(stmt, loc, ctx):
                             "a unique tiebreaker"))
             continue
         keys = order.expressions if hasattr(order, "expressions") else []
-        if len(keys) == 1 and _picks_one_row(stmt, window):
+        if (len(keys) == 1 and _picks_one_row(stmt, window)
+                and not _orders_by_ordinality(window, keys[0])):
             out.append((window,
                         "ROW_NUMBER with a single ORDER BY key picks an arbitrary "
                         "winner on ties (uniqueness can't be verified from the file)",

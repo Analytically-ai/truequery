@@ -494,3 +494,109 @@ def test_locator_two_occurrences_clean_first():
     ]
     for rule, sql, expected in cases:
         assert _lines_for(sql, rule) == expected, rule
+
+
+# -- 0.1.3: three false alarms from the 0.1.2 precision run ----------------------
+INSERT_RULE = "sql/insert-explicit-column-list"
+CROSS_RULE = "sql/accidental-cross-join"
+TIEBREAK_RULE = "sql/row-number-dedupe-tiebreaker"
+
+
+@pytest.mark.parametrize("dialect", [None, "postgres", "sqlite"])
+def test_insert_default_values_needs_no_column_list(dialect):
+    assert INSERT_RULE not in rules(check("INSERT INTO t DEFAULT VALUES;",
+                                          dialect=dialect))
+
+
+@pytest.mark.parametrize("sql", [
+    "INSERT INTO t VALUES (1, 2);",
+    "INSERT INTO t SELECT a, b FROM u;",
+])
+def test_insert_without_column_list_still_reports(sql):
+    assert INSERT_RULE in rules(check(sql))
+
+
+@pytest.mark.parametrize("sql", [
+    # Zulip's migration: ON links s and m, WHERE links m to the target.
+    "UPDATE target SET x = 1 FROM m JOIN s ON s.id = m.stream_id "
+    "WHERE m.id = target.message_id;",
+    "UPDATE t AS tt SET x = 1 FROM a JOIN b ON b.k = a.k WHERE a.id = tt.id;",
+    "DELETE FROM target USING m JOIN s ON s.id = m.stream_id "
+    "WHERE m.id = target.message_id;",
+    "UPDATE t SET x = 1 FROM a, b WHERE a.id = t.id AND b.id = a.id;",
+])
+def test_update_delete_from_join_is_linked(sql):
+    assert CROSS_RULE not in rules(check(sql, dialect="postgres"))
+
+
+@pytest.mark.parametrize("sql", [
+    "UPDATE t SET x = 1 FROM a, b WHERE a.id = t.id;",  # b links to nothing
+    "DELETE FROM t USING a, b WHERE a.id = t.id;",
+    "UPDATE t SET x = 1 FROM a JOIN b ON a.flag = 1 WHERE a.id = t.id;",
+    "SELECT * FROM a, b WHERE a.x = 1;",
+    "SELECT * FROM a JOIN b ON a.x = 1;",
+])
+def test_unlinked_join_still_reports(sql):
+    assert CROSS_RULE in rules(check(sql, dialect="postgres"))
+
+
+def test_mysql_update_join_is_linked():
+    sql = "UPDATE a JOIN b ON b.id = a.bid SET a.x = 1 WHERE a.y = 2;"
+    assert CROSS_RULE not in rules(check(sql, dialect="mysql"))
+    sql = "UPDATE a JOIN b ON a.y = 2 SET a.x = 1 WHERE a.y = 2;"
+    assert CROSS_RULE in rules(check(sql, dialect="mysql"))
+
+
+def _dedupe(inner):
+    return f"SELECT * FROM ({inner}) x WHERE rn = 1;"
+
+
+@pytest.mark.parametrize("inner", [
+    "SELECT v, ROW_NUMBER() OVER (PARTITION BY g ORDER BY ordinality) rn "
+    "FROM unnest(arr) WITH ORDINALITY AS u(v, ordinality)",
+    "SELECT v, ROW_NUMBER() OVER (PARTITION BY g ORDER BY n) rn "
+    "FROM unnest(arr) WITH ORDINALITY AS u(v, n)",
+    "SELECT v, ROW_NUMBER() OVER (PARTITION BY g ORDER BY u.n) rn "
+    "FROM unnest(arr) WITH ORDINALITY AS u(v, n)",
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY ordinality) rn "
+    "FROM unnest(arr) WITH ORDINALITY",
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY ordinality) rn "
+    "FROM jsonb_array_elements(x) WITH ORDINALITY",
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY i) rn "
+    "FROM jsonb_array_elements(x) WITH ORDINALITY AS e(val, i)",
+])
+def test_order_by_ordinality_has_no_ties(inner):
+    assert TIEBREAK_RULE not in rules(check(_dedupe(inner), dialect="postgres"))
+
+
+def test_ordinality_through_a_cte():
+    """PostHog's shape: the CTE reads the ordinality source alone."""
+    sql = ("WITH raw AS (SELECT value, ordinality FROM "
+           "jsonb_array_elements('[]'::jsonb) WITH ORDINALITY), "
+           "input AS (SELECT value->>'kind' AS kind, row_number() OVER "
+           "(PARTITION BY value->>'kind' ORDER BY ordinality) AS dedup_rank "
+           "FROM raw) "
+           "INSERT INTO jobs (kind) SELECT i.kind FROM input i "
+           "WHERE i.dedup_rank = 1;")
+    assert TIEBREAK_RULE not in rules(check(sql, dialect="postgres"))
+    joined = sql.replace("WITH ORDINALITY)", "WITH ORDINALITY, other)")
+    assert TIEBREAK_RULE in rules(check(joined, dialect="postgres"))
+
+
+@pytest.mark.parametrize("inner", [
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY created_at) rn FROM events",
+    # a column that is only called ordinality
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY ordinality) rn FROM events",
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY v) rn "
+    "FROM unnest(arr) WITH ORDINALITY AS u(v, n)",
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY z.n) rn "
+    "FROM unnest(arr) WITH ORDINALITY AS u(v, n)",
+    # numbered per outer row: the same number repeats across rows of t
+    "SELECT ROW_NUMBER() OVER (PARTITION BY e.val ORDER BY i) rn "
+    "FROM t, LATERAL jsonb_array_elements(t.x) WITH ORDINALITY AS e(val, i)",
+    # a join can repeat each number
+    "SELECT ROW_NUMBER() OVER (PARTITION BY g ORDER BY ordinality) rn "
+    "FROM unnest(arr) WITH ORDINALITY AS u(v, ordinality) JOIN t ON t.v = u.v",
+])
+def test_single_order_key_still_reports(inner):
+    assert TIEBREAK_RULE in rules(check(_dedupe(inner), dialect="postgres"))
