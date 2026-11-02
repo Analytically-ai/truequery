@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.1.3 (2026-11-01)
+
+No false "clean" on statements the parser can only read as a command, and
+three false alarms fixed.
+
+- **Some files that said "clean" now say "not checked"** (exit 3 with
+  `detect`, unless `--allow-unverified`). For syntax it doesn't support,
+  the SQL parser doesn't fail: it keeps the statement as an opaque command,
+  and no check can look inside one. Before 0.1.3 such a file was reported
+  clean. Now a command that holds a query or a data change (`EXPLAIN`,
+  `PREPARE … AS`, `DECLARE … CURSOR FOR`, `DO`, `CREATE TABLE`/`VIEW`/
+  `FUNCTION`/`RULE`/`TRIGGER`, or a statement TrueQuery doesn't recognise)
+  is a parse failure like any other: the file is listed as not checked,
+  with the line. The rest of the file is still checked, and its findings
+  still report. In Python files the fragment is listed as SQL that doesn't
+  parse; that never causes exit 3.
+- Session and admin statements that no check is about (`SET`, `RESET`,
+  `SHOW`, `GRANT`, `REVOKE`, `VACUUM`, `ANALYZE`, `COMMENT ON`, `ALTER …`,
+  `DROP …`, `CREATE INDEX`/`STATISTICS`/`EXTENSION`/`ROLE`/`TYPE`, …) are
+  unchanged: nothing was skipped, so they stay checked.
+- The parser's own warning ("… contains unsupported syntax. Falling back to
+  parsing as a 'Command'.") no longer appears in your terminal or in hook
+  output. The checker's output is TrueQuery's only.
+- **Fewer false alarms:**
+  - `sql/insert-explicit-column-list` no longer fires on
+    `INSERT INTO t DEFAULT VALUES`, which takes no column list.
+  - `sql/accidental-cross-join` no longer fires on a linked Postgres
+    `UPDATE t … FROM a JOIN b ON …` or `DELETE FROM t USING a JOIN b ON …`
+    (or MySQL `UPDATE a JOIN b ON … SET …`). The join's other side and the
+    `WHERE` against the target count as links now. A source that links to
+    nothing still reports.
+  - `sql/row-number-dedupe-tiebreaker` no longer fires on a single
+    `ORDER BY` key that is the `WITH ORDINALITY` number of the one source
+    the query reads, named or the default `ordinality`. Those numbers are
+    unique, so there are no ties. It still reports when a join or a
+    `LATERAL` over another table can repeat the number.
+
 ## 0.1.2 (2026-11-01)
 
 The SQL inside Python files is checked now, not just listed.

@@ -78,14 +78,14 @@ right.
 - **SQL inside Python.** We ran the checker over 12 public Python projects
   that run SQL from code: Apache Superset, PostHog, Zulip, Redash, Datasette,
   Frappe, Feast, Mage, beets, Databricks Labs' UCX, Apache Airflow's
-  provider DAGs and a Streamlit app. It found 5,642 queries and checked 77%
+  provider DAGs and a Streamlit app. It found 5,642 queries and checked 76%
   of them; the rest are built at run time or don't parse, and the receipt
-  lists them as not checked. We labelled all 285 findings by hand: 279 were
-  accurate and 6 were false alarms, all from three rules. The accurate
-  findings were fragile patterns in working code, mostly `INSERT`s without
-  a column list and deliberate whole-table deletes, not bugs in shipped
-  code.
-- **Tests.** About 500 automated tests run on Linux, macOS and Windows
+  lists them as not checked. We labelled all 279 findings by hand, and all
+  were accurate: the 6 false alarms of the first run, from three rules,
+  are fixed. The findings were fragile patterns in working code, mostly
+  `INSERT`s without a column list and deliberate whole-table deletes, not
+  bugs in shipped code.
+- **Tests.** About 570 automated tests run on Linux, macOS and Windows
   with Python 3.11 to 3.14, including the plugin's own scripts end to end. 22
   practices in the standard carry an executable proof that runs on every
   change. Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF,
@@ -94,6 +94,10 @@ right.
   AUTOINCREMENT) has its own tests too.
 - **Never a false "clean".** A file the checker can't parse, can't decode or
   that is over the 10 MB limit is listed as not checked, never as clean.
+  So is a statement the parser can't read as a query: when it can keep a
+  query or a data change only as an opaque command (`EXPLAIN …`,
+  `PREPARE … AS …`, some `CREATE TABLE` and `CREATE VIEW` syntax), no
+  check could look inside it, and the file counts as not checked.
 
 ## Not checked yet
 
