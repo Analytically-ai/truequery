@@ -8,9 +8,12 @@ attaches no node positions, so each rule searches its statement text
 for its own anchor (documented approximation, good to the statement
 and usually the line).
 """
+import contextlib
+import logging
 import re
 
 import sqlglot
+from sqlglot import exp as _exp
 
 from truequery import std_registry
 from truequery.checks import sql as checks
@@ -401,6 +404,145 @@ class Locator:
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
+# -- statements sqlglot reads only as a Command ------------------------------
+# For syntax it doesn't support, sqlglot doesn't raise: it keeps the text
+# as an opaque exp.Command, and no check can see inside one. Whether that
+# leaves something unchecked depends on what the statement is, judged on
+# its leading keywords. The lists below are the whole policy.
+#
+# Statements that hold a query or a data change: every check is about
+# these, so reading one only as a Command skipped them. That is a parse
+# failure (the file is not checked; in Python the fragment is unparsed).
+_DATA_HEADS = frozenset({
+    "SELECT", "WITH", "VALUES", "TABLE", "FROM",  # queries (TABLE t, FROM-first)
+    "INSERT", "UPDATE", "DELETE", "MERGE", "REPLACE", "UPSERT", "COPY",
+    "EXPLAIN",   # wraps a query; EXPLAIN ANALYZE also runs it
+    "PREPARE",   # PREPARE p AS <query>
+    "DECLARE",   # DECLARE c CURSOR FOR <query>
+    "DO",        # an anonymous block of statements
+    "CACHE",     # Spark CACHE TABLE t AS <query>
+})
+# CREATE / ALTER of these objects can hold a query: CREATE TABLE … AS,
+# a view's query, a function, procedure, rule, trigger or macro body, a
+# scheduled task's statement. A plain CREATE TABLE is here too: the
+# Command's text can't show that no AS <query> follows.
+_DATA_OBJECTS = frozenset({"TABLE", "VIEW", "FUNCTION", "PROCEDURE",
+                           "ROUTINE", "RULE", "TRIGGER", "MACRO", "TASK"})
+_ALTER_DATA_OBJECTS = frozenset({"VIEW"})  # ALTER VIEW v AS <query>
+
+# Statements no check applies to: session and transaction control,
+# permissions, maintenance, and schema objects that hold no query. A
+# Command here skipped nothing, so it is no diagnostic.
+_NO_CHECK_HEADS = frozenset({
+    "SET", "RESET", "SHOW", "USE", "PRAGMA",                 # session
+    "BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT",  # transactions
+    "SAVEPOINT", "RELEASE",
+    "GRANT", "REVOKE", "DENY", "REASSIGN",                   # permissions
+    "VACUUM", "ANALYZE", "OPTIMIZE", "REINDEX", "CLUSTER",   # maintenance
+    "CHECKPOINT", "DISCARD", "LOCK", "UNLOCK", "REFRESH", "MSCK", "KILL",
+    "SYSTEM",
+    "COMMENT", "SECURITY",                                   # COMMENT ON, SECURITY LABEL
+    "LISTEN", "NOTIFY", "UNLISTEN", "LOAD", "ATTACH", "DETACH",
+    "DESCRIBE", "DESC",
+    # Run something already defined, or move a cursor: no query text here.
+    "CALL", "EXECUTE", "EXEC", "DEALLOCATE", "FETCH", "MOVE", "CLOSE",
+    "DROP",      # removes an object; never holds a query
+    "TRUNCATE",  # removes every row on purpose; no check is about it
+})
+_NO_CHECK_OBJECTS = frozenset({
+    "INDEX", "STATISTICS", "EXTENSION", "SCHEMA", "DATABASE", "SEQUENCE",
+    "TYPE", "DOMAIN", "COLLATION", "CAST", "OPERATOR", "AGGREGATE", "TEXT",
+    "ROLE", "USER", "GROUP", "POLICY", "PUBLICATION", "SUBSCRIPTION",
+    "SERVER", "FOREIGN", "EVENT", "ACCESS", "CONVERSION", "LANGUAGE",
+    "TABLESPACE", "TRANSFORM", "SECRET", "STAGE",
+    "VIRTUAL",        # SQLite VIRTUAL TABLE … USING module(...)
+    "KEYSPACE", "CUSTOM", "AUTHORIZATION", "MAPPING",  # Cassandra, Teradata, Hazelcast
+})
+# Words between CREATE / ALTER and the object they name.
+_OBJECT_MODIFIERS = frozenset({
+    "OR", "REPLACE", "ALTER", "IF", "NOT", "EXISTS", "TEMP", "TEMPORARY",
+    "UNLOGGED", "GLOBAL", "LOCAL", "MATERIALIZED", "RECURSIVE", "TRANSIENT",
+    "SECURE", "VOLATILE", "EXTERNAL", "DYNAMIC", "ICEBERG", "HYBRID",
+    "MULTISET", "UNIQUE", "CONCURRENTLY", "CONSTRAINT", "DEFAULT",
+    "TRUSTED", "PROCEDURAL",
+})
+# Anything not named on either side is treated as holding a query: an
+# unknown statement is not checked, never silently clean. (ClickHouse
+# CREATE DICTIONARY is left unknown on purpose: its SOURCE can be a query.)
+
+_WORD = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
+
+
+def _command_words(stmt):
+    rest = stmt.expression
+    if isinstance(rest, _exp.Literal):
+        rest = rest.name
+    elif isinstance(rest, _exp.Expression):
+        rest = rest.sql()
+    return [w.upper() for w in _WORD.findall(f"{stmt.this or ''} {rest or ''}")]
+
+
+def command_holds_query(stmt) -> bool:
+    """True when a Command statement is one a check would have looked at
+    (see the lists above)."""
+    words = _command_words(stmt)
+    if not words:
+        return False
+    head = words[0]
+    if head in ("CREATE", "ALTER"):
+        obj = next((w for w in words[1:] if w not in _OBJECT_MODIFIERS), "")
+        if head == "ALTER":
+            return obj in _ALTER_DATA_OBJECTS
+        if obj in _DATA_OBJECTS:
+            return True
+        return obj not in _NO_CHECK_OBJECTS
+    if head in _DATA_HEADS:
+        return True
+    return head not in _NO_CHECK_HEADS
+
+
+def unread_detail(stmt):
+    """Why a statement wasn't checked, or None when it was: a query or
+    data change that parsed only as an opaque Command."""
+    if not isinstance(stmt, _exp.Command) or not command_holds_query(stmt):
+        return None
+    words = _command_words(stmt)
+    what = " ".join(words[:2]) if words[0] in ("CREATE", "ALTER") \
+        else words[0]
+    return (f"unsupported syntax: this {what} statement could be read "
+            "only as an opaque command, so no check looked inside it")
+
+
+def _command_line(chunk, stmt, start_line, after):
+    """(line, end) of a Command statement in its chunk, searching from
+    `after`: its first words, any spacing. The chunk's first line when
+    they can't be found."""
+    words = _command_words(stmt)[:3]
+    pattern = r"\b" + r"\W+".join(map(re.escape, words)) + r"\b"
+    hit = re.compile(pattern, re.IGNORECASE).search(chunk, after)
+    if hit is None:
+        rows = chunk.split("\n")
+        first = next((i for i, row in enumerate(rows) if row.strip()), 0)
+        return start_line + first, after
+    return start_line + chunk.count("\n", 0, hit.start()), hit.end()
+
+
+@contextlib.contextmanager
+def quiet_sqlglot():
+    """Hold sqlglot's logger at ERROR while checking. It warns 'contains
+    unsupported syntax' on stderr for every Command fallback, and the
+    checker's output must be only TrueQuery's. The level is restored
+    afterwards, so a host application's logging is left as it was."""
+    logger = logging.getLogger("sqlglot")
+    before = logger.level
+    if logger.getEffectiveLevel() < logging.ERROR:
+        logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logger.setLevel(before)
+
+
 def _parse_diagnostic(start_line, chunk, exc):
     """One clean agent-facing line + full detail for --json/--verbose.
 
@@ -474,6 +616,7 @@ def _active_checks(registry, settings, tiers, include_disabled):
 INTDIV = "sql/integer-division-truncation"
 
 
+@quiet_sqlglot()
 def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
                include_disabled=False, tiers=None, settings=None):
     """Run enabled file-level checks. Returns {path, findings,
@@ -516,8 +659,20 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
             diagnostics.append(_parse_diagnostic(start_line + first, chunk,
                                                  exc))
             continue
+        searched = 0
         for stmt in stmts:
             if stmt is None:
+                continue
+            detail = unread_detail(stmt)
+            if detail is not None:
+                # A query read only as an opaque Command: not checked,
+                # like any parse failure. The chunk's other statements
+                # still are.
+                line, searched = _command_line(chunk, stmt, start_line,
+                                               searched)
+                diagnostics.append({
+                    "message": f"line {line}: could not parse (not checked)",
+                    "detail": detail})
                 continue
             loc = Locator(chunk, start_line)
             for slug, check, record, setting in active:

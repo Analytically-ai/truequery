@@ -374,6 +374,7 @@ def _original_offset(sql: str, cleaned: str, offset: int) -> int:
     return o_start
 
 
+@analyzer.quiet_sqlglot()
 def check_python_source(text: str, path: str, dialect: str | None = None,
                         mode: str = "build", tiers=None, settings=None,
                         extraction=None):
@@ -434,6 +435,7 @@ def check_python_source(text: str, path: str, dialect: str | None = None,
     return findings, extraction.fragments, spans
 
 
+@analyzer.quiet_sqlglot()
 def statement_spans(path: str, text: str, dialect: str | None) -> list:
     """Statement spans for ignores and baselines: per SQL statement in a
     SQL file, per statement of each SQL fragment in a .py file."""
@@ -442,6 +444,7 @@ def statement_spans(path: str, text: str, dialect: str | None) -> list:
     return _chunk_hashes(text, dialect)
 
 
+@analyzer.quiet_sqlglot()
 def check_file(path: str, dialect: str | None = None,
                mode: str = "build", tiers=None,
                settings=None, text: str | None = None
@@ -521,6 +524,7 @@ def _apply_ignores(result: FileResult, findings: list, spans, ignores) -> None:
     result.findings.sort(key=Finding.sort_key)
 
 
+@analyzer.quiet_sqlglot()
 def run(paths: list[str], root: str, dialect: str | None = None,
         mode: str | None = None, tiers=None, settings=None,
         config: dict | None = None) -> list[FileResult]:

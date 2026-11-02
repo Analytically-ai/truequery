@@ -795,6 +795,7 @@ def uninstall(args) -> int:
 
 
 # -- entry ----------------------------------------------------------------------
+@analyzer.quiet_sqlglot()
 def main(args) -> int:
     started = time.monotonic()
     harness = args.harness
