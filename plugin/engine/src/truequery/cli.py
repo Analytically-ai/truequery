@@ -15,6 +15,7 @@ from truequery import report as RP
 from truequery import schema
 from truequery import settings as S
 from truequery import std_registry
+from truequery.analyzers import sql as analyzer
 from truequery.engine import ENGINE_VERSION, active_overrides, run
 
 EXIT_CLEAN = 0
@@ -712,6 +713,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@analyzer.quiet_sqlglot()
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
