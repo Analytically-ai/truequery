@@ -83,11 +83,13 @@ def test_backtick_receipt_guidance():
     assert any("dialect" in d["message"] for d in res["diagnostics"])
 
 
-def test_readme_rule_table_matches_registry():
+def test_checker_doc_rule_table_matches_registry():
+    # The 25-check table lives in docs/checker.md (linked from the README).
     import os
     from truequery import std_registry
     root = os.path.join(os.path.dirname(__file__), "..")
-    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+    with open(os.path.join(root, "docs", "checker.md"),
+              encoding="utf-8") as handle:
         readme = handle.read()
     for slug, rec in std_registry.RECORDS.items():
         if not rec["implemented"]:

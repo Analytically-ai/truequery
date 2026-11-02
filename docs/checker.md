@@ -1,0 +1,127 @@
+# The checker
+
+The checker (`truequery`, short alias `tq`) is the part of TrueQuery that
+reads your code and looks for SQL that silently returns the wrong answer.
+The `/truequery` skill runs it for the agent; you can also run it on its own
+in a terminal or CI. Back to the [README](../README.md).
+
+## What it finds
+
+```
+$ truequery detect samples/bad_orders.sql
+samples/bad_orders.sql:7:19 [error] sql/accidental-cross-join — no predicate links o: every row pairs with every row on the other side
+    fix: add ON <keys>, or CROSS JOIN if cartesian is intended
+samples/bad_orders.sql:13:7 [error] sql/not-in-nullable-subquery — a NULL in the subquery makes NOT IN return zero rows
+    fix: rewrite as NOT EXISTS, or add WHERE col IS NOT NULL
+samples/bad_orders.sql:17:14 [error] sql/count-star-after-left-join — COUNT(*) over an outer join counts 1 for unmatched rows
+    fix: count the nullable-side key instead, e.g. COUNT(o.<key>)
+...
+5 errors, 2 warnings in 1 file checked offline
+```
+
+`truequery review` adds the receipt. Its `Not checked` lines are the
+point: they name what this pass could not verify. Here that's the data
+itself; a limit such as integer division is listed only when a file
+could hit it.
+
+```
+TrueQuery receipt
+Checked      1 SQL file · contracts for 0 of 3 tables
+Found        5 errors · 2 warnings
+Not checked  your data: TrueQuery reads files and never connects to your database
+No contract  customers, orders, staging_orders
+```
+
+## What it promises
+
+- **Offline and deterministic.** No LLM in the check path and no network
+  calls. Your code never leaves your machine.
+- **Never a false "clean".** A file it couldn't parse, or a query it could
+  read only as an opaque command, is listed as not checked, and the exit
+  code says so.
+- **Checks the SQL inside Python too.** SQL strings passed to `execute`,
+  `read_sql`, `text()`, `.sql()` or `sql=` (including f-strings,
+  `.format()`, `%` and a query held in a same-file variable) get the same
+  checks as `.sql` files, and findings point at the Python line and column.
+  SQL your program builds at run time (in a loop, in another function or
+  module) can't be read from the file: it's listed as not checked, never
+  as clean.
+- **Runs as the agent works.** Hooks check each edit to a SQL file (or a
+  Python file with SQL inside) for bugs that are never intended (`= NULL`,
+  an unguarded `DELETE`, a `WHERE` that empties a left join). At the end
+  of each turn they run every enabled check over the files touched. New
+  findings go back to the agent once, a clean pass is silent, and no edit
+  is ever refused.
+- **Works anywhere SQL lives.** In a terminal and in CI, for any agent or
+  person: text, JSON or SARIF output. Exit codes: 0 means clean; 1 means
+  findings at or above `--fail-on` (default `error`); 2 is a usage or config
+  error; 3 means some files couldn't be checked (`--allow-unverified` turns
+  3 into 0).
+
+## Install it on its own
+
+```bash
+pip install truequery          # or: uv tool install truequery
+uvx truequery detect path/to/code/   # or run it without installing
+```
+
+That installs `truequery` and the short alias `tq`. If another tool in the
+same environment already provides a `tq` command, use `truequery`. Contributors working from a
+clone can install the local engine instead, from the repo root:
+
+```bash
+uv tool install ./plugin/engine
+```
+
+## You control the rules
+
+Every rule can be switched on or off, moved between the per-edit and
+end-of-turn checks, or given a different severity: per project in
+`DATA.md`, or for yourself in `~/.config/truequery/config.yaml`.
+
+```bash
+truequery rules                             # what's on, and where each setting came from
+truequery rules sql/accidental-cross-join   # one rule: what it means, with a proof
+truequery rules set sql/between-date-on-timestamp --enabled off
+```
+
+Agents never change rule settings: the skill forbids it, and if settings
+change during a session, the agent is told to check with you. An agent may
+only ignore a single line, and must give a reason
+(`truequery ignore add <rule> <path:line> --reason "..."`). Every rule
+earns its place on precision: one that misfires gets fixed or switched off
+by default.
+
+## All 25 checks
+
+`immediate` checks run after every edit; `stop` checks run at the end of the
+turn. Checks that are off by default aren't yet precise enough to run
+unasked; switch them on with `truequery rules set`.
+
+| Rule | Default | Build severity | What it catches |
+|---|---|---|---|
+| `dq/uniqueness-key-no-duplicates` | off (stop) | error | Declared keys carry a zero-duplicate uniqueness check |
+| `ingest/declare-source-freshness` | off (stop) | warning | Every ingested source declares a freshness threshold |
+| `model/unique-key-merge-key` | on (stop) | error | Incremental merge models declare a non-null unique merge key |
+| `orch/explicit-catchup-policy` | off (stop) | warning | Scheduled DAGs set catchup explicitly |
+| `sql/accidental-cross-join` | on (stop) | error | Every join of two tables carries an explicit join predicate |
+| `sql/average-of-ratios` | off (stop) | warning | Aggregate a ratio as SUM(numerator) / SUM(denominator), not AVG of row ratios |
+| `sql/between-date-on-timestamp` | on (stop) | warning | Filter timestamps with a half-open range, not BETWEEN date literals |
+| `sql/case-without-else-in-aggregate` | on (stop) | advisory | A CASE that feeds arithmetic or an aggregate states its ELSE |
+| `sql/count-star-after-left-join` | on (stop) | error | Count child rows with COUNT(child.key), not COUNT(*), after a LEFT JOIN |
+| `sql/distinct-dedup-bandaid` | off (stop) | warning | SELECT DISTINCT never stands in for a grain fix |
+| `sql/group-by-bare-column` | on (stop) | warning | In engines that allow it, GROUP BY queries never project bare ungrouped columns |
+| `sql/insert-explicit-column-list` | on (stop) | warning | INSERT INTO names its target columns |
+| `sql/integer-division-truncation` | on (stop) | warning | Divide integers only after casting to a non-integer type |
+| `sql/keyset-pagination` | off (stop) | warning | Paginated reads use keyset seeks, not OFFSET |
+| `sql/left-join-null-rejecting-where` | on (immediate) | warning | Filters on the nullable side of an outer join live in ON |
+| `sql/limit-requires-order-by` | off (stop) | warning | Every LIMIT carries an ORDER BY |
+| `sql/natural-join-explicit-keys` | on (stop) | warning | Joins name their keys explicitly, never NATURAL JOIN |
+| `sql/negative-filter-drops-nulls` | off (stop) | warning | Negative filters on nullable columns state what happens to NULLs |
+| `sql/nondeterministic-merge-keys` | on (stop) | error | Merge and dedupe keys never use nondeterministic functions |
+| `sql/not-in-nullable-subquery` | on (stop) | error | NOT IN is never used against a nullable subquery |
+| `sql/null-equality-comparison` | on (immediate) | error | Test for NULL with IS NULL, never with = NULL or <> NULL |
+| `sql/row-number-dedupe-tiebreaker` | on (stop) | warning | ROW_NUMBER dedupe orders by a unique tiebreaker |
+| `sql/set-operation-column-position` | off (stop) | error | Set-operation branches align columns explicitly by position |
+| `sql/unguarded-update-delete` | on (immediate) | error | UPDATE and DELETE always carry a filter or an explicit full-table guard |
+| `sql/union-all-default` | off (stop) | warning | Bare UNION states its dedup intent; UNION ALL is the default for appends |
