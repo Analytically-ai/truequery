@@ -193,7 +193,25 @@ def strip_jinja(text):
     return "".join(out)
 
 
+_DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$")
+
+
+def _dollar_end(text, i):
+    """End of the dollar-quoted string ($$…$$ or $tag$…$tag$) that opens
+    at text[i], or None: not an opening tag (a `$1` parameter, a `$`
+    inside a name) or never closed."""
+    if i and (text[i - 1].isalnum() or text[i - 1] in "_$"):
+        return None
+    tag = _DOLLAR_TAG.match(text, i)
+    if tag is None:
+        return None
+    close = text.find(tag.group(0), tag.end())
+    return None if close == -1 else close + len(tag.group(0))
+
+
 def strip_comments(text, dialect):
+    """Blank comments, keeping every newline and the text's length.
+    Quoted strings and dollar-quoted bodies are kept as they are."""
     out, i, n = [], 0, len(text)
     squote = False
     while i < n:
@@ -226,6 +244,9 @@ def strip_comments(text, dialect):
             for c in text[i:end]:
                 out.append("\n" if c == "\n" else " ")
             i = end
+        elif ch == "$" and (end := _dollar_end(text, i)) is not None:
+            out.append(text[i:end])  # a function body: checked on its own
+            i = end
         else:
             out.append(ch)
             i += 1
@@ -233,23 +254,30 @@ def strip_comments(text, dialect):
 
 
 def split_statements(cleaned):
-    parts, depth, cur, start, line = [], 0, [], 1, 1
-    squote = False
-    for ch in cleaned:
+    """(text, start line) per statement: split at `;` outside quotes,
+    brackets and dollar-quoted bodies. The parts are contiguous."""
+    parts, depth, start, line = [], 0, 1, 1
+    squote, i, cut, n = False, 0, 0, len(cleaned)
+    while i < n:
+        ch = cleaned[i]
         if ch == "'":
             squote = not squote
-        if not squote:
+        elif not squote:
+            if ch == "$" and (end := _dollar_end(cleaned, i)) is not None:
+                line += cleaned.count("\n", i, end)
+                i = end
+                continue
             if ch in "([":
                 depth += 1
             elif ch in ")]":
                 depth -= 1
-        cur.append(ch)
+            elif ch == ";" and depth == 0:
+                parts.append((cleaned[cut:i + 1], start))
+                cut, start = i + 1, line
         if ch == "\n":
             line += 1
-        if ch == ";" and depth == 0 and not squote:
-            parts.append(("".join(cur), start))
-            cur, start = [], line
-    tail = "".join(cur)
+        i += 1
+    tail = cleaned[cut:]
     if tail.strip() and tail.strip().strip(";"):
         parts.append((tail, start))
     return parts
@@ -295,9 +323,13 @@ def _usable_needle(needle, compact):
 
 
 class Locator:
-    def __init__(self, stmt_text, start_line):
+    def __init__(self, stmt_text, start_line, origin=None):
         self.text = stmt_text
         self.start_line = start_line
+        # (chunk, pos) when stmt_text is a query inside a wrapper or a
+        # function body: pos[i] is the chunk offset of stmt_text[i], and
+        # lines and columns are the chunk's (start_line is its first).
+        self.origin = origin
         # Rules append their slug here when a declared-key lookup
         # suppresses a firing; check_text reports them.
         self.suppressed = []
@@ -332,10 +364,14 @@ class Locator:
                 nth = self.used.get((rule, None), 0)
                 off = self._locate_anchor(rule, nth)
                 self.used[(rule, None)] = nth + 1
+        text = self.text
+        if self.origin is not None:
+            text, pos = self.origin
+            off = pos[min(off, len(pos) - 1)]
         # Offset inside the statement text, for callers that map
         # positions back to another file (SQL inside Python).
         self.last_offset = off
-        pre = self.text[:off]
+        pre = text[:off]
         return (self.start_line + pre.count("\n"),
                 off - (pre.rfind("\n") + 1) + 1)
 
@@ -513,18 +549,464 @@ def unread_detail(stmt):
             "only as an opaque command, so no check looked inside it")
 
 
-def _command_line(chunk, stmt, start_line, after):
-    """(line, end) of a Command statement in its chunk, searching from
-    `after`: its first words, any spacing. The chunk's first line when
-    they can't be found."""
-    words = _command_words(stmt)[:3]
-    pattern = r"\b" + r"\W+".join(map(re.escape, words)) + r"\b"
-    hit = re.compile(pattern, re.IGNORECASE).search(chunk, after)
-    if hit is None:
-        rows = chunk.split("\n")
-        first = next((i for i, row in enumerate(rows) if row.strip()), 0)
-        return start_line + first, after
-    return start_line + chunk.count("\n", 0, hit.start()), hit.end()
+def _command_span(text, stmt, after):
+    """(start, end) of a Command statement in text, searching from
+    `after`. sqlglot keeps the Command's text verbatim (its head, then
+    the rest), so it is found exactly; None when it isn't."""
+    head = str(stmt.this or "")
+    rest = stmt.expression
+    if isinstance(rest, _exp.Literal):
+        rest = rest.name
+    elif isinstance(rest, _exp.Expression):
+        return None
+    rest = str(rest or "").strip()
+    if not head:
+        return None
+    for hit in re.finditer(r"(?<![\w$])" + re.escape(head) + r"(?![\w$])",
+                           text[after:], re.IGNORECASE):
+        start = after + hit.start()
+        i = after + hit.end()
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if text.startswith(rest, i):
+            return start, i + len(rest)
+    return None
+
+
+# -- queries inside wrappers and function bodies ------------------------------
+# A wrapper holds a whole query: EXPLAIN [ANALYZE] [VERBOSE] [(options)]
+# <query>, PREPARE name [(types)] AS <query>, DECLARE name … CURSOR …
+# FOR <query>, CREATE TABLE / [MATERIALIZED] VIEW … AS <query>. sqlglot
+# reads these only as a Command; the query inside is found in the text,
+# parsed and checked like any other. A wrapper whose query isn't found,
+# or doesn't parse, stays not checked (see unread_detail).
+_EXPLAIN_OPTIONS = frozenset({
+    "ANALYZE", "ANALYSE", "VERBOSE",          # Postgres, MySQL, DuckDB
+    "QUERY", "PLAN", "FOR",                   # SQLite QUERY PLAN, Oracle PLAN FOR
+    "EXTENDED", "PARTITIONS", "FORMAT",       # MySQL (FORMAT=JSON)
+    "JSON", "TEXT", "TREE", "TRADITIONAL", "XML", "YAML",
+    "USING", "TABULAR",                       # Snowflake EXPLAIN USING TEXT
+    "FORMATTED", "COST", "CODEGEN", "LOGICAL",  # Spark
+})
+# Words a wrapped statement starts with. PREPARE / DECLARE / CREATE …
+# AS also accept a parenthesised query.
+_INNER_HEADS = frozenset({
+    "SELECT", "WITH", "VALUES", "TABLE", "FROM", "INSERT", "UPDATE",
+    "DELETE", "MERGE", "REPLACE", "UPSERT",
+    "CREATE",    # EXPLAIN CREATE TABLE … AS
+    "DECLARE",   # EXPLAIN DECLARE … CURSOR
+    "EXECUTE",   # EXPLAIN EXECUTE p, CREATE TABLE t AS EXECUTE p
+})
+_WRAPPING_OBJECTS = frozenset({"TABLE", "VIEW"})
+_NO_DATA = re.compile(r"\s+WITH\s+(?:NO\s+)?DATA\s*$", re.IGNORECASE)
+
+
+def _top_words(text, lo, hi):
+    """(WORD, start, end) for each word of text[lo:hi] outside brackets,
+    quoted strings, quoted names and dollar-quoted bodies."""
+    depth, i = 0, lo
+    while i < hi:
+        ch = text[i]
+        if ch in "'\"`":
+            j = text.find(ch, i + 1)
+            while ch == "'" and j != -1 and text.startswith("''", j):
+                j = text.find(ch, j + 2)
+            i = hi if j == -1 else j + 1
+            continue
+        if ch == "$" and (end := _dollar_end(text, i)) is not None:
+            i = end
+            continue
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif depth == 0 and (ch.isalpha() or ch == "_") and not (
+                i > lo and (text[i - 1].isalnum() or text[i - 1] in "_$")):
+            word = _WORD.match(text, i)
+            yield word.group(0).upper(), word.start(), word.end()
+            i = word.end()
+            continue
+        i += 1
+
+
+def _query_after(text, at, hi):
+    """Start of the statement that begins at or after `at`, when it
+    begins with one of _INNER_HEADS, in brackets or not; None otherwise
+    (`AS ({placeholder})` is no query to check)."""
+    while at < hi and text[at].isspace():
+        at += 1
+    first = at
+    while at < hi and (text[at].isspace() or text[at] == "("):
+        at += 1
+    word = _WORD.match(text, at)
+    return first if word and word.group(0).upper() in _INNER_HEADS else None
+
+
+def _inner_query(text, start, end):
+    """(start, end) of the query inside a wrapper Command spanning
+    text[start:end], or None when it isn't one of the forms above."""
+    words = list(_top_words(text, start, end))
+    if not words:
+        return None
+    head = words[0][0]
+    begin = None
+    if head == "EXPLAIN":
+        for word, at, _ in words[1:]:
+            if word in _INNER_HEADS:
+                begin = at
+                break
+            if word not in _EXPLAIN_OPTIONS:
+                return None
+    elif head == "PREPARE":
+        after_as = next((e for w, _, e in words[1:] if w == "AS"), None)
+        if after_as is not None:
+            begin = _query_after(text, after_as, end)
+    elif head == "DECLARE":
+        names = [w for w, _, _ in words]
+        if "CURSOR" in names:
+            cursor = names.index("CURSOR")
+            after_for = next((e for w, _, e in words[cursor + 1:]
+                              if w == "FOR"), None)
+            if after_for is not None:
+                begin = _query_after(text, after_for, end)
+    elif head == "CREATE":
+        obj = next((w for w, _, _ in words[1:]
+                    if w not in _OBJECT_MODIFIERS), "")
+        after_as = next((e for w, _, e in words[1:] if w == "AS"), None)
+        if obj in _WRAPPING_OBJECTS and after_as is not None:
+            begin = _query_after(text, after_as, end)
+            tail = _NO_DATA.search(text, begin or start, end)
+            if tail is not None:
+                end = tail.start()
+    if begin is None or begin >= end:
+        return None
+    return begin, end
+
+
+# Function and procedure bodies. A body in plain SQL (LANGUAGE sql, or no
+# language) is parsed as statements and checked; a procedural body is
+# not checked, and says so; a body in another language (python,
+# javascript, c, …) holds no SQL, so it is left as it was.
+_PROCEDURAL_LANGUAGES = {
+    "plpgsql": "PL/pgSQL", "plsql": "PL/SQL", "tsql": "T-SQL",
+    "sqlscript": "SQLScript", "spl": "SPL",
+}
+_SQL_LANGUAGES = frozenset({"sql", ""})
+_ROUTINES = frozenset({"FUNCTION", "PROCEDURE"})
+_BLOCK_HEAD = re.compile(r"\s*(BEGIN|DECLARE)\b(\s+ATOMIC\b)?", re.IGNORECASE)
+_LANGUAGE = re.compile(r"\s*'?([A-Za-z_][A-Za-z_0-9]*)'?")
+PROCEDURAL = "procedural code in"
+
+
+def _block_name(dialect):
+    if dialect in ("snowflake",):
+        return "Snowflake Scripting"
+    if dialect in ("tsql", "fabric"):
+        return "T-SQL"
+    return "a BEGIN … END block"
+
+
+def _string_bodies(text, lo, hi):
+    """(content start, content end, quoted) for each string after a
+    top-level AS in text[lo:hi]: `AS $tag$…$tag$` or `AS '…'`."""
+    for word, _, after in _top_words(text, lo, hi):
+        if word != "AS":
+            continue
+        at = after
+        while at < hi and text[at].isspace():
+            at += 1
+        if text.startswith("$", at) and (end := _dollar_end(text, at)):
+            tag = _DOLLAR_TAG.match(text, at).group(0)
+            yield at + len(tag), end - len(tag), False
+        elif text.startswith("'", at):
+            j = text.find("'", at + 1)
+            while j != -1 and text.startswith("''", j):
+                j = text.find("'", j + 2)
+            if j != -1:
+                yield at + 1, j, True
+
+
+def _language_in(text, lo, hi):
+    """The LANGUAGE named in text[lo:hi], lowercased; "" when none."""
+    for word, _, after in _top_words(text, lo, hi):
+        if word == "LANGUAGE":
+            name = _LANGUAGE.match(text, after)
+            return name.group(1).lower() if name else ""
+    return ""
+
+
+def _unquote(raw):
+    """A single-quoted body's text with `''` read as `'`, and for each of
+    its characters (plus the end) the offset in raw."""
+    out, idx, i = [], [], 0
+    while i < len(raw):
+        out.append(raw[i])
+        idx.append(i)
+        i += 2 if raw.startswith("''", i) else 1
+    idx.append(len(raw))
+    return "".join(out), idx
+
+
+def _is_block(text, at=0):
+    """A procedural block starts at text[at]: BEGIN … END, or DECLARE …
+    BEGIN … END (Snowflake Scripting). Not BEGIN ATOMIC (a SQL-standard
+    body of plain statements), and not a lone DECLARE c CURSOR FOR …,
+    which is a SQL statement."""
+    head = _BLOCK_HEAD.match(text, at)
+    if head is None or head.group(2):
+        return False
+    if head.group(1).upper() == "BEGIN":
+        return True
+    return re.search(r"\bBEGIN\b", text[head.end():], re.IGNORECASE) \
+        is not None
+
+
+def _routine_body(stmt):
+    """For a CREATE FUNCTION / PROCEDURE whose body sqlglot keeps as
+    text: (body text, language). (None, language) for a BEGIN … END
+    block sqlglot parsed into the tree (T-SQL, or a SQL-standard BEGIN
+    ATOMIC), None when the body is otherwise part of the tree (BigQuery,
+    a SQL `RETURN expr`) or there is none."""
+    if not isinstance(stmt, _exp.Create) or str(
+            stmt.args.get("kind") or "").upper() not in _ROUTINES:
+        return None
+    body = stmt.expression
+    props = stmt.args.get("properties")
+    lang = next((p.name.lower() for p in (props.expressions if props else [])
+                 if isinstance(p, _exp.LanguageProperty)), "")
+    if isinstance(body, _exp.Block) and stmt.args.get("begin"):
+        return None, lang
+    if isinstance(body, _exp.Block) and len(body.expressions) == 1 \
+            and isinstance(body.expressions[0], _exp.RawString):
+        body = body.expressions[0]
+    if isinstance(body, (_exp.Heredoc, _exp.RawString)) or (
+            isinstance(body, _exp.Literal) and body.is_string):
+        return body.name, lang
+    return None
+
+
+class _Pass:
+    """The checks over one chunk's statements, and over the queries
+    inside its wrappers and SQL function bodies. A piece of text being
+    checked has a `pos` map (pos[i] = chunk offset of text[i]); None
+    for the chunk itself."""
+
+    def __init__(self, active, ctx, path, mode, dialect):
+        self.active, self.ctx, self.path, self.mode = active, ctx, path, mode
+        self.dialect = dialect
+        self.findings, self.diagnostics, self.key_lookups = [], [], []
+
+    def chunk(self, chunk, start_line, base, stmts):
+        self.text, self.start_line, self.base = chunk, start_line, base
+        self._statements(stmts, chunk, None)
+
+    def wrapped_chunk(self, chunk, start_line, base):
+        """A wrapper the dialect's parser rejects outright instead of
+        keeping it as a Command (under auto, `DECLARE … CURSOR` raises):
+        True when the query inside is found, parses and was checked."""
+        self.text, self.start_line, self.base = chunk, start_line, base
+        lead = len(chunk) - len(chunk.lstrip())
+        inner = _inner_query(chunk, lead, len(chunk))
+        return inner is not None and \
+            self._parse_piece(chunk, None, *inner) is None
+
+    # -- positions --
+    def _off(self, pos, i):
+        return i if pos is None else pos[min(i, len(pos) - 1)]
+
+    def _line(self, off):
+        return self.start_line + self.text.count("\n", 0, off)
+
+    def _first_line(self, text, pos):
+        lead = len(text) - len(text.lstrip())
+        return self._line(self._off(pos, lead))
+
+    def _sub(self, pos, lo, hi, idx=None):
+        """pos map for text[lo:hi] (decoded through idx when given)."""
+        rel = idx if idx is not None else range(hi - lo + 1)
+        return [self._off(pos, lo + k) for k in rel]
+
+    def _diagnose(self, line, detail, what="could not parse"):
+        self.diagnostics.append({
+            "message": f"line {line}: {what} (not checked)",
+            "detail": detail})
+
+    # -- statements --
+    def _statements(self, stmts, text, pos):
+        searched = 0
+        for stmt in stmts:
+            if stmt is None:
+                continue
+            if isinstance(stmt, _exp.Command):
+                searched = self._command(stmt, text, pos, searched)
+                continue
+            body = _routine_body(stmt)
+            if body is not None:
+                searched = self._routine(stmt, body, text, pos, searched)
+                continue
+            self._check(stmt, text, pos)
+
+    def _parse_piece(self, text, pos, lo, hi):
+        """Parse text[lo:hi] and check it. The parse error when it
+        doesn't parse (nothing checked), else None."""
+        piece = text[lo:hi]
+        try:
+            stmts = sqlglot.parse(piece, read=self.dialect or None)
+        except Exception as exc:  # noqa: BLE001 - any parse error
+            return exc
+        self._statements(stmts, piece, self._sub(pos, lo, hi))
+        return None
+
+    def _command(self, stmt, text, pos, searched):
+        if not command_holds_query(stmt):
+            return searched
+        span = _command_span(text, stmt, searched)
+        if span is None:
+            self._diagnose(self._first_line(text[searched:], self._sub(
+                pos, searched, len(text))), unread_detail(stmt))
+            return searched
+        start, end = span
+        line = self._line(self._off(pos, start))
+        words = _command_words(stmt)
+        if words[0] == "DO":
+            lang = _language_in(text, start, end) or "plpgsql"
+            if lang in _PROCEDURAL_LANGUAGES:
+                body = next(((at, e) for at in range(start, end)
+                             if text[at] == "$"
+                             and (e := _dollar_end(text, at)) is not None),
+                            None)
+                if body is not None:
+                    tag = len(_DOLLAR_TAG.match(text, body[0]).group(0))
+                    body = (text, pos, body[0] + tag, body[1] - tag, False)
+                self._procedural(line, _PROCEDURAL_LANGUAGES[lang],
+                                 "DO block", body)
+            else:
+                self._diagnose(line, unread_detail(stmt))
+            return end
+        obj = next((w for w in words[1:] if w not in _OBJECT_MODIFIERS), "")
+        if words[0] == "CREATE" and obj in _ROUTINES:
+            self._routine_text(stmt, text, pos, start, end, line)
+            return end
+        inner = _inner_query(text, start, end)
+        if inner is None or self._parse_piece(text, pos, *inner) is not None:
+            self._diagnose(line, unread_detail(stmt))
+        return end
+
+    def _routine_text(self, stmt, text, pos, start, end, line):
+        """A CREATE FUNCTION / PROCEDURE sqlglot read only as a Command."""
+        lang = _language_in(text, start, end)
+        bodies = list(_string_bodies(text, start, end))
+        body = (text, pos, *bodies[0]) if bodies else None
+        block = next((e for w, _, e in _top_words(text, start, end)
+                      if w == "AS" and _is_block(text[:end], e)), None)
+        if lang in _PROCEDURAL_LANGUAGES:
+            self._procedural(line, _PROCEDURAL_LANGUAGES[lang], body=body)
+        elif lang in _SQL_LANGUAGES and body:
+            self._sql_body(*body, line)
+        elif lang in _SQL_LANGUAGES and block is not None:
+            self._procedural(line, _block_name(self.dialect),
+                             body=(text, pos, block, end, False))
+        else:
+            # Another language, or a body not found: as in 0.1.3.
+            self._diagnose(line, unread_detail(stmt))
+
+    def _routine(self, stmt, body, text, pos, searched):
+        """A CREATE FUNCTION / PROCEDURE whose body sqlglot kept as text:
+        find that text in the source, then check it as SQL."""
+        content, lang = body
+        create = re.compile(r"(?<![\w$])CREATE(?![\w$])", re.IGNORECASE)
+        hit = create.search(text, searched)
+        line = self._line(self._off(pos, hit.start() if hit else searched))
+        if lang not in _SQL_LANGUAGES and lang not in _PROCEDURAL_LANGUAGES:
+            self._check(stmt, text, pos)  # another language: as before
+            return searched
+        if content is None:
+            # A BEGIN … END block sqlglot parsed (loosely, for T-SQL):
+            # what it read is still checked, as before. A SQL-standard
+            # BEGIN ATOMIC body is plain SQL; T-SQL is procedural code.
+            self._check(stmt, text, pos)
+            if not re.compile(r"\bBEGIN\s+ATOMIC\b", re.IGNORECASE).search(
+                    text, searched):
+                self._procedural(line, _block_name(self.dialect))
+            return searched
+        want = " ".join(content.split())
+        for lo, hi, quoted in _string_bodies(text, searched, len(text)):
+            raw = text[lo:hi]
+            got = _unquote(raw)[0] if quoted else raw
+            if " ".join(got.split()) != want:
+                continue
+            if lang in _PROCEDURAL_LANGUAGES:
+                self._procedural(line, _PROCEDURAL_LANGUAGES[lang],
+                                 body=(text, pos, lo, hi, quoted))
+            else:
+                self._sql_body(text, pos, lo, hi, quoted, line)
+            return hi
+        if lang in _PROCEDURAL_LANGUAGES:
+            self._procedural(line, _PROCEDURAL_LANGUAGES[lang])
+        else:
+            self._diagnose(line, "the body of this function could not be "
+                           "found in the source, so no check looked inside "
+                           "it")
+        return searched
+
+    def _procedural(self, line, language, what="function body", body=None):
+        """Procedural code is not checked. Its statements that parse on
+        their own as plain SQL still are, and their findings are real;
+        the rest (control flow, variables) is not understood."""
+        if body is not None:
+            keep = len(self.diagnostics)
+            self._pieces(*body)
+            del self.diagnostics[keep:]  # the body is reported once, below
+        self._diagnose(
+            line, f"TrueQuery doesn't look inside procedural code yet: the "
+            f"control flow in this {what} ({language}) was not checked; "
+            f"only its statements that parse on their own as SQL were",
+            what=f"{PROCEDURAL} {language}")
+
+    def _sql_body(self, text, pos, lo, hi, quoted, line):
+        """Check a plain-SQL body, statement by statement, at its true
+        lines and columns. A body that starts a BEGIN … END block is
+        procedural code."""
+        raw = text[lo:hi]
+        if _is_block(_unquote(raw)[0] if quoted else raw):
+            self._procedural(line, _block_name(self.dialect),
+                             body=(text, pos, lo, hi, quoted))
+            return
+        self._pieces(text, pos, lo, hi, quoted)
+
+    def _pieces(self, text, pos, lo, hi, quoted):
+        """Parse and check each statement of a body; one that doesn't
+        parse is a diagnostic at its own line."""
+        raw = text[lo:hi]
+        body, idx = _unquote(raw) if quoted else (raw, None)
+        bpos = self._sub(pos, lo, hi, idx)
+        cleaned = strip_comments(body, self.dialect or "generic")
+        at = 0
+        for part, _ in split_statements(cleaned):
+            lo2, at = at, at + len(part)
+            if not part.strip().strip(";").strip():
+                continue
+            err = self._parse_piece(cleaned, bpos, lo2, at)
+            if err is not None:
+                detail = _ANSI.sub("", str(err)).replace("\n", " ")
+                self._diagnose(self._first_line(part, bpos[lo2:]),
+                               re.sub(r"\s+", " ", detail).strip())
+
+    # -- the checks --
+    def _check(self, stmt, text, pos):
+        origin = None if pos is None else (self.text, pos)
+        loc = Locator(text, self.start_line, origin)
+        for slug, check, record, setting in self.active:
+            for node, why, fix in check(stmt, loc, self.ctx):
+                line, col = loc.locate(slug, node)
+                self.findings.append(_finding(
+                    slug, _severity(record, setting, self.mode), self.mode,
+                    self.path, self.text, self.start_line, line, col, why,
+                    fix))
+                self.findings[-1]["offset"] = self.base + loc.last_offset
+        for suppressed in loc.suppressed:
+            if suppressed not in self.key_lookups:
+                self.key_lookups.append(suppressed)
 
 
 @contextlib.contextmanager
@@ -568,6 +1050,10 @@ def _intdiv_outside_strings(chunk):
         ch = chunk[i]
         if ch == "'":
             squote = not squote
+        elif not squote and ch == "$" and (
+                end := _dollar_end(chunk, i)) is not None:
+            i = end  # a body in another language (`//` starts a comment)
+            continue
         elif not squote and chunk[i:i + 2] == "//":
             pre = chunk[:i]
             return (1 + pre.count("\n"), i - (pre.rfind("\n") + 1) + 1)
@@ -627,7 +1113,6 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
     from truequery import keylookup  # imports project, which imports us
     registry = registry or std_registry
     cleaned = strip_comments(strip_jinja(text), dialect or "generic")
-    findings, diagnostics, key_lookups = [], [], []
     chunks = split_statements(cleaned)
     # A file with no statements at all (blank, comments or Jinja only)
     # is verified. Anything else must parse: a typo or prose is "not
@@ -635,12 +1120,16 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
     active = _active_checks(registry, settings, tiers, include_disabled)
     ctx = checks.CheckContext(dialect=dialect, path=path, mode=mode,
                               keys=keylookup.declared_keys_for(path))
+    run = _Pass(active, ctx, path, mode, dialect)
+    findings, diagnostics = run.findings, run.diagnostics
     base = 0  # offset of the chunk in the cleaned text (chunks are contiguous)
     for chunk, start_line in chunks:
         chunk_base, base = base, base + len(chunk)
         try:
             stmts = sqlglot.parse(chunk, read=dialect or None)
         except Exception as exc:
+            if run.wrapped_chunk(chunk, start_line, chunk_base):
+                continue
             # A parse failure is never a silent pass: the chunk was not
             # checked, so the file is unverified even when a `//`
             # finding is salvaged from it.
@@ -659,32 +1148,13 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
             diagnostics.append(_parse_diagnostic(start_line + first, chunk,
                                                  exc))
             continue
-        searched = 0
-        for stmt in stmts:
-            if stmt is None:
-                continue
-            detail = unread_detail(stmt)
-            if detail is not None:
-                # A query read only as an opaque Command: not checked,
-                # like any parse failure. The chunk's other statements
-                # still are.
-                line, searched = _command_line(chunk, stmt, start_line,
-                                               searched)
-                diagnostics.append({
-                    "message": f"line {line}: could not parse (not checked)",
-                    "detail": detail})
-                continue
-            loc = Locator(chunk, start_line)
-            for slug, check, record, setting in active:
-                for node, why, fix in check(stmt, loc, ctx):
-                    line, col = loc.locate(slug, node)
-                    findings.append(_finding(
-                        slug, _severity(record, setting, mode), mode, path,
-                        chunk, start_line, line, col, why, fix))
-                    findings[-1]["offset"] = chunk_base + loc.last_offset
-            for suppressed in loc.suppressed:
-                if suppressed not in key_lookups:
-                    key_lookups.append(suppressed)
+        # Each statement is checked; a query sqlglot read only as an
+        # opaque Command is unwrapped and checked when it can be, and a
+        # function body is checked as SQL. What can't be is not checked,
+        # like any parse failure, and the chunk's other statements still
+        # are.
+        run.chunk(chunk, start_line, chunk_base, stmts)
+    key_lookups = run.key_lookups
     findings.sort(key=lambda f: (f["line"], f["col"], f["rule"]))
     return {"path": path, "findings": findings, "diagnostics": diagnostics,
             "verified": not diagnostics, "key_lookups": key_lookups}

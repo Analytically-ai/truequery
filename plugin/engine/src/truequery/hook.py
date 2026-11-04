@@ -310,16 +310,23 @@ def clean_line(rel: str, modes=None) -> str:
 
 
 def unverified_block(diagnostics) -> str:
-    if all(d.message == E.TOO_LARGE for d in diagnostics):
-        why = "over the size limit, not checked"
-    elif any(d.message == E.TOO_LARGE for d in diagnostics):
-        why = "could not parse or over the size limit, not checked"
-    else:
-        why = "could not parse, not checked"
+    reasons = []
+    if any(E.parse_failed(d) for d in diagnostics):
+        reasons.append("could not parse")
+    if any(E.is_procedural(d) for d in diagnostics):
+        reasons.append("procedural code")
+    if any(d.message == E.TOO_LARGE for d in diagnostics):
+        reasons.append("over the size limit")
+    why = " or ".join(reasons) + ", not checked"
     lines = [f"[TrueQuery] UNVERIFIED — {why}:"]
     for diagnostic in diagnostics[:5]:
         lines.append(f"- {diagnostic.file}: {diagnostic.message}")
-    lines.append("Run `truequery detect --verbose` for the full parse error.")
+    if any(E.parse_failed(d) for d in diagnostics):
+        lines.append("Run `truequery detect --verbose` for the full parse "
+                     "error.")
+    elif any(E.is_procedural(d) for d in diagnostics):
+        lines.append("TrueQuery doesn't look inside procedural code yet; "
+                     "review those statements yourself.")
     return "\n".join(lines)
 
 
@@ -737,7 +744,7 @@ def status(args) -> int:
         found_plugin = found_plugin or state == "plugin"
     if found_plugin:
         print("truequery status: plugin hooks are active; do not also run "
-              "`tq install` (never double-install)")
+              "`truequery install` (never double-install)")
     return 0
 
 
@@ -789,8 +796,8 @@ def uninstall(args) -> int:
     if _plugin_enabled(args):
         print("truequery uninstall: the truequery plugin is enabled; its hooks are "
               "left alone (disable the plugin to turn them off)")
-    print(f"truequery uninstall: removed {removed} tq-install entr"
-          f"{'y' if removed == 1 else 'ies'}")
+    print(f"truequery uninstall: removed {removed} hook entr"
+          f"{'y' if removed == 1 else 'ies'} written by truequery install")
     return 0
 
 

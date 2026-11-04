@@ -502,7 +502,7 @@ def _contract_for_spec(spec: dict, source: str) -> str:
     if unique_combo:
         grain = f"one row per ({', '.join(unique_combo)})"
         keys.extend(c for c in unique_combo if c not in keys)
-    lines = [f"# Seeded by `tq init` from {source} — grain/keys come from",
+    lines = [f"# Seeded by `truequery init` from {source} — grain/keys come from",
              "# declared tests only; everything else is TODO.",
              f"table: {name}",
              f"grain: {grain}",
