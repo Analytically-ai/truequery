@@ -301,12 +301,12 @@ That installs `truequery` and the short alias `tq`.
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.4
+    rev: v0.1.5
     hooks:
       - id: truequery
 ```
 
-**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.4` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
+**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.5` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
 
 ### Try it on the demo shop
 
@@ -367,8 +367,7 @@ More answers (SQLFluff, dialects, false alarms): [FAQ](docs/faq.md).
 ## Roadmap
 
 - **Next:** the full skill in Gemini CLI and Codex, then Cursor and GitHub
-  Copilot; a GitHub Action and a pre-commit hook; checks for
-  pandas pipelines.
+  Copilot; checks for pandas pipelines.
 - **Later:** read-only checks against your data (local files first, then
   warehouses), so the receipt can say "checked against the data"; the rest
   of the lifecycle as full commands (data quality, migrations and backfills,

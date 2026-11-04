@@ -1,5 +1,5 @@
 name: TrueQuery
-description: Offline, deterministic checks for SQL and Python data code that silently returns the wrong answer, plus a verification receipt.
+description: Offline, deterministic checks for SQL (in .sql and Python files) that silently returns the wrong answer, plus a verification receipt.
 author: Analytically.ai
 
 branding:
@@ -52,18 +52,35 @@ runs:
   using: composite
   steps:
     - name: Set up Python
+      id: setup-python
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
+        update-environment: false
 
-    - name: Install TrueQuery engine from action checkout
+    - name: Create isolated venv and install TrueQuery engine
+      id: venv
       shell: bash
-      run: python -m pip install --quiet "${GITHUB_ACTION_PATH}/plugin/engine"
+      env:
+        TQ_SETUP_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+      run: |
+        VENV_DIR="${RUNNER_TEMP}/truequery-venv"
+        "${TQ_SETUP_PYTHON}" -m venv "${VENV_DIR}"
+        if [ -x "${VENV_DIR}/bin/python" ]; then
+          VENV_PYTHON="${VENV_DIR}/bin/python"
+        else
+          VENV_PYTHON="${VENV_DIR}/Scripts/python.exe"
+        fi
+        "${VENV_PYTHON}" -m pip install --quiet "${GITHUB_ACTION_PATH}/plugin/engine"
+        echo "venv_dir=${VENV_DIR}" >> "${GITHUB_OUTPUT}"
+        echo "venv_python=${VENV_PYTHON}" >> "${GITHUB_OUTPUT}"
 
     - name: Run TrueQuery
       id: run
       shell: bash
       env:
+        TQ_VENV_DIR: ${{ steps.venv.outputs.venv_dir }}
+        TQ_VENV_PYTHON: ${{ steps.venv.outputs.venv_python }}
         TQ_PATH: ${{ inputs.path }}
         TQ_COMMAND: ${{ inputs.command }}
         TQ_FAIL_ON: ${{ inputs.fail-on }}
@@ -74,7 +91,7 @@ runs:
         TQ_SUMMARY: ${{ inputs.summary }}
       run: |
         set +e
-        python - <<'PY'
+        "${TQ_VENV_PYTHON}" - <<'PY'
         import os
         import shlex
         import subprocess
@@ -93,13 +110,17 @@ runs:
             write_outputs(2, "")
             sys.exit(2)
 
-        raw_paths = os.environ.get("TQ_PATH", ".").strip() or "."
+        venv_dir = os.environ.get("TQ_VENV_DIR", "").strip()
         if os.name == "nt":
+            tq_bin = os.path.join(venv_dir, "Scripts", "truequery.exe") if venv_dir else "truequery"
+            raw_paths = os.environ.get("TQ_PATH", ".").strip() or "."
             paths = [p.strip("\"'") for p in shlex.split(raw_paths, posix=False)] or ["."]
         else:
+            tq_bin = os.path.join(venv_dir, "bin", "truequery") if venv_dir else "truequery"
+            raw_paths = os.environ.get("TQ_PATH", ".").strip() or "."
             paths = shlex.split(raw_paths, posix=True) or ["."]
 
-        base_args = ["truequery", cmd_name]
+        base_args = [tq_bin, cmd_name]
         fail_on = os.environ.get("TQ_FAIL_ON", "error").strip()
         if fail_on:
             base_args.extend(["--fail-on", fail_on])
@@ -129,6 +150,12 @@ runs:
                 with open(sarif_path, "w", encoding="utf-8") as handle:
                     handle.write(sarif_proc.stdout)
                 sarif_written = sarif_path
+            else:
+                print(
+                    f"truequery action: SARIF output was empty (exit code {sarif_proc.returncode}); "
+                    f"did not write {sarif_path}",
+                    file=sys.stderr,
+                )
 
         write_outputs(proc.returncode, sarif_written)
 

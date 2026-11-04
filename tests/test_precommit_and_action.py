@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
 
 import yaml
+
+from truequery import __version__
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ENGINE_SRC = os.path.join(ROOT, "plugin", "engine", "src")
@@ -34,6 +37,23 @@ def test_pre_commit_hooks_manifest_is_valid():
     assert both["entry"] == "truequery detect"
     assert both["language"] == "python"
     assert both["types_or"] == ["sql", "python"]
+
+
+def test_doc_snippets_match_current_version():
+    """Every `rev:` and `@v...` in README.md and docs/ci-and-pre-commit.md must match `v` + __version__."""
+    expected = f"v{__version__}"
+    for rel in ("README.md", os.path.join("docs", "ci-and-pre-commit.md")):
+        path = os.path.join(ROOT, rel)
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        revs = re.findall(r"\brev:\s*(v[0-9A-Za-z._-]+)", text)
+        action_refs = re.findall(r"Analytically-ai/truequery@(v[0-9A-Za-z._-]+)", text)
+        assert revs, f"no rev: found in {rel}"
+        assert action_refs, f"no Analytically-ai/truequery@v... found in {rel}"
+        for rev in revs:
+            assert rev == expected, f"{rel} has rev: {rev}, want {expected}"
+        for ref in action_refs:
+            assert ref == expected, f"{rel} has @{ref}, want @{expected}"
 
 
 def test_root_pyproject_matches_engine_metadata():
@@ -119,26 +139,49 @@ def _extract_action_python() -> str:
         action = yaml.safe_load(handle)
     run_step = [s for s in action["runs"]["steps"] if s.get("id") == "run"][0]
     script = run_step["run"]
-    py_start = script.index("python - <<'PY'\n") + len("python - <<'PY'\n")
+    marker = '"${TQ_VENV_PYTHON}" - <<\'PY\'\n'
+    py_start = script.index(marker) + len(marker)
     py_end = script.rindex("\nPY")
     return script[py_start:py_end]
 
 
-def _make_truequery_bin(tmp_path):
-    bindir = tmp_path / "bin"
-    bindir.mkdir(exist_ok=True)
+def _make_fake_venv(tmp_path):
+    """Create a fake venv layout with bin/truequery (POSIX) and Scripts/truequery.exe / .cmd."""
+    venv_dir = tmp_path / "truequery-venv"
+    bindir = venv_dir / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
     tq_sh = bindir / "truequery"
     tq_sh.write_text(
         f'#!/bin/sh\nPYTHONPATH="{ENGINE_SRC}" exec "{sys.executable}" -m truequery.cli "$@"\n',
         encoding="utf-8",
     )
     tq_sh.chmod(0o755)
-    tq_cmd = bindir / "truequery.cmd"
+
+    scripts_dir = venv_dir / "Scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    tq_cmd = scripts_dir / "truequery.cmd"
     tq_cmd.write_text(
         f'@echo off\r\nset "PYTHONPATH={ENGINE_SRC}"\r\n"{sys.executable}" -m truequery.cli %*\r\n',
         encoding="utf-8",
     )
-    return bindir
+    return venv_dir
+
+
+def test_action_setup_python_does_not_mutate_caller_environment():
+    action_path = os.path.join(ROOT, "action.yml")
+    with open(action_path, encoding="utf-8") as handle:
+        action = yaml.safe_load(handle)
+    setup_steps = [
+        s for s in action["runs"]["steps"]
+        if str(s.get("uses", "")).startswith("actions/setup-python@")
+    ]
+    assert setup_steps, "no actions/setup-python step found in action.yml"
+    for step in setup_steps:
+        assert step.get("id"), "setup-python step must have an id"
+        with_cfg = step.get("with") or {}
+        assert with_cfg.get("update-environment") is False, (
+            "setup-python must set update-environment: false so caller Python is not mutated"
+        )
 
 
 def test_github_action_manifest_and_runner(tmp_path):
@@ -169,11 +212,18 @@ def test_github_action_manifest_and_runner(tmp_path):
     summary_file = tmp_path / "summary.md"
     output_file = tmp_path / "output.txt"
     sarif_file = tmp_path / "out" / "report.sarif"
-    bindir = _make_truequery_bin(tmp_path)
+    venv_dir = _make_fake_venv(tmp_path)
 
+    # On Windows, subprocess without shell looks for .exe unless PATHEXT / .cmd is resolved;
+    # set TQ_VENV_DIR on POSIX to test full-path resolution without PATH, and put Scripts on PATH on Windows.
     env = {
         **os.environ,
-        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "TQ_VENV_DIR": "" if sys.platform == "win32" else str(venv_dir),
+        "PATH": (
+            f"{venv_dir / 'Scripts'}{os.pathsep}{os.environ.get('PATH', '')}"
+            if sys.platform == "win32"
+            else "/usr/bin:/bin"
+        ),
         "TQ_PATH": str(proj),
         "TQ_COMMAND": "review",
         "TQ_FAIL_ON": "error",
@@ -213,18 +263,26 @@ def test_github_action_manifest_and_runner(tmp_path):
 
 
 def test_github_action_error_edges(tmp_path):
-    """Invalid command or config error writes exit_code=2 and does not create an empty SARIF file."""
+    """Invalid command or config error writes exit_code=2, warns on stderr, and leaves sarif_file empty."""
     py_code = _extract_action_python()
     proj = tmp_path / "proj"
     proj.mkdir()
-    bindir = _make_truequery_bin(tmp_path)
+    venv_dir = _make_fake_venv(tmp_path)
+    base_env = {
+        **os.environ,
+        "TQ_VENV_DIR": "" if sys.platform == "win32" else str(venv_dir),
+        "PATH": (
+            f"{venv_dir / 'Scripts'}{os.pathsep}{os.environ.get('PATH', '')}"
+            if sys.platform == "win32"
+            else "/usr/bin:/bin"
+        ),
+    }
 
     # 1. Unsupported command
     out1 = tmp_path / "out1.txt"
     sarif1 = tmp_path / "sarif1.sarif"
     env1 = {
-        **os.environ,
-        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        **base_env,
         "TQ_PATH": str(proj),
         "TQ_COMMAND": "invalid-cmd",
         "TQ_SARIF_FILE": str(sarif1),
@@ -242,12 +300,11 @@ def test_github_action_error_edges(tmp_path):
     assert "exit_code=2" in out1.read_text(encoding="utf-8")
     assert not sarif1.exists()
 
-    # 2. Invalid dialect (CLI exits 2 with empty stdout)
+    # 2. Invalid dialect (CLI exits 2 with empty stdout -> warns to stderr that SARIF was empty)
     out2 = tmp_path / "out2.txt"
     sarif2 = tmp_path / "sarif2.sarif"
     env2 = {
-        **os.environ,
-        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        **base_env,
         "TQ_PATH": str(proj),
         "TQ_COMMAND": "review",
         "TQ_DIALECT": "not-a-real-dialect",
@@ -265,4 +322,5 @@ def test_github_action_error_edges(tmp_path):
     assert proc2.returncode == 2
     assert "exit_code=2" in out2.read_text(encoding="utf-8")
     assert "sarif_file=\n" in out2.read_text(encoding="utf-8")
+    assert "SARIF output was empty" in proc2.stderr
     assert not sarif2.exists()
