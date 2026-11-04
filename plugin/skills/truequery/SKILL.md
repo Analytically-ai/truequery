@@ -85,7 +85,8 @@ the checker's). Name the level of every claim you make.
 
 ## If the engine isn't available
 
-Run the checker as `truequery` (on PATH via the plugin), never `tq`.
+Run the checker as `truequery`, never `tq` (outside Claude Code, if it's
+missing, install it once: `pip install truequery`).
 If it fails, say so once, then work by reading: apply `floor.md` and the domain
 references to the code in front of you. Label every claim "reviewed
 by reading, not checked". Never print a receipt that implies checks

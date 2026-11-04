@@ -546,8 +546,9 @@ def test_muse_paths_from_patch_and_input():
 
 
 def test_muse_stop_blocks_once_like_codex(tmp_path, monkeypatch):
+    # An end-of-turn rule: nothing is said after the edit, so Stop says it.
     target = tmp_path / "q.sql"
-    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    target.write_text("SELECT id FROM c WHERE id NOT IN (SELECT x FROM o);\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     _run(json.dumps(
         {"hook_event_name": "PostToolUse", "tool_name": "write_file",
@@ -560,7 +561,7 @@ def test_muse_stop_blocks_once_like_codex(tmp_path, monkeypatch):
     assert code == 0
     body = json.loads(out)
     assert body["decision"] == "block"
-    assert "q.sql:1 [sql/unguarded-update-delete]" in body["reason"]
+    assert "q.sql:1 [sql/not-in-nullable-subquery]" in body["reason"]
     code, out = _run(json.dumps({"hook_event_name": "Stop"}),
                      Args(harness="muse"), monkeypatch)
     assert (code, out) == (0, "")  # same finding, second turn: silent
@@ -588,7 +589,7 @@ def test_muse_install_writes_hooks_json(tmp_path, monkeypatch):
     group = next(g for g in data["hooks"]["PostToolUse"]
                  if "hook --harness" in json.dumps(g))
     assert group["matcher"] == ("edit_file|write_file|"
-                                "multi_edit|apply_patch")
+                                "multi_edit|apply_patch|bash")
     assert any("hook --harness" in json.dumps(h)
                for h in data["hooks"]["Stop"])
     assert hook.install(Args(harness="muse")) == 0  # idempotent
@@ -848,3 +849,120 @@ def test_oversize_file_reaches_agent_as_not_checked(tmp_path, monkeypatch):
     body = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "[TrueQuery] UNVERIFIED" in body
     assert "big.sql" in body and "size limit" in body
+
+
+def test_event_without_files_leaves_the_session_alone(tmp_path, monkeypatch):
+    # Muse sends events with no file (reminders, skill loads), sometimes
+    # under another session id. They must not reset what the session has
+    # touched, or the end-of-turn pass has nothing left to check.
+    target = tmp_path / "q.sql"
+    target.write_text("SELECT id FROM c WHERE id NOT IN (SELECT x FROM o);\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    args = Args(harness="muse")
+    _run(json.dumps({"hook_event_name": "PostToolUse", "session_id": "a",
+                     "tool_name": "write_file",
+                     "tool_input": {"path": str(target)}}), args, monkeypatch)
+    before = (tmp_path / ".truequery" / "session.json").read_text(
+        encoding="utf-8")
+    for other in ({"hook_event_name": "PostToolUse", "session_id": "b",
+                   "tool_name": "read_file", "tool_input": {}},
+                  {"hook_event_name": "UserPromptSubmit", "session_id": "c"}):
+        assert _run(json.dumps(other), args, monkeypatch) == (0, "")
+    assert (tmp_path / ".truequery" / "session.json").read_text(
+        encoding="utf-8") == before
+    code, out = _run(json.dumps({"hook_event_name": "Stop",
+                                 "session_id": "a"}), args, monkeypatch)
+    assert json.loads(out)["decision"] == "block"
+    assert "q.sql:1 [sql/not-in-nullable-subquery]" in out
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("printf 'SELECT 2;' > b.sql", ["b.sql"]),
+    ("cat > q.sql <<'EOF'\nselect 1\nEOF", ["q.sql"]),
+    ("echo x >> logs/run.sql && echo done", ["logs/run.sql"]),
+    ("echo x 1>a.sql 2>err.log", ["a.sql"]),
+    ('echo x > "my dir/q.sql"', ["my dir/q.sql"]),
+    ("psql -f q.sql | tee out.sql", ["out.sql"]),
+    ("psql -f q.sql | tee -a one.sql two.sql", ["one.sql", "two.sql"]),
+    ("ls > /dev/null 2>&1", []),
+    ("echo hi >&2", []),
+    ("cat < in.sql", []),
+    ("echo $X > $OUT", []),
+])
+def test_paths_from_shell(command, expected):
+    assert hook._paths_from_shell(command) == expected
+
+
+def test_shell_paths_resolve_against_workdir():
+    assert hook.extract_paths(
+        {"tool_name": "bash",
+         "tool_input": {"command": "printf 'x' > b.sql", "workdir": "/w"}}
+    ) == [os.path.join("/w", "b.sql")]
+    # Claude Code's Bash (and Codex patches) aren't read as shell writes.
+    assert hook.extract_paths(
+        {"tool_name": "Bash", "tool_input": {"command": "echo x > b.sql"}}
+    ) == []
+
+
+def test_muse_session_key_is_the_users_session(monkeypatch):
+    payload = {"session_id": "reminder-agent"}
+    monkeypatch.delenv("MUSE_SESSION_ID", raising=False)
+    assert hook.session_key("muse", payload) == "reminder-agent"
+    monkeypatch.setenv("MUSE_SESSION_ID", "user-session")
+    assert hook.session_key("muse", payload) == "user-session"
+    assert hook.session_key("claude", payload) == "reminder-agent"
+    assert hook.detect_harness({"tool_name": "Write"}) == "muse"
+
+
+def test_muse_shell_write_is_checked_and_survives_helper_events(
+        tmp_path, monkeypatch, immediate_unguarded):
+    # Modelled on captured Muse 1.4.14 events: the user's session id is
+    # stable; the reminder agent fires its own events under another id.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MUSE_SESSION_ID", "user")
+    (tmp_path / "b.sql").write_text(
+        "DELETE FROM t;\nSELECT id FROM c WHERE id NOT IN (SELECT x FROM o);\n", encoding="utf-8")
+    args = Args()  # harness auto-detected
+    code, out = _run(json.dumps(
+        {"hook_event_name": "PostToolUse", "session_id": "user",
+         "cwd": str(tmp_path), "tool_name": "bash",
+         "tool_input": {"command": "printf 'DELETE FROM t;\\n' > b.sql",
+                        "workdir": str(tmp_path)}}), args, monkeypatch)
+    assert "b.sql" in out and "sql/unguarded-update-delete" in out
+    assert _run(json.dumps(
+        {"hook_event_name": "PostToolUse", "session_id": "reminder",
+         "cwd": str(tmp_path), "tool_name": "submit_reminder_decision",
+         "tool_input": {"decision": "none"}}), args, monkeypatch) == (0, "")
+    # The file survived the helper's events: Stop checks it and says only
+    # what the edit didn't (the NOT IN, an end-of-turn rule), once.
+    code, out = _run(json.dumps(
+        {"hook_event_name": "Stop", "session_id": "user",
+         "cwd": str(tmp_path), "stop_hook_active": False}), args,
+        monkeypatch)
+    body = json.loads(out)
+    assert body["decision"] == "block"
+    assert "b.sql:2 [sql/not-in-nullable-subquery]" in body["reason"]
+    assert "unguarded" not in body["reason"]
+    code, out = _run(json.dumps(
+        {"hook_event_name": "Stop", "session_id": "user",
+         "cwd": str(tmp_path), "stop_hook_active": False}), args,
+        monkeypatch)
+    assert (code, out) == (0, "")
+
+
+def test_muse_stop_does_not_repeat_what_an_edit_already_said(
+        tmp_path, monkeypatch, immediate_unguarded):
+    # Live Muse runs show PostToolUse output reaching the model, so the
+    # end-of-turn pass says only what wasn't said after an edit.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MUSE_SESSION_ID", "user")
+    target = tmp_path / "q.sql"
+    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    _, out = _run(json.dumps(
+        {"hook_event_name": "PostToolUse", "tool_name": "write_file",
+         "cwd": str(tmp_path), "tool_input": {"path": str(target)}}),
+        Args(), monkeypatch)
+    assert "sql/unguarded-update-delete" in out
+    assert _run(json.dumps({"hook_event_name": "Stop",
+                            "cwd": str(tmp_path)}), Args(),
+                monkeypatch) == (0, "")

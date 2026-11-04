@@ -8,14 +8,18 @@
 #   3. else one line saying why nothing was checked.
 # It never breaks a session: it always exits 0. It calls `truequery`, never
 # the short `tq` alias, which other tools also use. The plugin root comes
-# from CLAUDE_PLUGIN_ROOT, else this script's own location.
-ROOT="${CLAUDE_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd)}"
+# from CLAUDE_PLUGIN_ROOT (Muse also sets MUSE_PLUGIN_ROOT), else this
+# script's own location.
+ROOT="${CLAUDE_PLUGIN_ROOT:-${MUSE_PLUGIN_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd)}}"
 WANT=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
   "$ROOT/.claude-plugin/plugin.json" 2>/dev/null | head -n 1)
 TRUEQUERY_PLUGIN_VERSION="$WANT"
 export TRUEQUERY_PLUGIN_VERSION
-# Bytecode goes to a cache, never into the plugin folder.
-PYTHONPYCACHEPREFIX="${XDG_CACHE_HOME:-$HOME/.cache}/truequery/pycache"
+# Bytecode goes to a cache, never into the plugin folder. Some agents run
+# hooks with a cleared environment and no HOME: use a temp dir then.
+CACHE_HOME="${XDG_CACHE_HOME:-${HOME:+$HOME/.cache}}"
+[ -n "$CACHE_HOME" ] || CACHE_HOME="${TMPDIR:-/tmp}/truequery-cache"
+PYTHONPYCACHEPREFIX="$CACHE_HOME/truequery/pycache"
 export PYTHONPYCACHEPREFIX
 
 # Read the hook event once, so a failed attempt can't swallow it.

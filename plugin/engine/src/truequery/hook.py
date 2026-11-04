@@ -61,7 +61,7 @@ def read_stdin(timeout: float = 5.0) -> str:
         return ""
 
 
-MUSE_TOOLS = frozenset({"edit_file", "write_file", "multi_edit"})
+MUSE_TOOLS = frozenset({"edit_file", "write_file", "multi_edit", "bash"})
 
 
 def _exe_name(path: str) -> str:
@@ -90,14 +90,29 @@ def _hook_command(harness: str) -> str:
 
 
 def detect_harness(payload: dict) -> str:
-    """apply_patch payloads are Codex, edit_file/write_file/multi_edit
-    are Muse; anything else is Claude."""
+    """Muse sets MUSE_SESSION_ID for every hook it runs (its own tools are
+    edit_file/write_file/multi_edit/bash); apply_patch payloads are
+    Codex; anything else is Claude."""
+    if os.environ.get("MUSE_SESSION_ID"):
+        return "muse"
     tool_name = payload.get("tool_name", payload.get("toolName", ""))
     if isinstance(tool_name, str) and tool_name == "apply_patch":
         return "codex"
     if isinstance(tool_name, str) and tool_name in MUSE_TOOLS:
         return "muse"
     return "claude"
+
+
+def session_key(harness: str, payload: dict) -> str | None:
+    """The id that ties a session's events together. Muse's helper agents
+    (its reminder agent) fire hook events under their own session id, but
+    MUSE_SESSION_ID always names the user's session, so Muse uses that."""
+    if harness == "muse":
+        env_id = os.environ.get("MUSE_SESSION_ID")
+        if env_id:
+            return env_id
+    session_id = payload.get("session_id")
+    return session_id if isinstance(session_id, str) else None
 
 
 def detect_event(payload: dict) -> str:
@@ -128,6 +143,11 @@ def extract_paths(payload: dict) -> list[str]:
     files = tool_input.get("file_paths", tool_input.get("filePaths"))
     if isinstance(files, list) and all(isinstance(f, str) for f in files):
         return files
+    tool_name = payload.get("tool_name", payload.get("toolName", ""))
+    if tool_name in SHELL_TOOLS:
+        workdir = tool_input.get("workdir")
+        return _paths_from_shell(tool_input.get("command", ""),
+                                 workdir if isinstance(workdir, str) else None)
     for key in ("command", "patch", "input"):
         paths = _paths_from_command(tool_input.get(key, ""))
         if paths:
@@ -157,6 +177,42 @@ def _paths_from_command(command) -> list[str]:
         match = re.match(r"\+\+\+\s+(?:b/)?(\S+)", line)
         if match and match.group(1) != "/dev/null":
             paths.append(match.group(1))
+    return paths
+
+
+# Shell tools whose command may write a file (Muse's is `bash`). Claude
+# Code's `Bash` isn't here: its hooks don't fire on shell calls.
+SHELL_TOOLS = frozenset({"bash"})
+
+# `> f`, `>> f`, `1> f`, `&> f` (not `2>`, `>&2` or `<`), and `tee [-a] f`.
+_REDIRECT = re.compile(
+    r"""(?:^|[^0-9&<>])(?:1|&)?>>?\s*(?!&)(?:'([^']+)'|"([^"]+)"|([^\s;|&<>()'"]+))""")
+_TEE = re.compile(r"""\btee\s+((?:-[a-z-]+\s+)*)((?:[^\s;|&<>()]+\s*)+)""")
+
+
+def _paths_from_shell(command, workdir=None) -> list[str]:
+    """Files a shell command writes by redirect or tee (`cat > q.sql <<EOF`,
+    `printf ... >> q.sql`, `... | tee q.sql`). Relative paths resolve
+    against the tool's workdir when it gives one. Other writes (cp, mv,
+    sed -i) aren't read; the end-of-turn pass covers files edited with
+    the edit tools."""
+    if isinstance(command, list):
+        command = " ".join(str(part) for part in command)
+    if not isinstance(command, str) or not command:
+        return []
+    found = []
+    for match in _REDIRECT.finditer(command):
+        found.append(next(g for g in match.groups() if g))
+    for match in _TEE.finditer(command):
+        found.extend(match.group(2).split())
+    paths = []
+    for path in found:
+        if path == "/dev/null" or path.startswith("$"):
+            continue
+        if workdir and not os.path.isabs(path):
+            path = os.path.join(workdir, path)
+        if path not in paths:
+            paths.append(path)
     return paths
 
 
@@ -519,10 +575,13 @@ def _stop_text(root, session, dialect, continued, settings,
     """Stop speaks only for findings that are new (or unattributable) and
     not yet said this session; a clean or already-reported pass is
     silent, so the turn really ends."""
-    # In Claude Code, findings handed back right after an edit were said
-    # once: the end-of-turn pass doesn't repeat them. Codex and Muse rely
-    # on the Stop block, so it still carries every new finding there.
-    said = set(_reported_keys(session)) if harness == "claude" else set()
+    # Where per-edit output reaches the model (Claude Code, and Muse: its
+    # PostToolUse output lands in the turn as context, seen in live runs),
+    # findings said after an edit are said once: the end-of-turn pass
+    # doesn't repeat them. Codex relies on the Stop block, so it still
+    # carries every new finding there.
+    said = (set(_reported_keys(session))
+            if harness in ("claude", "muse") else set())
     results, block = stop_pass(root, session, dialect, continued,
                                settings=settings, config=config)
     if not block:
@@ -569,7 +628,7 @@ HARNESSES = {
               "Write|Edit",  # the Codex hooks docs' file-edit example
               "approve the hook once via /hooks (trust is hash-recorded)"),
     "muse": ((os.path.join(".muse", "hooks.json"),),
-             "edit_file|write_file|multi_edit|apply_patch",
+             "edit_file|write_file|multi_edit|apply_patch|bash",
              "trust this workspace for hooks to run (first-run dialog, "
              "or muse exec --trust-workspace)"),
 }
@@ -818,11 +877,22 @@ def main(args) -> int:
     claimed = payload.get("cwd")
     root = (claimed if isinstance(claimed, str)
             and os.path.isdir(claimed) else os.path.abspath("."))
+    paths = []
+    if event != "stop":
+        paths = [p for p in extract_paths(payload)
+                 if is_sql_path(p) or p.lower().endswith(".py")]
+        paths = [p for p in paths
+                 if (os.path.isfile(os.path.join(root, p))
+                     or os.path.isfile(p))
+                 and is_checked_path(p, root)]
+        if not paths:
+            # No SQL in the edited files (or no files at all: a reminder,
+            # a skill load): a silent no-op that never loads or saves the
+            # session, so it can't reset what this session has touched.
+            return 0
     # A continued turn extends the chain (bounded); a new turn resets it.
     continued = payload.get("stop_hook_active") is True
-    session_id = payload.get("session_id")
-    session = load_session(root, session_id if isinstance(session_id, str)
-                           else None)
+    session = load_session(root, session_key(harness, payload))
     notice = None
     text = None
     try:
@@ -854,14 +924,6 @@ def main(args) -> int:
             text = _stop_text(root, session, dialect, continued,
                               hook_settings, cfg or {}, harness)
         else:
-            paths = [p for p in extract_paths(payload)
-                     if is_sql_path(p) or p.lower().endswith(".py")]
-            paths = [p for p in paths
-                     if (os.path.isfile(os.path.join(root, p))
-                         or os.path.isfile(p))
-                     and is_checked_path(p, root)]
-            if not paths:
-                return 0  # no SQL in the edited files = silent no-op
             rels = [P._rel(p if os.path.isabs(p) else os.path.join(root, p),
                            root) for p in paths]
             for rel in rels:
