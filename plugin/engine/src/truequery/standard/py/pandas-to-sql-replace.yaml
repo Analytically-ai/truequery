@@ -1,0 +1,63 @@
+id: py/pandas-to-sql-replace
+title: Load into an existing table without to_sql(if_exists="replace")
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Pipeline code that reloads a table empties it (DELETE or TRUNCATE) and
+  writes with to_sql(if_exists="append"), or creates the table itself;
+  to_sql(if_exists="replace") is not used on a table whose definition
+  matters.
+rationale: >
+  if_exists="replace" drops the table and creates a new one from the
+  DataFrame's dtypes. The primary key, NOT NULL and other constraints,
+  indexes, declared column types (NUMERIC(10,2) becomes a float, a date may
+  become text) and grants are all lost, without an error. Later loads then
+  accept duplicates and nulls the table used to reject.
+failure_example: >
+  A nightly job reloads sales with to_sql("sales", con,
+  if_exists="replace"); the primary key is gone, a retried run appends the
+  same day twice, and revenue doubles in the dashboard.
+enforcement: detector
+detection_sketch: >
+  Flag a to_sql call with if_exists="replace" in a file that imports pandas.
+  A hazard on scratch or staging tables that nothing else defines.
+severity_suggestion: warning
+examples:
+  bad: |
+    df.to_sql("sales", con, if_exists="replace", index=False)
+  good: |
+    con.execute("DELETE FROM sales")
+    df.to_sql("sales", con, if_exists="append", index=False)
+sources:
+  - title: "pandas.DataFrame.to_sql | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_sql.html
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: if_exists="replace" drops the table before inserting new
+      values; the table is created from the DataFrame's dtypes (dtype=
+      overrides them).
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  engine: pandas
+  setup: |
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE sales (id INTEGER PRIMARY KEY, "
+                "amt NUMERIC(10,2) NOT NULL)")
+    df = pd.DataFrame({"id": [1, 2], "amt": [1.5, 2.5]})
+  bad: |
+    df.to_sql("sales", con, if_exists="replace", index=False)
+    result = con.execute("PRAGMA table_info(sales)").fetchall()
+  bad_result: "[(0, 'id', 'INTEGER', 0, None, 0), (1, 'amt', 'REAL', 0, None, 0)]"
+  good: |
+    con.execute("DELETE FROM sales")
+    df.to_sql("sales", con, if_exists="append", index=False)
+    result = con.execute("PRAGMA table_info(sales)").fetchall()
+  good_result: "[(0, 'id', 'INTEGER', 0, None, 1), (1, 'amt', 'NUMERIC(10,2)', 1, None, 0)]"
+  note: >
+    PRAGMA table_info lists (cid, name, type, notnull, default, pk). After
+    the replace, id is no longer the primary key, amt is no longer NOT NULL,
+    and NUMERIC(10,2) has become REAL.

@@ -1,0 +1,79 @@
+id: py/pandas-dedupe-unstable-sort
+title: Dedupe after a sort with a unique tiebreaker or a stable sort
+domain: py
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  A sort_values that decides which row drop_duplicates keeps (keep="first"
+  or "last") sorts by the deciding column plus a unique tiebreaker, or uses
+  kind="stable" when the input order is the intended tiebreaker.
+rationale: >
+  sort_values on one column uses quicksort by default, which is not stable:
+  rows that tie on the sort key come out in an arbitrary order. The row that
+  drop_duplicates then keeps for a key is arbitrary among the ties, and can
+  change when the input grows or arrives in another order. This is the
+  pandas twin of a ROW_NUMBER dedupe with no unique tiebreaker.
+failure_example: >
+  df.sort_values("updated_at").drop_duplicates("customer_id", keep="last")
+  keeps the older of two addresses captured in the same second; tomorrow's
+  run keeps the newer one, and the customer table flaps between them.
+enforcement: detector
+detection_sketch: >
+  Flag drop_duplicates on a subset of columns with keep first/last when the
+  frame comes from sort_values on a single column with the default kind
+  (quicksort or heapsort), in the same expression (through methods that keep
+  row order) or on the same name earlier in the function. Not flagged:
+  sorting on two or more columns (pandas sorts those stably), kind="stable"
+  or "mergesort", keep=False, and whole-row drop_duplicates (any survivor is
+  identical).
+severity_suggestion: warning
+examples:
+  bad: |
+    latest = df.sort_values("ts").drop_duplicates("id", keep="last")
+  good: |
+    latest = df.sort_values(["ts", "capture_id"]).drop_duplicates("id", keep="last")
+sources:
+  - title: "pandas.DataFrame.sort_values | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.sort_values.html
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: kind defaults to quicksort; mergesort and stable are the only
+      stable algorithms; the option is only applied when sorting on a single
+      column or label.
+  - title: "pandas.DataFrame.drop_duplicates | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.drop_duplicates.html
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: keep="first" / "last" keeps the first / last occurrence in the
+      frame's current order.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/row-number-dedupe-tiebreaker]
+proof:
+  engine: pandas
+  setup: |
+    n = 19
+    df = pd.DataFrame({
+        "id": [i % 3 for i in range(n)],
+        "ts": pd.Series([f"2024-01-0{(i * 7) % 4 + 1}" for i in range(n)],
+                        dtype=object),
+        "capture": list(range(n)),
+    })
+  bad: |
+    kept = df.sort_values("ts").drop_duplicates("id", keep="last")
+    result = kept.sort_values("id")["capture"].tolist()
+  bad_result: "[9, 1, 5]"
+  good: |
+    kept = df.sort_values(["ts", "capture"]).drop_duplicates("id", keep="last")
+    result = kept.sort_values("id")["capture"].tolist()
+  good_result: "[9, 13, 17]"
+  note: >
+    19 captures of three ids over four days; within an id, several captures
+    share the latest day. The intended row is the latest capture of the
+    latest day (9, 13, 17). With the default sort, ties come out in
+    quicksort's order and ids 1 and 2 keep older captures (1 and 5). Below 17
+    rows numpy sorts by insertion, which is stable, so a small test passes
+    and the bug shows only on real volumes. Checked with pandas 3.1.0 and
+    numpy 2.4.6; the key is an object column, which numpy sorts with the
+    same comparison sort on every platform.

@@ -9,7 +9,7 @@ additionalContext; Codex and Muse: decision "block").
 
 Routing: a PostToolUse event runs the immediate tier (rules with
 tier == immediate in the registry) over the edited SQL files and
-Python files with SQL inside; a Stop
+Python files with SQL inside or that import pandas; a Stop
 event runs the full enabled set over every file touched this session,
 deduplicated, with baseline attribution. Session state lives in
 .truequery/session.json.
@@ -30,6 +30,7 @@ from truequery import engine as E
 from truequery import project as P
 from truequery import report as RP
 from truequery import settings as S
+from truequery.analyzers import pandas_checks
 from truequery.analyzers import sql as analyzer
 from truequery.engine import run
 from truequery.extractors import python_sql
@@ -220,19 +221,22 @@ is_sql_path = P.is_sql_path
 
 
 def _has_python_sql(path: str) -> bool:
-    """A .py file holding SQL fragments (checked like a SQL edit)."""
+    """A .py file holding SQL fragments or importing pandas (checked
+    like a SQL edit)."""
     try:
         if os.path.getsize(path) > E.MAX_FILE_BYTES:
             return False
         with open(path, encoding="utf-8") as handle:
-            return python_sql.has_embedded_sql(handle.read())
+            text = handle.read()
     except (OSError, UnicodeDecodeError):
         return False
+    return (pandas_checks.imports_pandas(text)
+            or python_sql.has_embedded_sql(text))
 
 
 def is_checked_path(path: str, root: str) -> bool:
-    """SQL files, and .py files with SQL inside; anything else is a
-    silent no-op for the hook."""
+    """SQL files, and .py files with SQL inside or that import pandas;
+    anything else is a silent no-op for the hook."""
     if is_sql_path(path):
         return True
     if not path.lower().endswith(".py"):
@@ -412,7 +416,7 @@ def _head_signatures(root: str, rel: str, dialect, mode) -> set | None:
         return None
     if rel.endswith(".py"):
         try:
-            findings, _, _ = E.check_python_source(head, rel, dialect, mode)
+            findings = E.check_python_file(head, rel, dialect, mode)[0]
         except Exception:
             return None
         return {(f.rule, getattr(f, "_stmt", None)) for f in findings}

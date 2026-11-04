@@ -1,0 +1,61 @@
+id: py/pandas-groupby-first-mixes-rows
+title: Pick whole rows per group, not groupby().first() / .last()
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  Code that keeps one row per group keeps a whole input row (sort, then
+  .nth(0) / .nth(-1), or drop_duplicates on the keys). groupby(...).first()
+  and .last() are used only where mixing columns from different rows is
+  intended, or with skipna=False.
+rationale: >
+  GroupBy.first() and .last() take the first (last) non-null value of each
+  column separately. When a group's first row has a null in some column, that
+  column is filled from a later row, so one output row can combine values
+  from different input rows: an email from one record and a phone from
+  another. Nothing fails, and the result looks like a real record.
+failure_example: >
+  A customer dedupe keeps groupby("customer_id").first(); a customer whose
+  newest record has no phone gets the phone from a record two years older,
+  and the CRM sync texts the wrong number.
+enforcement: detector
+detection_sketch: >
+  Flag .first() / .last() (and .agg("first") / .agg("last")) called on a
+  groupby of a known DataFrame, or of a list of its columns. Not flagged: a
+  single selected column (groupby(k)["c"].first(): one column cannot mix),
+  and skipna=False.
+severity_suggestion: warning
+examples:
+  bad: |
+    latest = df.groupby("customer_id").first()
+  good: |
+    latest = df.groupby("customer_id").nth(0)
+sources:
+  - title: "pandas.core.groupby.DataFrameGroupBy.first | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.core.groupby.DataFrameGroupBy.first.html
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: Compute the first entry of each column within each group;
+      defaults to skipping NA elements (skipna=True).
+  - title: "pandas.core.groupby.DataFrameGroupBy.nth | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.core.groupby.DataFrameGroupBy.nth.html
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: nth takes the nth row from each group, as whole rows.
+confidence: high
+conflicts_with: []
+status: draft
+proof:
+  engine: pandas
+  setup: |
+    df = pd.DataFrame({"id": [1, 1], "email": [None, "b@x"],
+                       "phone": ["111", None]})
+  bad: |
+    result = df.groupby("id").first().reset_index()
+  bad_result: "[(1, 'b@x', '111')]"
+  good: |
+    result = df.groupby("id").nth(0)
+  good_result: "[(1, None, '111')]"
+  note: >
+    The bad row takes its email from the second input row and its phone from
+    the first: no input row looks like that.

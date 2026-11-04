@@ -27,6 +27,9 @@ PROJECT_LIMIT = ("dbt, incremental-model and Airflow rules beyond the 4 "
                  "project checks")
 DATA_LIMIT = ("your data: TrueQuery reads files and never connects to "
               "your database")
+PANDAS_LIMIT = ("pandas: only DataFrames a file builds or annotates "
+                "itself are followed; what a column means (money, units, "
+                "time zones) needs contracts")
 
 # How the receipt names a finding's git attribution.
 ATTRIBUTION_WORDS = {"new": "new", "existing": "already committed",
@@ -64,6 +67,8 @@ def recall_limits(results) -> list[str]:
         limits.append(DIVISION_LIMIT)
     if any(r.kind == "project" for r in results):
         limits.append(PROJECT_LIMIT)
+    if any(r.pandas for r in results):
+        limits.append(PANDAS_LIMIT)
     return limits
 
 
@@ -138,6 +143,8 @@ def render_json(results, tool_version: str, modes: list[str],
                            "detail": d.detail}
                         for d in all_diagnostics(results)],
         "python_sql": python_sql_summary(results),
+        # .py files the pandas checks read (added in 0.1.5).
+        "pandas_files": sorted(r.rel for r in results if r.pandas),
     }
     if receipt is not None:
         doc["receipt"] = receipt
@@ -245,6 +252,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
     project = [r for r in results if r.kind == "project"]
     python = [r for r in results if E.fragment_counts(r)["checked"]]
     queries = sum(E.fragment_counts(r)["checked"] for r in python)
+    pandas = [r for r in results if r.pandas]
     oversize = sorted({r.rel for r in results
                        if any(d.message == E.TOO_LARGE
                               for d in r.diagnostics)})
@@ -271,6 +279,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
         "project_files": len(project),
         "python_files": len(python),
         "python_queries": queries,
+        "pandas_files": len(pandas),
         "evidence": {
             "file": f"{len(sql)} SQL file(s)",
             "python": (f"SQL in {len(python)} Python file(s), "
@@ -278,6 +287,8 @@ def build_receipt(results, modes: list[str], contracts: dict,
                        if python else "no SQL in Python files checked"),
             "project": (f"{len(project)} project file(s), preview checks"
                         if project else "no project files in scope"),
+            "pandas": (f"pandas in {len(pandas)} Python file(s)"
+                       if pandas else "no pandas code checked"),
             "contract": f"{len(present)}/{len(tables_referenced)} tables",
             "contract_consumers": consumers,
             "metadata": "no adapter",
@@ -333,6 +344,9 @@ def render_receipt(receipt: dict) -> str:
         queries = receipt["python_queries"]
         checked.append(f"SQL in {_plural(receipt['python_files'], 'Python file')}"
                        f" ({queries} quer{'y' if queries == 1 else 'ies'})")
+    if receipt.get("pandas_files"):
+        checked.append(f"pandas in "
+                       f"{_plural(receipt['pandas_files'], 'Python file')}")
     if receipt["project_files"]:
         checked.append(_plural(receipt["project_files"], "project file"))
     total = len(receipt["contracts_referenced"])

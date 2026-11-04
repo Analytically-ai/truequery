@@ -13,7 +13,7 @@ SRC = os.path.join(os.path.dirname(__file__), "..", "plugin", "engine", "src", "
 
 def test_all_records_load():
     records = schema.load_all()
-    assert len(records) == 220
+    assert len(records) == 225
 
 
 def test_ids_match_paths():
@@ -53,14 +53,16 @@ def test_registry_generation_is_deterministic_and_fresh():
 
 def test_implemented_detectors_have_checks():
     from truequery import std_registry
-    from truequery.analyzers import project_checks
+    from truequery.analyzers import pandas_checks, project_checks
     from truequery.checks import sql as sql_checks
     for slug in std_registry.IMPLEMENTED:
         record = std_registry.RECORDS[slug]
         assert record["detector"] == slug, f"{slug} detector id must be its slug"
         assert (slug in sql_checks.CHECKS
-                or slug in project_checks.PREVIEW_CHECKS), (
-            f"{slug} missing in checks/sql.py or project_checks")
+                or slug in project_checks.PREVIEW_CHECKS
+                or slug in pandas_checks.CHECKS), (
+            f"{slug} missing in checks/sql.py, project_checks or "
+            "pandas_checks")
 
 
 def test_heuristic_five_off_by_default():

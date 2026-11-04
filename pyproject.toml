@@ -16,7 +16,7 @@ authors = [{ name = "Analytically.ai" }]
 keywords = ["sql", "analytics", "data-engineering", "lint", "dbt"]
 
 [project.optional-dependencies]
-test = ["duckdb", "pytest"]
+test = ["duckdb", "pytest", "pandas==3.1.0", "numpy==2.4.6"]
 
 [project.scripts]
 truequery = "truequery.cli:main"

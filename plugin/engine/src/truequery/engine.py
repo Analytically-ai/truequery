@@ -19,7 +19,7 @@ from truequery import __version__
 from truequery import project as P
 from truequery import settings as S
 from truequery import std_registry
-from truequery.analyzers import project_checks
+from truequery.analyzers import pandas_checks, project_checks
 from truequery.analyzers import sql as analyzer
 from truequery.extractors import python_sql
 from truequery.models import Diagnostic, Finding
@@ -55,9 +55,10 @@ class FileResult:
     key_lookups: list = field(default_factory=list)
     # "sql"; "project" for DAG/schema .py/.yml/.yaml files; "macro"
     # for a file of dbt macro definitions; "python" for a .py file with
-    # at least one checked SQL fragment; "embedded" for a .py file whose
-    # SQL fragments were all left unchecked. Macro and embedded files are
-    # listed as not checked.
+    # at least one checked SQL fragment; "pandas" for a .py file with no
+    # checked SQL that the pandas checks read; "embedded" for a .py file
+    # whose SQL fragments were all left unchecked (and no pandas checks
+    # ran). Macro and embedded files are listed as not checked.
     kind: str = "sql"
     # True when a .py result holds SQL that wasn't checked (built at run
     # time, or doesn't parse). A counted result (a DAG, a Python file
@@ -65,6 +66,10 @@ class FileResult:
     embedded_sql: bool = False
     # SQL fragments of a .py file (python_sql.Fragment), by position.
     fragments: list = field(default_factory=list)
+    # True when the pandas checks ran on this .py file (it imports pandas
+    # and at least one pandas rule is on for this pass). Such a file is
+    # counted as checked even when it holds no SQL (kind "pandas").
+    pandas: bool = False
 
     @property
     def verified(self) -> bool:
@@ -435,12 +440,67 @@ def check_python_source(text: str, path: str, dialect: str | None = None,
     return findings, extraction.fragments, spans
 
 
+def pandas_rules(tiers=None, settings=None) -> set:
+    """The pandas rules on for this pass (enabled, and in `tiers`)."""
+    rules = set()
+    for slug in pandas_checks.RULES:
+        record = std_registry.RECORDS.get(slug)
+        if record is None or not record["implemented"]:
+            continue
+        setting = (settings or {}).get(slug, {})
+        if not setting.get("enabled", record["enabled"]):
+            continue
+        if tiers is not None and setting.get("tier",
+                                             record["tier"]) not in tiers:
+            continue
+        rules.add(slug)
+    return rules
+
+
+def check_pandas_source(text: str, path: str, mode: str = "build",
+                        tiers=None, settings=None) -> tuple[bool, list]:
+    """(ran, findings) for the pandas checks on one .py file. `ran` is
+    True only when the file imports pandas and a pandas check ran on it."""
+    ran, raw = pandas_checks.check(text, pandas_rules(tiers, settings))
+    lines = text.splitlines()
+    findings = []
+    for rule, line, col, why, fix in raw:
+        record = std_registry.RECORDS[rule]
+        severity = ((settings or {}).get(rule, {}).get("severity")
+                    or record["severity"].get(mode, "warning"))
+        snippet = lines[line - 1].strip() if line <= len(lines) else ""
+        findings.append(Finding(rule=rule, severity=severity, mode=mode,
+                                evidence=record["evidence"], file=path,
+                                line=line, col=col, snippet=snippet[:120],
+                                why=why, fix=fix))
+    return ran, findings
+
+
+def check_python_file(text: str, path: str, dialect: str | None = None,
+                      mode: str = "build", tiers=None, settings=None):
+    """(findings, fragments, spans, pandas_ran) for one .py file: the SQL
+    inside it and its pandas code. Spans are the SQL statements first,
+    then the file's Python statements when it imports pandas; a pandas
+    finding is keyed to the first span holding its line, the same lookup
+    `ignore add` and git baselines use."""
+    findings, fragments, spans = check_python_source(
+        text, path, dialect, mode, tiers, settings)
+    spans = spans + pandas_checks.statement_spans(text)
+    ran, pandas = check_pandas_source(text, path, mode, tiers, settings)
+    for finding in pandas:
+        finding._stmt = stmt_hash_at(spans, finding.line)
+    findings = sorted(findings + pandas, key=Finding.sort_key)
+    return findings, fragments, spans, ran
+
+
 @analyzer.quiet_sqlglot()
 def statement_spans(path: str, text: str, dialect: str | None) -> list:
     """Statement spans for ignores and baselines: per SQL statement in a
-    SQL file, per statement of each SQL fragment in a .py file."""
+    SQL file; in a .py file, per statement of each SQL fragment, then per
+    Python statement when the file imports pandas."""
     if path.endswith(".py"):
-        return check_python_source(text, path, dialect)[2]
+        return (check_python_source(text, path, dialect)[2]
+                + pandas_checks.statement_spans(text))
     return _chunk_hashes(text, dialect)
 
 
@@ -596,9 +656,9 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             continue
         rel = P._rel(path, root)
         file_mode = P.resolve_mode(rel, config, mode)
-        findings, fragments, spans = [], [], []
+        findings, fragments, spans, pandas = [], [], [], False
         if path.endswith(".py"):
-            findings, fragments, spans = check_python_source(
+            findings, fragments, spans, pandas = check_python_file(
                 text, path, base_dialect, file_mode, tiers, settings)
         unchecked = any(not f.checked for f in fragments)
         if project_checks.applies_to_file(path, text):
@@ -609,13 +669,18 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             findings += _aux_findings(text, path, file_mode, tiers, settings)
         elif any(f.checked for f in fragments):
             kind = "python"
+        elif pandas:
+            # The pandas checks read it: counted, and any SQL it holds
+            # that wasn't checked is still listed.
+            kind = "pandas"
         elif fragments:
             # Every fragment unchecked: listed as not checked, not counted.
             kind = "embedded"
         else:
             continue  # other .py and YAML files apply to no check
         result = FileResult(path=path, rel=rel, mode=file_mode, kind=kind,
-                            embedded_sql=unchecked, fragments=fragments)
+                            embedded_sql=unchecked, fragments=fragments,
+                            pandas=pandas)
         # Python SQL matches ignores per statement; project findings
         # (outside any statement) on rule + file + line.
         _apply_ignores(result, findings, spans, ignores)

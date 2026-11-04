@@ -7,7 +7,9 @@ In scope:
 - Orchestrator/model Python: Airflow DAG and task correctness, Dagster
   asset definitions and resources, dbt Python models, SQLMesh Python models.
 - DataFrame-pattern pitfalls: collect-before-filter, N+1 queries in loops,
-  chained-assignment bugs, row-loop vectorization.
+  chained-assignment bugs, writes to iterrows() rows, groupby().first()
+  mixing rows, dedupe after an unstable sort, merge cardinality, groupby
+  dropping missing keys, to_sql(if_exists="replace").
 - Dependency and pinning hygiene for pipeline deployables.
 - Hook/adapter/client connection code and secret handling.
 
@@ -45,7 +47,7 @@ hyperparameters) — only the data plumbing around them.
 - pip / pip-tools / uv: pinning machinery; only works if a policy
   (`py/pin-pipeline-dependencies`) requires its use.
 
-Files: one practice per `<slug>.yaml` (15 records). Conflict fragments
+Files: one practice per `<slug>.yaml` (20 records). Conflict fragments
 live in `CONFLICTS_FRAG.md`.
 
 Merged away to remove cross-domain duplicates (review F3):

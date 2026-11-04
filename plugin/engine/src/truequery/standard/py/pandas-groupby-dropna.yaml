@@ -1,0 +1,53 @@
+id: py/pandas-groupby-dropna
+title: Say what happens to missing group keys with dropna=
+domain: py
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every groupby in pipeline code passes dropna= explicitly: dropna=False to
+  keep a group for rows whose key is missing, or dropna=True to state that
+  dropping them is intended.
+rationale: >
+  groupby drops rows whose key is NaN or None by default. Their values vanish
+  from every group, so totals by group no longer add up to the overall total,
+  with no warning. The SQL equivalent keeps a NULL group, so a pipeline moved
+  from SQL to pandas loses rows silently.
+failure_example: >
+  Revenue by region is computed with df.groupby("region")["amt"].sum(); 4% of
+  orders have no region yet, and the regional report is 4% short of the
+  finance total.
+enforcement: detector
+detection_sketch: >
+  Flag groupby() called on a known DataFrame with no dropna= argument. Not
+  flagged: calls with **kwargs. A hazard rule: it can't see whether the key
+  can be missing.
+severity_suggestion: warning
+examples:
+  bad: |
+    by_region = df.groupby("region")["amt"].sum()
+  good: |
+    by_region = df.groupby("region", dropna=False)["amt"].sum()
+sources:
+  - title: "pandas.DataFrame.groupby | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.groupby.html
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: dropna defaults to True; if True and the group keys contain NA
+      values, NA values together with the row/column are dropped.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/negative-filter-drops-nulls]
+proof:
+  engine: pandas
+  setup: |
+    df = pd.DataFrame({"region": ["EU", None, "US"], "amt": [10, 5, 20]})
+  bad: |
+    result = df.groupby("region")["amt"].sum().reset_index()
+  bad_result: "[('EU', 10), ('US', 20)]"
+  good: |
+    result = df.groupby("region", dropna=False)["amt"].sum().reset_index()
+  good_result: "[('EU', 10), ('US', 20), (None, 5)]"
+  note: >
+    The orders total 35; the bad result adds up to 30 because the order with
+    no region is dropped.
