@@ -250,6 +250,10 @@ def build_receipt(results, modes: list[str], contracts: dict,
                               for d in r.diagnostics)})
     unverified = sorted({r.rel for r in results if not r.verified}
                         - set(oversize))
+    unparsed = sorted({r.rel for r in results
+                       if any(E.parse_failed(d) for d in r.diagnostics)})
+    procedural = sorted({r.rel for r in results
+                         if any(E.is_procedural(d) for d in r.diagnostics)})
     missing = [t for t in tables_referenced
                if P.match_contract(t, contracts) is None]
     present = [t for t in tables_referenced
@@ -281,6 +285,9 @@ def build_receipt(results, modes: list[str], contracts: dict,
         },
         "not_checked": {
             "unverified_files": unverified,
+            # The same files by reason (a file can have both).
+            "unparsed_files": unparsed,
+            "procedural_files": procedural,
             "oversize_files": oversize,
             "macro_files": sorted(r.rel for r in results if r.kind == "macro"),
             "embedded_sql_files": sorted(
@@ -348,11 +355,16 @@ def render_receipt(receipt: dict) -> str:
         parts.append(_plural(counts[severity], severity)
                      + (f" ({'; '.join(bits)})" if bits else ""))
     lines.append(f"{'Found':<13}" + (" · ".join(parts) or "no problems"))
-    unverified = nc["unverified_files"]
+    unverified = nc.get("unparsed_files", nc["unverified_files"])
     if unverified:
         lines.append(f"{'Not checked':<13}{_plural(len(unverified), 'file')} "
                      f"that didn't parse: {_listed(unverified)} (set "
                      "`dialect` in the DATA.md tq-config if they need one)")
+    procedural = nc.get("procedural_files", [])
+    if procedural:
+        lines.append(f"{'Not checked':<13}{_plural(len(procedural), 'file')} "
+                     f"with procedural code (PL/pgSQL, BEGIN … END), not "
+                     f"looked inside yet: {_listed(procedural)}")
     oversized = nc.get("oversize_files", [])
     if oversized:
         lines.append(f"{'Not checked':<13}{_plural(len(oversized), 'file')} "

@@ -101,11 +101,14 @@ def _stderr_diagnostics(results, verbose: bool = False) -> None:
 
 
 def _unverified_reason(results) -> str:
-    """Why files went unchecked: parse failures, the size limit, or both."""
+    """Why files went unchecked: parse failures, procedural code, the
+    size limit."""
     diags = [d for r in results if not r.verified for d in r.diagnostics]
     reasons = []
-    if any(d.message != E.TOO_LARGE for d in diags):
+    if any(E.parse_failed(d) for d in diags):
         reasons.append("could not parse")
+    if any(E.is_procedural(d) for d in diags):
+        reasons.append("procedural code")
     if any(d.message == E.TOO_LARGE for d in diags):
         reasons.append("over the size limit")
     return " / ".join(reasons) or "could not parse"
@@ -685,7 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.set_defaults(func=cmd_install)
 
     p_uninstall = sub.add_parser(
-        "uninstall", help="remove tq-installed harness hook configs")
+        "uninstall", help="remove hook configs written by truequery install")
     p_uninstall.add_argument("--harness", default="auto",
                              choices=["auto", "claude", "codex", "muse"])
     p_uninstall.add_argument("--scope", default="project",
@@ -705,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ignore_sub = p_ignore.add_subparsers(dest="ignore_command",
                                            required=True)
     p_add = p_ignore_sub.add_parser("add")
-    p_add.add_argument("rule", help="rule slug from tq rules")
+    p_add.add_argument("rule", help="rule slug from truequery rules")
     p_add.add_argument("target", help="path:line (line required)")
     p_add.add_argument("--reason", default=None,
                        help="who and what evidence (required)")
@@ -719,7 +722,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
-        print("\nTry: tq detect <file.sql>  (start here)  |  tq init  (new project)")
+        print("\nTry: truequery detect <file.sql>  (start here)  |  "
+              "truequery init  (new project)")
         return EXIT_ERROR
     try:
         return args.func(args)

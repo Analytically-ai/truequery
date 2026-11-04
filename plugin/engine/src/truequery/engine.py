@@ -492,6 +492,18 @@ def is_macro_file(text: str) -> bool:
 TOO_LARGE = "file over the 10 MB size limit (not checked)"
 
 
+def is_procedural(diagnostic) -> bool:
+    """A function body in procedural code (PL/pgSQL, a BEGIN … END
+    block): it parsed, but TrueQuery doesn't look inside procedural
+    code yet, so it is not checked."""
+    return f": {analyzer.PROCEDURAL} " in diagnostic.message
+
+
+def parse_failed(diagnostic) -> bool:
+    """Not checked because it didn't parse (not size, not procedural)."""
+    return diagnostic.message != TOO_LARGE and not is_procedural(diagnostic)
+
+
 def _read(path: str) -> str | None:
     """File text; None when unreadable. NOT_UTF8 and TOO_LARGE are
     sentinels handled by run(): the file is reported as not checked."""

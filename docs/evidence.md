@@ -85,7 +85,7 @@ right.
   are fixed. The findings were fragile patterns in working code, mostly
   `INSERT`s without a column list and deliberate whole-table deletes, not
   bugs in shipped code.
-- **Tests.** About 570 automated tests run on Linux, macOS and Windows
+- **Tests.** About 620 automated tests run on Linux, macOS and Windows
   with Python 3.11 to 3.14, including the plugin's own scripts end to end. 22
   practices in the standard carry an executable proof that runs on every
   change. Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF,
@@ -94,10 +94,14 @@ right.
   AUTOINCREMENT) has its own tests too.
 - **Never a false "clean".** A file the checker can't parse, can't decode or
   that is over the 10 MB limit is listed as not checked, never as clean.
-  So is a statement the parser can't read as a query: when it can keep a
-  query or a data change only as an opaque command (`EXPLAIN …`,
-  `PREPARE … AS …`, some `CREATE TABLE` and `CREATE VIEW` syntax), no
-  check could look inside it, and the file counts as not checked.
+  So is a statement the parser can read only as an opaque command when no
+  check can look inside it (a `CREATE RULE`, a `CREATE TABLE` with syntax
+  it doesn't support). When the opaque command wraps a query (`EXPLAIN …`,
+  `PREPARE … AS …`, `DECLARE … CURSOR FOR …`, `CREATE TABLE`/`VIEW … AS
+  …`), the query inside is checked instead, at its own line and column.
+  So are the statements in a SQL function or procedure body. A body in
+  procedural code (PL/pgSQL, a `BEGIN … END` block) is listed as not
+  checked.
 
 ## Not checked yet
 
@@ -111,6 +115,10 @@ right.
   synthetic Snowflake, Redshift and SQLite workloads. Databricks and Spark,
   T-SQL, MySQL, Trino and the other dialects sqlglot supports are parsed,
   with less test coverage.
+- **Procedural code.** The control flow of a PL/pgSQL function, a `DO`
+  block, or a Snowflake Scripting or T-SQL `BEGIN … END` block isn't
+  checked: the file is listed as not checked, with the reason. The
+  statements inside it that parse on their own as SQL are still checked.
 - **SQL built at run time in Python.** SQL strings written in a `.py` file
   are checked; SQL the program assembles while it runs (in a loop, returned
   by a function, imported from another module) isn't in the file to read.

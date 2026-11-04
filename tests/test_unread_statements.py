@@ -27,8 +27,10 @@ ENV = dict(os.environ, HOME=_HOME, USERPROFILE=_HOME,
                os.path.dirname(__file__), "..", "plugin", "engine", "src"))
 
 REPRO = "CREATE STATISTICS IF NOT EXISTS s ON a, b FROM t;\n"
-# sqlglot 30 reads each of these only as a Command.
-DATA_COMMAND = "EXPLAIN SELECT a FROM t WHERE a NOT IN (SELECT b FROM u);\n"
+# sqlglot 30 reads this only as a Command, and no query can be unwrapped
+# from a rule (0.1.4 checks the query inside EXPLAIN, PREPARE, DECLARE
+# … CURSOR and CREATE … AS; see test_wrappers_and_bodies.py).
+DATA_COMMAND = "CREATE RULE r AS ON INSERT TO v DO INSTEAD DELETE FROM t;\n"
 
 
 def cli(*argv, cwd):
@@ -120,7 +122,7 @@ def test_data_command_is_a_diagnostic_with_detail():
     assert not res["verified"] and res["findings"] == []
     [diag] = res["diagnostics"]
     assert diag["message"] == "line 1: could not parse (not checked)"
-    assert "EXPLAIN statement could be read only as an opaque command" \
+    assert "CREATE RULE statement could be read only as an opaque command" \
         in diag["detail"]
 
 
@@ -153,8 +155,8 @@ def test_other_statements_of_the_file_still_report(tmp_path):
 def test_only_the_command_is_unchecked_in_a_shared_chunk():
     """A quote inside a quoted identifier keeps several statements in one
     chunk (pg-regress horology.sql). Only the Command is not checked."""
-    sql = ('SELECT 1 AS "it\'s";\nEXPLAIN SELECT 2;\nDELETE FROM t;\n'
-           'SELECT 2 AS "x\'";\n')
+    sql = ('SELECT 1 AS "it\'s";\nCREATE RULE r AS ON DELETE TO v DO NOTHING;\n'
+           'DELETE FROM t;\nSELECT 2 AS "x\'";\n')
     assert len(analyzer.split_statements(sql)) == 1
     res = analyzer.check_text(sql, dialect="postgres")
     assert [d["message"] for d in res["diagnostics"]] == [
@@ -164,11 +166,10 @@ def test_only_the_command_is_unchecked_in_a_shared_chunk():
 
 
 # -- Python ---------------------------------------------------------------------
-# A query sqlglot reads only as a Command (`WITH NO DATA`), with a
-# finding inside it that no check could see.
+# A statement sqlglot reads only as a Command, with a query no check sees.
 PY_DATA = ('import psycopg2\n'
-           'cur.execute("CREATE MATERIALIZED VIEW mv AS '
-           'SELECT a FROM t WHERE a = NULL WITH NO DATA")\n')
+           'cur.execute("CREATE RULE r AS ON INSERT TO v '
+           'DO INSTEAD DELETE FROM t WHERE a = NULL")\n')
 
 
 def test_python_data_command_is_unparsed():
@@ -176,6 +177,17 @@ def test_python_data_command_is_unparsed():
     assert [f.status for f in frags] == ["unparsed"]
     assert frags[0].reason == "doesn't parse as SQL"
     assert findings == []
+
+
+def test_python_wrapped_query_is_checked():
+    """0.1.3 listed this as unparsed; 0.1.4 checks the query inside."""
+    src = ('import psycopg2\n'
+           'cur.execute("CREATE MATERIALIZED VIEW mv AS '
+           'SELECT a FROM t WHERE a = NULL WITH NO DATA")\n')
+    findings, frags, _ = E.check_python_source(src, "m.py")
+    assert [f.status for f in frags] == ["static"]
+    assert [(f.rule, f.line) for f in findings] == [
+        ("sql/null-equality-comparison", 2)]
 
 
 def test_python_admin_command_is_checked():
