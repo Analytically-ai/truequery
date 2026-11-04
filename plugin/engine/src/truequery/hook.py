@@ -818,6 +818,19 @@ def main(args) -> int:
     claimed = payload.get("cwd")
     root = (claimed if isinstance(claimed, str)
             and os.path.isdir(claimed) else os.path.abspath("."))
+    paths = []
+    if event != "stop":
+        paths = [p for p in extract_paths(payload)
+                 if is_sql_path(p) or p.lower().endswith(".py")]
+        paths = [p for p in paths
+                 if (os.path.isfile(os.path.join(root, p))
+                     or os.path.isfile(p))
+                 and is_checked_path(p, root)]
+        if not paths:
+            # No SQL in the edited files (or no files at all: a reminder,
+            # a skill load): a silent no-op that never loads or saves the
+            # session, so it can't reset what this session has touched.
+            return 0
     # A continued turn extends the chain (bounded); a new turn resets it.
     continued = payload.get("stop_hook_active") is True
     session_id = payload.get("session_id")
@@ -854,14 +867,6 @@ def main(args) -> int:
             text = _stop_text(root, session, dialect, continued,
                               hook_settings, cfg or {}, harness)
         else:
-            paths = [p for p in extract_paths(payload)
-                     if is_sql_path(p) or p.lower().endswith(".py")]
-            paths = [p for p in paths
-                     if (os.path.isfile(os.path.join(root, p))
-                         or os.path.isfile(p))
-                     and is_checked_path(p, root)]
-            if not paths:
-                return 0  # no SQL in the edited files = silent no-op
             rels = [P._rel(p if os.path.isabs(p) else os.path.join(root, p),
                            root) for p in paths]
             for rel in rels:

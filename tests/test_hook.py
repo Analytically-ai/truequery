@@ -848,3 +848,28 @@ def test_oversize_file_reaches_agent_as_not_checked(tmp_path, monkeypatch):
     body = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "[TrueQuery] UNVERIFIED" in body
     assert "big.sql" in body and "size limit" in body
+
+
+def test_event_without_files_leaves_the_session_alone(tmp_path, monkeypatch):
+    # Muse sends events with no file (reminders, skill loads), sometimes
+    # under another session id. They must not reset what the session has
+    # touched, or the end-of-turn pass has nothing left to check.
+    target = tmp_path / "q.sql"
+    target.write_text("DELETE FROM t;\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    args = Args(harness="muse")
+    _run(json.dumps({"hook_event_name": "PostToolUse", "session_id": "a",
+                     "tool_name": "write_file",
+                     "tool_input": {"path": str(target)}}), args, monkeypatch)
+    before = (tmp_path / ".truequery" / "session.json").read_text(
+        encoding="utf-8")
+    for other in ({"hook_event_name": "PostToolUse", "session_id": "b",
+                   "tool_name": "read_file", "tool_input": {}},
+                  {"hook_event_name": "UserPromptSubmit", "session_id": "c"}):
+        assert _run(json.dumps(other), args, monkeypatch) == (0, "")
+    assert (tmp_path / ".truequery" / "session.json").read_text(
+        encoding="utf-8") == before
+    code, out = _run(json.dumps({"hook_event_name": "Stop",
+                                 "session_id": "a"}), args, monkeypatch)
+    assert json.loads(out)["decision"] == "block"
+    assert "q.sql:1 [sql/unguarded-update-delete]" in out
