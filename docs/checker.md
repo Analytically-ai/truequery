@@ -49,8 +49,10 @@ No contract  customers, orders, staging_orders
   SQL your program builds at run time (in a loop, in another function or
   module) can't be read from the file: it's listed as not checked, never
   as clean.
+- **Checks pandas pipelines too.** A Python file that imports pandas gets
+  the pandas checks (see "pandas" below), alongside any SQL inside it.
 - **Runs as the agent works.** Hooks check each edit to a SQL file (or a
-  Python file with SQL inside) for bugs that are never intended (`= NULL`,
+  Python file with SQL inside, or that imports pandas) for bugs that are never intended (`= NULL`,
   an unguarded `DELETE`, a `WHERE` that empties a left join). At the end
   of each turn they run every enabled check over the files touched. New
   findings go back to the agent once, a clean pass is silent, and no edit
@@ -60,6 +62,34 @@ No contract  customers, orders, staging_orders
   findings at or above `--fail-on` (default `error`); 2 is a usage or config
   error; 3 means some files couldn't be checked (`--allow-unverified` turns
   3 into 0).
+
+## pandas
+
+A `.py` file that imports pandas is read with Python's own parser; pandas
+is never imported and your code never runs. The checks look for pandas
+code that runs without an error and gives the wrong data:
+
+- a write through a chain (`df[mask]["col"] = v`,
+  `df["col"].fillna(0, inplace=True)`), which never reaches the DataFrame
+  under pandas 3 (checked on every edit);
+- a write to the row of an `iterrows()` loop, which changes a copy;
+- `groupby(...).first()` / `.last()`, which can build a row from values of
+  different input rows;
+- `sort_values` on one column (an unstable sort) deciding which row
+  `drop_duplicates` keeps;
+- `to_sql(if_exists="replace")`, which drops the table's keys, constraints
+  and column types;
+- off by default (they fire on most code and depend on data the checker
+  can't see): `merge`/`join` with no `validate=`, and `groupby` with no
+  `dropna=`.
+
+A DataFrame is a name the file builds from pandas (`pd.read_*`,
+`pd.DataFrame(...)`, `pd.concat`, `pd.merge`, a method of another known
+DataFrame) or annotates as `pd.DataFrame`. A name the checker can't follow
+(a parameter with no annotation, a value from another module) isn't
+reported on. The receipt counts these files as `pandas in N Python files`.
+Checks that need to know what a column means (money, units, time zones)
+come with contracts.
 
 ## Install it on its own
 
@@ -95,7 +125,7 @@ only ignore a single line, and must give a reason
 earns its place on precision: one that misfires gets fixed or switched off
 by default.
 
-## All 25 checks
+## All 32 checks
 
 `immediate` checks run after every edit; `stop` checks run at the end of the
 turn. Checks that are off by default aren't yet precise enough to run
@@ -107,6 +137,13 @@ unasked; switch them on with `truequery rules set`.
 | `ingest/declare-source-freshness` | off (stop) | warning | Every ingested source declares a freshness threshold |
 | `model/unique-key-merge-key` | on (stop) | error | Incremental merge models declare a non-null unique merge key |
 | `orch/explicit-catchup-policy` | off (stop) | warning | Scheduled DAGs set catchup explicitly |
+| `py/pandas-dedupe-unstable-sort` | on (stop) | warning | Dedupe after a sort with a unique tiebreaker or a stable sort |
+| `py/pandas-groupby-dropna` | off (stop) | warning | Say what happens to missing group keys with dropna= |
+| `py/pandas-groupby-first-mixes-rows` | on (stop) | warning | Pick whole rows per group, not groupby().first() / .last() |
+| `py/pandas-merge-validate` | off (stop) | warning | State the expected cardinality of every merge with validate= |
+| `py/pandas-no-chained-assignment` | on (immediate) | error | Change a DataFrame in one step on the DataFrame itself, never through a chain |
+| `py/pandas-no-row-loop-mutations` | on (stop) | error | Never write to the row of an iterrows() loop |
+| `py/pandas-to-sql-replace` | on (stop) | warning | Load into an existing table without to_sql(if_exists="replace") |
 | `sql/accidental-cross-join` | on (stop) | error | Every join of two tables carries an explicit join predicate |
 | `sql/average-of-ratios` | off (stop) | warning | Aggregate a ratio as SUM(numerator) / SUM(denominator), not AVG of row ratios |
 | `sql/between-date-on-timestamp` | on (stop) | warning | Filter timestamps with a half-open range, not BETWEEN date literals |

@@ -7,7 +7,7 @@
   require_serial: true
 - id: truequery-python
   name: TrueQuery (SQL and Python)
-  description: Offline, deterministic checks for SQL files and Python files with data queries.
+  description: Offline, deterministic checks for SQL files and Python files with data queries or pandas code.
   entry: truequery detect
   language: python
   types_or: [sql, python]

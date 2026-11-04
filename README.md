@@ -60,7 +60,7 @@ confirm otherwise, and records the decision.
 **3. It checks the SQL with plain code as it's written.** The time-zone trap
 was caught by the definitions. The checker catches a different kind of
 mistake: SQL that runs without errors and still returns the wrong answer. It
-looks for 25 kinds of it, offline and with no AI involved, while the agent
+looks for 32 kinds of mistake like it (in SQL, and in pandas code), offline and with no AI involved, while the agent
 works:
 
 ```sql
@@ -116,6 +116,8 @@ Ask in your own words; TrueQuery picks up the task. A few examples:
 
 - **"Fail CI on SQL that returns wrong answers."** For platform teams: the
   checker on its own, in any terminal or CI.
+- **"Check this pandas pipeline."** pandas code is checked too: writes that
+  never land, rows mixed by `groupby().first()`, table loads that drop keys.
 
 ## Commands
 
@@ -158,8 +160,12 @@ also run it on its own.
   checks as `.sql` files, and findings point at the Python line and column.
   SQL your program builds at run time can't be read from the file: it's
   listed as not checked, never as clean.
+- **Checks pandas pipelines too.** A Python file that imports pandas is
+  read for pandas code that runs and gives the wrong data: a write through
+  a chain that never lands, `groupby().first()` mixing rows, a dedupe
+  after an unstable sort, `to_sql(if_exists="replace")`.
 - **Runs as the agent works.** Each edit to a SQL file (or a Python file
-  with SQL inside) is checked for bugs that are never intended (`= NULL`, an
+  with SQL inside, or that imports pandas) is checked for bugs that are never intended (`= NULL`, an
   unguarded `DELETE`, a `WHERE` that empties a left join). At the end of
   each turn, every enabled check runs over the files touched. New findings
   go back to the agent once, a clean pass is silent, and no edit is ever
@@ -170,7 +176,7 @@ also run it on its own.
   error; 3 means some files couldn't be checked (`--allow-unverified` turns
   3 into 0).
 
-All 25 checks, with what each one catches: [the checker in
+All 32 checks, with what each one catches: [the checker in
 detail](docs/checker.md).
 
 ## You control the rules
@@ -201,7 +207,8 @@ by default.
   Python projects (Apache Superset, PostHog, Zulip, Apache Airflow's DAGs
   and more) and labelled every finding by hand. All 279 findings in the
   Python projects are accurate: the first run's 6 false alarms, from three
-  rules, were fixed in 0.1.3.
+  rules, were fixed in 0.1.3. The pandas checks were measured on 13 pandas
+  pipeline projects before any was switched on by default.
 - **Built to be checked.** Open source, offline and deterministic: the same
   input gets the same answer every time.
 
@@ -301,12 +308,12 @@ That installs `truequery` and the short alias `tq`.
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.5
+    rev: v0.1.6
     hooks:
       - id: truequery
 ```
 
-**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.5` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
+**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.6` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
 
 ### Try it on the demo shop
 
@@ -334,7 +341,7 @@ you to change your stack. It sits alongside what you already use:
 
 ## The standard
 
-220 practices for data work, across 9 lifecycle domains (ingest, store,
+225 practices for data work, across 9 lifecycle domains (ingest, store,
 model, orchestrate, data quality, semantics and metrics, consumption,
 governance, operations) and 2 cross-cutting packs (SQL, Python). Each one
 is a record with its rationale, examples and sources. The skill teaches all
@@ -367,7 +374,7 @@ More answers (SQLFluff, dialects, false alarms): [FAQ](docs/faq.md).
 ## Roadmap
 
 - **Next:** the full skill in Gemini CLI and Codex, then Cursor and GitHub
-  Copilot; checks for pandas pipelines.
+  Copilot.
 - **Later:** read-only checks against your data (local files first, then
   warehouses), so the receipt can say "checked against the data"; the rest
   of the lifecycle as full commands (data quality, migrations and backfills,
