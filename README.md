@@ -296,6 +296,18 @@ uvx truequery detect path/to/code/   # or run it without installing
 
 That installs `truequery` and the short alias `tq`.
 
+**pre-commit:** add TrueQuery to `.pre-commit-config.yaml` (`truequery` checks staged `.sql` files; `truequery-python` checks `.sql` and `.py`):
+
+```yaml
+repos:
+  - repo: https://github.com/Analytically-ai/truequery
+    rev: v0.1.5
+    hooks:
+      - id: truequery
+```
+
+**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.5` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
+
 ### Try it on the demo shop
 
 `examples/shop/` is the shop from the story above: a DuckDB warehouse and a
@@ -355,8 +367,7 @@ More answers (SQLFluff, dialects, false alarms): [FAQ](docs/faq.md).
 ## Roadmap
 
 - **Next:** the full skill in Gemini CLI and Codex, then Cursor and GitHub
-  Copilot; a GitHub Action and a pre-commit hook; checks for
-  pandas pipelines.
+  Copilot; checks for pandas pipelines.
 - **Later:** read-only checks against your data (local files first, then
   warehouses), so the receipt can say "checked against the data"; the rest
   of the lifecycle as full commands (data quality, migrations and backfills,

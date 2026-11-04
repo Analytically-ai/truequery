@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "truequery"
+dynamic = ["version"]
+description = "TrueQuery engine: offline, deterministic checks for SQL that silently returns the wrong answer"
+readme = "plugin/engine/README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["sqlglot==30.22.0", "pyyaml==6.0.3"]
+
+authors = [{ name = "Analytically.ai" }]
+keywords = ["sql", "analytics", "data-engineering", "lint", "dbt"]
+
+[project.optional-dependencies]
+test = ["duckdb", "pytest"]
+
+[project.scripts]
+truequery = "truequery.cli:main"
+tq = "truequery.cli:main"
+
+[tool.hatch.version]
+path = "plugin/engine/src/truequery/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["plugin/engine/src/truequery"]
+exclude = ["**/__pycache__"]

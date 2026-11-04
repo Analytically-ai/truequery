@@ -1,0 +1,175 @@
+name: TrueQuery
+description: Offline, deterministic checks for SQL (in .sql and Python files) that silently returns the wrong answer, plus a verification receipt.
+author: Analytically.ai
+
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  path:
+    description: Path(s) to check (space-separated files or directories). Defaults to the repository root.
+    required: false
+    default: "."
+  command:
+    description: TrueQuery command to run ("review" prints findings plus the receipt; "detect" prints findings only).
+    required: false
+    default: "review"
+  fail-on:
+    description: Lowest severity that fails the check ("error", "warning", or "advisory").
+    required: false
+    default: "error"
+  dialect:
+    description: SQL dialect override (e.g. "postgres", "bigquery", "snowflake", "duckdb", "tsql"). Uses DATA.md or auto-detection when omitted.
+    required: false
+    default: ""
+  mode:
+    description: Mode override ("explore", "build", "change", or "assure"). Uses DATA.md globs when omitted.
+    required: false
+    default: ""
+  allow-unverified:
+    description: Set to "true" to exit 0 even when some files could not be checked (exit code 3 becomes 0).
+    required: false
+    default: "false"
+  sarif-file:
+    description: Optional file path to write a SARIF 2.1.0 report for GitHub Code Scanning.
+    required: false
+    default: ""
+  summary:
+    description: Write the TrueQuery output and receipt to the GitHub Actions job summary ($GITHUB_STEP_SUMMARY).
+    required: false
+    default: "true"
+
+outputs:
+  exit-code:
+    description: Exit code from TrueQuery (0 = clean, 1 = findings at or above fail-on, 2 = usage/config error, 3 = some files could not be checked).
+    value: ${{ steps.run.outputs.exit_code }}
+  sarif-file:
+    description: Path to the generated SARIF 2.1.0 report file (if sarif-file was requested and written).
+    value: ${{ steps.run.outputs.sarif_file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      id: setup-python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        update-environment: false
+
+    - name: Create isolated venv and install TrueQuery engine
+      id: venv
+      shell: bash
+      env:
+        TQ_SETUP_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+      run: |
+        VENV_DIR="${RUNNER_TEMP}/truequery-venv"
+        "${TQ_SETUP_PYTHON}" -m venv "${VENV_DIR}"
+        if [ -x "${VENV_DIR}/bin/python" ]; then
+          VENV_PYTHON="${VENV_DIR}/bin/python"
+        else
+          VENV_PYTHON="${VENV_DIR}/Scripts/python.exe"
+        fi
+        "${VENV_PYTHON}" -m pip install --quiet "${GITHUB_ACTION_PATH}/plugin/engine"
+        echo "venv_dir=${VENV_DIR}" >> "${GITHUB_OUTPUT}"
+        echo "venv_python=${VENV_PYTHON}" >> "${GITHUB_OUTPUT}"
+
+    - name: Run TrueQuery
+      id: run
+      shell: bash
+      env:
+        TQ_VENV_DIR: ${{ steps.venv.outputs.venv_dir }}
+        TQ_VENV_PYTHON: ${{ steps.venv.outputs.venv_python }}
+        TQ_PATH: ${{ inputs.path }}
+        TQ_COMMAND: ${{ inputs.command }}
+        TQ_FAIL_ON: ${{ inputs.fail-on }}
+        TQ_DIALECT: ${{ inputs.dialect }}
+        TQ_MODE: ${{ inputs.mode }}
+        TQ_ALLOW_UNVERIFIED: ${{ inputs.allow-unverified }}
+        TQ_SARIF_FILE: ${{ inputs.sarif-file }}
+        TQ_SUMMARY: ${{ inputs.summary }}
+      run: |
+        set +e
+        "${TQ_VENV_PYTHON}" - <<'PY'
+        import os
+        import shlex
+        import subprocess
+        import sys
+
+        def write_outputs(exit_code: int, sarif_written: str) -> None:
+            gh_out = os.environ.get("GITHUB_OUTPUT")
+            if gh_out:
+                with open(gh_out, "a", encoding="utf-8") as handle:
+                    handle.write(f"exit_code={exit_code}\n")
+                    handle.write(f"sarif_file={sarif_written}\n")
+
+        cmd_name = os.environ.get("TQ_COMMAND", "review").strip() or "review"
+        if cmd_name not in ("review", "detect"):
+            print(f"truequery action: unsupported command: {cmd_name!r} (want 'review' or 'detect')", file=sys.stderr)
+            write_outputs(2, "")
+            sys.exit(2)
+
+        venv_dir = os.environ.get("TQ_VENV_DIR", "").strip()
+        if os.name == "nt":
+            tq_bin = os.path.join(venv_dir, "Scripts", "truequery.exe") if venv_dir else "truequery"
+            raw_paths = os.environ.get("TQ_PATH", ".").strip() or "."
+            paths = [p.strip("\"'") for p in shlex.split(raw_paths, posix=False)] or ["."]
+        else:
+            tq_bin = os.path.join(venv_dir, "bin", "truequery") if venv_dir else "truequery"
+            raw_paths = os.environ.get("TQ_PATH", ".").strip() or "."
+            paths = shlex.split(raw_paths, posix=True) or ["."]
+
+        base_args = [tq_bin, cmd_name]
+        fail_on = os.environ.get("TQ_FAIL_ON", "error").strip()
+        if fail_on:
+            base_args.extend(["--fail-on", fail_on])
+        dialect = os.environ.get("TQ_DIALECT", "").strip()
+        if dialect:
+            base_args.extend(["--dialect", dialect])
+        mode = os.environ.get("TQ_MODE", "").strip()
+        if mode:
+            base_args.extend(["--mode", mode])
+        if os.environ.get("TQ_ALLOW_UNVERIFIED", "false").strip().lower() == "true":
+            base_args.append("--allow-unverified")
+
+        proc = subprocess.run(base_args + paths, capture_output=True, text=True)
+        if proc.stdout:
+            sys.stdout.write(proc.stdout)
+        if proc.stderr:
+            sys.stderr.write(proc.stderr)
+
+        sarif_path = os.environ.get("TQ_SARIF_FILE", "").strip()
+        sarif_written = ""
+        if sarif_path:
+            sarif_proc = subprocess.run(base_args + ["--sarif"] + paths, capture_output=True, text=True)
+            if sarif_proc.stdout and sarif_proc.stdout.strip():
+                parent = os.path.dirname(os.path.abspath(sarif_path))
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                with open(sarif_path, "w", encoding="utf-8") as handle:
+                    handle.write(sarif_proc.stdout)
+                sarif_written = sarif_path
+            else:
+                print(
+                    f"truequery action: SARIF output was empty (exit code {sarif_proc.returncode}); "
+                    f"did not write {sarif_path}",
+                    file=sys.stderr,
+                )
+
+        write_outputs(proc.returncode, sarif_written)
+
+        if os.environ.get("TQ_SUMMARY", "true").strip().lower() == "true":
+            summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary_path:
+                out_text = (proc.stdout or "").strip()
+                err_text = (proc.stderr or "").strip()
+                with open(summary_path, "a", encoding="utf-8") as handle:
+                    handle.write("### TrueQuery\n\n")
+                    if out_text:
+                        handle.write(f"````text\n{out_text}\n````\n")
+                    if err_text:
+                        handle.write(f"\n<details><summary>Diagnostics</summary>\n\n````text\n{err_text}\n````\n</details>\n")
+
+        sys.exit(proc.returncode)
+        PY

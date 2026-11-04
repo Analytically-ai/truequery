@@ -1,0 +1,14 @@
+- id: truequery
+  name: TrueQuery
+  description: Offline, deterministic checks for SQL that silently returns the wrong answer.
+  entry: truequery detect
+  language: python
+  types: [sql]
+  require_serial: true
+- id: truequery-python
+  name: TrueQuery (SQL and Python)
+  description: Offline, deterministic checks for SQL files and Python files with data queries.
+  entry: truequery detect
+  language: python
+  types_or: [sql, python]
+  require_serial: true

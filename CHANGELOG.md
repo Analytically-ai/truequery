@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.5 (2026-11-04)
+
+Run the checker in pre-commit and GitHub Actions.
+
+- **pre-commit hooks.** Add `Analytically-ai/truequery` (`rev: v0.1.5`) to
+  `.pre-commit-config.yaml`: `truequery` checks staged `.sql` files, and
+  `truequery-python` checks `.sql` and `.py` files (for SQL inside Python
+  and Airflow DAGs). Both respect the checker's exit codes (`0` clean, `1`
+  findings at or above `--fail-on`, `3` some files could not be checked;
+  `args: [--allow-unverified]` turns `3` into `0`).
+- **GitHub Action.** `uses: Analytically-ai/truequery@v0.1.5` runs
+  `truequery review` (or `detect`) in an isolated virtual environment,
+  writes the findings and the TrueQuery receipt to `$GITHUB_STEP_SUMMARY`
+  with no extra token permissions, and can write a SARIF 2.1.0 report for
+  GitHub Code Scanning. See [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
+
 ## 0.1.4 (2026-11-03)
 
 The queries inside wrappers and SQL function bodies are checked now.
