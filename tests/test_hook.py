@@ -588,7 +588,7 @@ def test_muse_install_writes_hooks_json(tmp_path, monkeypatch):
     group = next(g for g in data["hooks"]["PostToolUse"]
                  if "hook --harness" in json.dumps(g))
     assert group["matcher"] == ("edit_file|write_file|"
-                                "multi_edit|apply_patch")
+                                "multi_edit|apply_patch|bash")
     assert any("hook --harness" in json.dumps(h)
                for h in data["hooks"]["Stop"])
     assert hook.install(Args(harness="muse")) == 0  # idempotent
@@ -873,3 +873,73 @@ def test_event_without_files_leaves_the_session_alone(tmp_path, monkeypatch):
                                  "session_id": "a"}), args, monkeypatch)
     assert json.loads(out)["decision"] == "block"
     assert "q.sql:1 [sql/unguarded-update-delete]" in out
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("printf 'SELECT 2;' > b.sql", ["b.sql"]),
+    ("cat > q.sql <<'EOF'\nselect 1\nEOF", ["q.sql"]),
+    ("echo x >> logs/run.sql && echo done", ["logs/run.sql"]),
+    ("echo x 1>a.sql 2>err.log", ["a.sql"]),
+    ('echo x > "my dir/q.sql"', ["my dir/q.sql"]),
+    ("psql -f q.sql | tee out.sql", ["out.sql"]),
+    ("psql -f q.sql | tee -a one.sql two.sql", ["one.sql", "two.sql"]),
+    ("ls > /dev/null 2>&1", []),
+    ("echo hi >&2", []),
+    ("cat < in.sql", []),
+    ("echo $X > $OUT", []),
+])
+def test_paths_from_shell(command, expected):
+    assert hook._paths_from_shell(command) == expected
+
+
+def test_shell_paths_resolve_against_workdir():
+    assert hook.extract_paths(
+        {"tool_name": "bash",
+         "tool_input": {"command": "printf 'x' > b.sql", "workdir": "/w"}}
+    ) == [os.path.join("/w", "b.sql")]
+    # Claude Code's Bash (and Codex patches) aren't read as shell writes.
+    assert hook.extract_paths(
+        {"tool_name": "Bash", "tool_input": {"command": "echo x > b.sql"}}
+    ) == []
+
+
+def test_muse_session_key_is_the_users_session(monkeypatch):
+    payload = {"session_id": "reminder-agent"}
+    monkeypatch.delenv("MUSE_SESSION_ID", raising=False)
+    assert hook.session_key("muse", payload) == "reminder-agent"
+    monkeypatch.setenv("MUSE_SESSION_ID", "user-session")
+    assert hook.session_key("muse", payload) == "user-session"
+    assert hook.session_key("claude", payload) == "reminder-agent"
+    assert hook.detect_harness({"tool_name": "Write"}) == "muse"
+
+
+def test_muse_shell_write_is_checked_and_survives_helper_events(
+        tmp_path, monkeypatch, immediate_unguarded):
+    # Modelled on captured Muse 1.4.14 events: the user's session id is
+    # stable; the reminder agent fires its own events under another id.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MUSE_SESSION_ID", "user")
+    (tmp_path / "b.sql").write_text("DELETE FROM t;\n", encoding="utf-8")
+    args = Args()  # harness auto-detected
+    code, out = _run(json.dumps(
+        {"hook_event_name": "PostToolUse", "session_id": "user",
+         "cwd": str(tmp_path), "tool_name": "bash",
+         "tool_input": {"command": "printf 'DELETE FROM t;\\n' > b.sql",
+                        "workdir": str(tmp_path)}}), args, monkeypatch)
+    assert "b.sql" in out and "sql/unguarded-update-delete" in out
+    assert _run(json.dumps(
+        {"hook_event_name": "PostToolUse", "session_id": "reminder",
+         "cwd": str(tmp_path), "tool_name": "submit_reminder_decision",
+         "tool_input": {"decision": "none"}}), args, monkeypatch) == (0, "")
+    # Said once: the next turn's end-of-turn pass doesn't repeat it.
+    code, out = _run(json.dumps(
+        {"hook_event_name": "Stop", "session_id": "user",
+         "cwd": str(tmp_path), "stop_hook_active": False}), args,
+        monkeypatch)
+    body = json.loads(out)
+    assert body["decision"] == "block" and "b.sql:1" in body["reason"]
+    code, out = _run(json.dumps(
+        {"hook_event_name": "Stop", "session_id": "user",
+         "cwd": str(tmp_path), "stop_hook_active": False}), args,
+        monkeypatch)
+    assert (code, out) == (0, "")
