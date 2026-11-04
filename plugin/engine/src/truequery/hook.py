@@ -575,10 +575,13 @@ def _stop_text(root, session, dialect, continued, settings,
     """Stop speaks only for findings that are new (or unattributable) and
     not yet said this session; a clean or already-reported pass is
     silent, so the turn really ends."""
-    # In Claude Code, findings handed back right after an edit were said
-    # once: the end-of-turn pass doesn't repeat them. Codex and Muse rely
-    # on the Stop block, so it still carries every new finding there.
-    said = set(_reported_keys(session)) if harness == "claude" else set()
+    # Where per-edit output reaches the model (Claude Code, and Muse: its
+    # PostToolUse output lands in the turn as context, seen in live runs),
+    # findings said after an edit are said once: the end-of-turn pass
+    # doesn't repeat them. Codex relies on the Stop block, so it still
+    # carries every new finding there.
+    said = (set(_reported_keys(session))
+            if harness in ("claude", "muse") else set())
     results, block = stop_pass(root, session, dialect, continued,
                                settings=settings, config=config)
     if not block:
