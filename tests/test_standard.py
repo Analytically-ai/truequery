@@ -98,3 +98,21 @@ def test_checker_doc_rule_table_matches_registry():
             continue
         status = "on" if rec["enabled"] else "off"
         assert f"`{slug}` | {status} ({rec['tier']})" in readme, slug
+
+
+def test_practice_counts_in_docs_match_the_standard():
+    # "The standard" section and every "<n> sourced practices" in the
+    # README and FAQ say how many records the standard holds.
+    import re
+    root = os.path.join(os.path.dirname(__file__), "..")
+    total = len(schema.load_all())
+    with open(os.path.join(root, "README.md"), encoding="utf-8") as handle:
+        readme = handle.read()
+    section = readme.split("## The standard", 1)[1]
+    assert re.match(r"\s*(\d+) practices", section).group(1) == str(total)
+    for rel in ("README.md", os.path.join("docs", "faq.md")):
+        with open(os.path.join(root, rel), encoding="utf-8") as handle:
+            text = handle.read()
+        counts = re.findall(r"(\d+)\s+sourced\s+practices", text)
+        assert counts, rel
+        assert set(counts) == {str(total)}, (rel, counts)

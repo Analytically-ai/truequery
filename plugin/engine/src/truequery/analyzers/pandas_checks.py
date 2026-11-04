@@ -434,10 +434,11 @@ class _Scope:
             self.merge(call)
         if method == "groupby" and base == FRAME:
             self.groupby(call)
-        if method in ("first", "last") and base == GROUPBY:
+        mixes = base == GROUPBY and not _one_column(func.value)
+        if method in ("first", "last") and mixes:
             if _const(_kw(call, "skipna")) is not False:
                 self.first(call, method)
-        if (method in ("agg", "aggregate") and base == GROUPBY
+        if (method in ("agg", "aggregate") and mixes
                 and len(call.args) == 1 and not call.keywords
                 and _const(call.args[0]) in ("first", "last")):
             self.first(call, _const(call.args[0]))
@@ -454,8 +455,7 @@ class _Scope:
                 TO_SQL, call,
                 "to_sql(if_exists=\"replace\") drops the table and creates a "
                 "new one with types pandas guesses: its keys, constraints, "
-                "indexes, column types and grants are lost without an error "
-                f"({TO_SQL})",
+                "indexes, column types and grants are lost without an error",
                 "empty the table (DELETE or TRUNCATE) and write with "
                 "if_exists=\"append\", so the table's definition stays")
 
@@ -468,7 +468,7 @@ class _Scope:
             MERGE, call,
             "merge/join with no validate=: a duplicate key on either side "
             "multiplies rows and inflates every total after it, with no "
-            f"error ({MERGE})",
+            "error",
             "state the expected cardinality: validate=\"many_to_one\" (or "
             "\"one_to_one\", \"one_to_many\"); pandas then raises on a "
             "duplicate key")
@@ -479,7 +479,7 @@ class _Scope:
         self.report(
             DROPNA, call,
             "groupby with no dropna=: rows whose key is NaN/None are "
-            f"dropped from every group by default ({DROPNA})",
+            "dropped from every group by default",
             "pass dropna=False to keep a group for missing keys, or "
             "dropna=True to say the drop is intended")
 
@@ -488,7 +488,7 @@ class _Scope:
             FIRST, call,
             f"groupby(...).{method}() takes the {method} non-null value of "
             "each column separately, so one output row can mix values from "
-            f"different input rows ({FIRST})",
+            "different input rows",
             "to keep whole rows: sort, then .nth(0) / .nth(-1) (or "
             "drop_duplicates(subset=keys)); or pass skipna=False")
 
@@ -505,7 +505,7 @@ class _Scope:
             DEDUPE, call,
             f"drop_duplicates keeps a row picked by sort_values on line "
             f"{line}: one key, default (unstable) sort, so rows that tie on "
-            f"the key come out in any order ({DEDUPE})",
+            "the key come out in any order",
             "sort by the key plus a unique tiebreaker column, or pass "
             "kind=\"stable\" if the input order is the intended tiebreaker")
 
@@ -549,7 +549,7 @@ class _Scope:
             self.report(
                 CHAINED, stmt,
                 "chained assignment: the write lands on a temporary copy, "
-                f"so the DataFrame never changes ({CHAINED})",
+                "so the DataFrame never changes",
                 "assign in one step on the DataFrame itself: "
                 "df.loc[rows, \"col\"] = value")
 
@@ -563,7 +563,7 @@ class _Scope:
                 CHAINED, stmt,
                 f"{call.func.attr}(inplace=True) on a column or rows taken "
                 "from a DataFrame changes a temporary copy, so the "
-                f"DataFrame never changes ({CHAINED})",
+                "DataFrame never changes",
                 "assign the result back: df[\"col\"] = "
                 f"df[\"col\"].{call.func.attr}(...)")
 
@@ -628,7 +628,7 @@ class _Scope:
                 ROW_LOOP, node,
                 "write to the row of an iterrows() loop: the row is a copy, "
                 "so the change never reaches the DataFrame and is thrown "
-                f"away ({ROW_LOOP})",
+                "away",
                 "compute the column without the loop (df[\"c\"] = ...), or "
                 "write through df.loc[index, \"c\"] = value")
 
@@ -641,6 +641,14 @@ def _position(node):
         if func.end_lineno is not None and func.end_col_offset is not None:
             return func.end_lineno, func.end_col_offset - len(func.attr) + 1
     return node.lineno, node.col_offset + 1
+
+
+def _one_column(node):
+    """`g[["v"]]`: a groupby narrowed to one column, which can't mix
+    values from different rows (like `g["v"]`)."""
+    return (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.List)
+            and len(node.slice.elts) == 1
+            and not isinstance(node.slice.elts[0], ast.Starred))
 
 
 def _is_row_selector(index):

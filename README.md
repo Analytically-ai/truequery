@@ -60,8 +60,8 @@ confirm otherwise, and records the decision.
 **3. It checks the SQL with plain code as it's written.** The time-zone trap
 was caught by the definitions. The checker catches a different kind of
 mistake: SQL that runs without errors and still returns the wrong answer. It
-looks for 32 kinds of mistake like it (in SQL, and in pandas code), offline and with no AI involved, while the agent
-works:
+looks for 32 kinds of it (25 in SQL, 7 in pandas code), offline and with no
+AI involved, while the agent works:
 
 ```sql
 -- Customers who never ordered
@@ -354,7 +354,7 @@ top through `/truequery init`, `DATA.md` and per-table contracts.
 **Why not just put these rules in CLAUDE.md or AGENTS.md?**
 Instructions are a good start, but nothing checks that the agent followed
 them, and an agent reviewing its own work is blind in the same places as its
-first draft. TrueQuery gives the agent a full procedure and 220 sourced
+first draft. TrueQuery gives the agent a full procedure and 225 sourced
 practices, then backs them with a deterministic checker and a receipt that
 says what wasn't verified. Your team's definitions go in `DATA.md`.
 

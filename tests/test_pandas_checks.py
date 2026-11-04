@@ -49,6 +49,26 @@ def test_groupby_first():
     assert pc.FIRST not in rules("x = df.groupby('k')['c'].first()\n")[1]
     assert pc.FIRST not in rules(
         "x = df.groupby('k').first(skipna=False)\n")[1]
+    # one column in a list can't mix rows either; two can
+    assert pc.FIRST not in rules("x = df.groupby('k')[['v']].first()\n")[1]
+    assert pc.FIRST not in rules(
+        "x = df.groupby('k')[['v']].agg('last')\n")[1]
+    assert pc.FIRST in rules("x = df.groupby('k')[['v', 'w']].first()\n")[1]
+
+
+def test_why_never_repeats_the_rule_id():
+    # the CLI and the hooks print the rule already
+    code = ("df[df.a > 1]['b'] = 0\n"
+            "df['b'].fillna(0, inplace=True)\n"
+            "for i, row in df.iterrows():\n    row['t'] = 1\n"
+            "x = df.groupby('k').first()\n"
+            "y = df.sort_values('ts').drop_duplicates('id')\n"
+            "z = df.merge(df, on='id')\n"
+            "df.to_sql('t', con, if_exists='replace')\n")
+    _, found = pc.check(HEAD + code, pc.RULES)
+    assert {f[0] for f in found} == set(pc.RULES)
+    for rule, _, _, why, fix in found:
+        assert rule not in why and rule not in fix, why
 
 
 def test_dedupe_unstable_sort():
