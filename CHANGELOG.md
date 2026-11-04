@@ -42,6 +42,18 @@ The queries inside wrappers and SQL function bodies are checked now.
 - Running `truequery` with no command now suggests `truequery detect`,
   not `tq detect`. Help and messages that said `tq install`, `tq rules`
   and `tq init` say `truequery` too.
+- **Muse Code is supported,** with the same plugin as Claude Code:
+  `muse plugins marketplace add analytically https://github.com/Analytically-ai/truequery`,
+  `muse plugins install truequery@analytically`, `muse plugins approve
+  truequery`. Verified in live Muse sessions: findings reach the agent
+  after each edit, and the end-of-turn check continues the turn when it
+  finds something new.
+  - SQL the agent writes from Muse's shell (`> q.sql`, `>> q.sql`,
+    `| tee q.sql`) is checked like an edit.
+  - Muse's helper agents (its reminder agent) no longer reset what the
+    session has touched, and each finding is said once per session.
+  - Events that touch no SQL file are skipped before any session state is
+    read or written, in every agent.
 
 ## 0.1.3 (2026-11-01)
 
