@@ -36,9 +36,12 @@ No contract  customers, orders, staging_orders
 
 - **Offline and deterministic.** No LLM in the check path and no network
   calls. Your code never leaves your machine.
-- **Never a false "clean".** A file it couldn't parse, or a query it could
-  read only as an opaque command, is listed as not checked, and the exit
-  code says so.
+- **Never a false "clean".** A file it couldn't parse, a statement it
+  could read only as an opaque command, or a function body in procedural
+  code (PL/pgSQL, `BEGIN … END`) is listed as not checked, and the exit
+  code says so. The query inside `EXPLAIN`, `PREPARE`, `DECLARE … CURSOR`
+  and `CREATE … AS`, and the statements in a SQL function body, are
+  checked.
 - **Checks the SQL inside Python too.** SQL strings passed to `execute`,
   `read_sql`, `text()`, `.sql()` or `sql=` (including f-strings,
   `.format()`, `%` and a query held in a same-file variable) get the same

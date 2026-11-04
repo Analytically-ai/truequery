@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.1.4 (2026-11-03)
+
+The queries inside wrappers and SQL function bodies are checked now.
+
+- **Queries inside wrappers are checked.** 0.1.3 listed `EXPLAIN …`,
+  `PREPARE … AS …`, `DECLARE … CURSOR FOR …` and `CREATE TABLE`/
+  `[MATERIALIZED] VIEW … AS …` as not checked when the SQL parser could
+  read them only as an opaque command. Now the query inside is found,
+  parsed and checked, with findings at their own line and column
+  (`EXPLAIN (ANALYZE, COSTS OFF)` and other option lists included). A
+  file that held only those now says checked, and may report findings
+  (exit 1). A wrapper whose query isn't found, or doesn't parse, stays
+  not checked, as before.
+- **SQL function and procedure bodies are checked.** The statements in a
+  `LANGUAGE sql` body (`$$…$$`, `$tag$…$tag$`, or a single-quoted body
+  with `''` escapes; Snowflake SQL functions too) get every check, and a
+  finding points at its line and column in the file. Before 0.1.4, a SQL
+  function whose body was one statement was counted as checked and clean
+  without anything looking inside it; a body of several statements didn't
+  parse at all. BigQuery function bodies were already part of the parse
+  and are still checked.
+- **Some files say "not checked (procedural code)".** TrueQuery doesn't
+  look inside procedural code yet: PL/pgSQL functions and `DO` blocks,
+  Snowflake Scripting and T-SQL `BEGIN … END` blocks. A file with one is
+  listed as not checked, with that reason (exit 3 with `detect`, unless
+  `--allow-unverified`), never as clean. Most such files already said
+  "not checked (could not parse)", because the parser cut the body at its
+  first `;`; now the reason is the true one. The statements inside a
+  procedural body that parse on their own as SQL are still checked, and
+  their findings still report. In Python files the SQL is listed as SQL
+  that doesn't parse; that never causes exit 3.
+- Bodies in another language (`LANGUAGE python`, `javascript`, `c`, …)
+  hold no SQL; they are treated as before.
+- Statements are split correctly around dollar-quoted strings: a `;`
+  inside `$$…$$` no longer ends the statement.
+- The receipt names the reason: `1 file with procedural code (PL/pgSQL,
+  BEGIN … END), not looked inside yet: f.sql`. JSON adds
+  `receipt.not_checked.procedural_files` and `unparsed_files` (the files
+  of `unverified_files`, by reason); nothing was removed or renamed.
+- Running `truequery` with no command now suggests `truequery detect`,
+  not `tq detect`. Help and messages that said `tq install`, `tq rules`
+  and `tq init` say `truequery` too.
+
 ## 0.1.3 (2026-11-01)
 
 No false "clean" on statements the parser can only read as a command, and
