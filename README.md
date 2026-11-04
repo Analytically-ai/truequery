@@ -18,8 +18,8 @@ numbers are right. TrueQuery holds the agent to your team's definitions,
 checks its work with plain code, and tells you exactly what it checked and
 what it didn't.
 
-One tool for every coding agent: **Claude Code** today, **Gemini CLI**,
-**Codex** and **Muse Code** next, then **Cursor** and **GitHub Copilot**.
+One tool for every coding agent: **Claude Code** and **Muse Code** today,
+**Gemini CLI** and **Codex** next, then **Cursor** and **GitHub Copilot**.
 The checker runs anywhere: any terminal, any CI, any agent.
 [Install for your agent →](#install)
 
@@ -120,7 +120,8 @@ Ask in your own words; TrueQuery picks up the task. A few examples:
 ## Commands
 
 Run them in your agent (in Claude Code they're `/truequery` slash
-commands), or just describe the task. Every command follows one procedure:
+commands; in Muse Code, load the skill with `/skill truequery`), or just
+describe the task. Every command follows one procedure:
 read the repo and your definitions first, ask only what it can't find out
 (at most 5 questions, each with a suggested default), write the contract
 before the code, check the result, end with a receipt, and remember the
@@ -230,11 +231,14 @@ agent:
 
 | Agent | What you get | Status |
 |---|---|---|
-| **Claude Code** | The full skill, all commands, checks on every edit and at the end of each turn | Ready |
-| **Codex**, **Muse Code** | Checks as the agent works, being verified live; the full skill next | Early access |
+| **Claude Code**, **Muse Code** | The full skill, all commands, checks on every edit and at the end of each turn | Ready |
+| **Codex** | Checks as the agent works, being verified live; the full skill next | Early access |
 | **Gemini CLI** | The full skill and checks | Coming next |
 | **Cursor**, **GitHub Copilot** | The full skill and checks | Planned |
 | **Any agent, terminal or CI** | The checker on its own: text, JSON or SARIF | Ready |
+
+Claude Code and Muse Code install the same plugin, with the same skill and
+checks.
 
 ### Claude Code
 
@@ -253,17 +257,33 @@ Enable auto-update, or run `claude plugin update truequery@analytically`
 and then `/reload-plugins`. `/truequery init` explains this, and for a
 shared repo offers to turn on auto-update for the whole team.
 
-### Codex and Muse Code (early access)
+### Muse Code
 
 ```bash
-pip install truequery                  # or: uv tool install truequery
-truequery install --harness codex      # or: --harness muse
+muse plugins marketplace add analytically https://github.com/Analytically-ai/truequery
+muse plugins install truequery@analytically
+muse plugins approve truequery
+```
+
+The last line approves the plugin's checks, once (Muse asks again only when
+they change). Then ask for data work in your own words, or load the skill
+with `/skill truequery`. The checks also cover SQL the agent writes from the
+shell (`cat > q.sql`, `… | tee q.sql`). If the skill can't find `truequery`
+on your PATH, install it with `pip install truequery`.
+
+**Stay up to date:** `muse plugins marketplace update analytically`, then
+`muse plugins update truequery`.
+
+### Codex (early access)
+
+```bash
+pip install truequery          # or: uv tool install truequery
+truequery install --harness codex
 ```
 
 This sets up the checks as the agent works (being verified live). Approve
-them once: in Codex with `/hooks`, in Muse Code by trusting the workspace.
-The full skill (the procedure, the commands and `init`) is coming to both
-next.
+them once in Codex with `/hooks`. The full skill (the procedure, the
+commands and `init`) is coming next.
 
 ### Any agent, terminal or CI
 
@@ -334,8 +354,8 @@ More answers (SQLFluff, dialects, false alarms): [FAQ](docs/faq.md).
 
 ## Roadmap
 
-- **Next:** the full skill in Gemini CLI, Codex and Muse Code, then Cursor
-  and GitHub Copilot; a GitHub Action and a pre-commit hook; checks for
+- **Next:** the full skill in Gemini CLI and Codex, then Cursor and GitHub
+  Copilot; a GitHub Action and a pre-commit hook; checks for
   pandas pipelines.
 - **Later:** read-only checks against your data (local files first, then
   warehouses), so the receipt can say "checked against the data"; the rest

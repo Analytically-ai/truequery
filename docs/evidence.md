@@ -105,8 +105,9 @@ right.
 
 ## Not checked yet
 
-- **Other agents.** Hook configs for Codex and Muse Code are included but not
-  yet verified live ([#9](https://github.com/Analytically-ai/truequery/issues/9)).
+- **Codex.** Its hook config is included but not yet verified in a live
+  Codex session ([#9](https://github.com/Analytically-ai/truequery/issues/9)).
+  Claude Code and Muse Code are verified live.
 - **Windows in a live session.** CI runs the plugin's scripts on Windows, but
   nobody has run TrueQuery in Claude Code on a real Windows machine yet
   ([#12](https://github.com/Analytically-ai/truequery/issues/12)).
