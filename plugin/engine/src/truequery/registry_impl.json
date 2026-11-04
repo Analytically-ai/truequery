@@ -19,6 +19,41 @@
   "implemented": true,
   "tier": "stop"
  },
+ "py/pandas-dedupe-unstable-sort": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "py/pandas-groupby-dropna": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "py/pandas-groupby-first-mixes-rows": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "py/pandas-merge-validate": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "py/pandas-no-chained-assignment": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "immediate"
+ },
+ "py/pandas-no-row-loop-mutations": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "py/pandas-to-sql-replace": {
+  "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
  "sql/accidental-cross-join": {
   "enabled": true,
   "implemented": true,

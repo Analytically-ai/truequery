@@ -73,8 +73,8 @@ right.
   cal-itp), Mattermost's PostgreSQL migrations, MediaWiki, the PostgreSQL
   regression suite, SQLMesh's examples and the Spider text-to-SQL dev set. We
   labelled every finding by hand. Checks that misfired were fixed or switched
-  off by default, which is why 15 of the 25 checks are on by default and the
-  other 10 wait until they prove precise.
+  off by default, which is why 20 of the 32 checks are on by default and the
+  other 12 wait until they prove precise.
 - **SQL inside Python.** We ran the checker over 12 public Python projects
   that run SQL from code: Apache Superset, PostHog, Zulip, Redash, Datasette,
   Frappe, Feast, Mage, beets, Databricks Labs' UCX, Apache Airflow's
@@ -85,10 +85,25 @@ right.
   are fixed. The findings were fragile patterns in working code, mostly
   `INSERT`s without a column list and deliberate whole-table deletes, not
   bugs in shipped code.
-- **Tests.** About 620 automated tests run on Linux, macOS and Windows
-  with Python 3.11 to 3.14, including the plugin's own scripts end to end. 22
+- **pandas.** We ran the 7 pandas checks over 13 public projects with real
+  pandas pipelines: PUDL, Google's COVID-19 Open Data, Our World in Data's
+  COVID-19 scripts and ETL steps, PyPSA-Eur, freqtrade, Qlib, yfinance,
+  Dagster's Hooli demo, Data Commons import scripts, nfl_data_py, Apache
+  Superset and Mage. They read 1,088 Python files that import pandas. We
+  labelled all 572 findings by hand: 2 real bugs (a fill that lands on a
+  copy, and a merge that repeats every row once per date), 518 hazards and
+  52 false alarms. 45 of the false alarms are `merge` without
+  `validate=` where the other side is unique by construction, and that
+  check is off by default; so is `groupby` without `dropna=`, which fired
+  327 times, almost always on keys that can't be seen to be missing. The 5
+  checks on by default found 25, with 1 false alarm. A write to the row of
+  an `iterrows()` loop never appeared in this corpus, so that check is not
+  yet measured on real code. Re-running the SQL-in-Python projects moved
+  none of their SQL findings and added 10 pandas findings, all hazards.
+- **Tests.** About 670 automated tests run on Linux, macOS and Windows
+  with Python 3.11 to 3.14, including the plugin's own scripts end to end. 29
   practices in the standard carry an executable proof that runs on every
-  change. Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF,
+  change (22 on DuckDB, 7 in pandas). Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF,
   DISTKEY and SORTKEY, DELETE USING) has its own tests, contributed from
   outside the team. SQLite syntax (INSERT OR REPLACE, strftime,
   AUTOINCREMENT) has its own tests too.
@@ -120,6 +135,10 @@ right.
   block, or a Snowflake Scripting or T-SQL `BEGIN … END` block isn't
   checked: the file is listed as not checked, with the reason. The
   statements inside it that parse on their own as SQL are still checked.
+- **pandas beyond one file.** The pandas checks follow DataFrames a file
+  builds or annotates itself. A DataFrame passed in without a
+  `pd.DataFrame` annotation, or built in another module, isn't followed,
+  and what a column means (money, units, time zones) needs contracts.
 - **SQL built at run time in Python.** SQL strings written in a `.py` file
   are checked; SQL the program assembles while it runs (in a loop, returned
   by a function, imported from another module) isn't in the file to read.

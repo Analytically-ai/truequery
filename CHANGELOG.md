@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.1.6 (2026-11-04)
+
+pandas pipelines are checked too.
+
+- **pandas checks.** A `.py` file that imports pandas is read with
+  Python's own parser (pandas is never imported, the code never runs) for
+  pandas code that runs without an error and gives the wrong data. On by
+  default:
+  - `py/pandas-no-chained-assignment` (error, on every edit): a write
+    through a chain (`df[mask]["col"] = v`, `df["col"][mask] = v`,
+    `df.query(...)["col"] = v`) or an in-place method on a column
+    (`df["col"].fillna(0, inplace=True)`). Under pandas 3 it never
+    reaches the DataFrame;
+  - `py/pandas-no-row-loop-mutations` (error): a write to the row of an
+    `iterrows()` loop that is then thrown away;
+  - `py/pandas-groupby-first-mixes-rows` (warning): `groupby(...).first()`
+    / `.last()`, which can build one row from values of different rows;
+  - `py/pandas-dedupe-unstable-sort` (warning): `sort_values` on one
+    column, the default unstable sort, deciding which row
+    `drop_duplicates` keeps (the pandas twin of
+    `sql/row-number-dedupe-tiebreaker`);
+  - `py/pandas-to-sql-replace` (warning): `to_sql(if_exists="replace")`,
+    which drops the table's keys, constraints and column types.
+
+  Off by default, because they fire on most code and depend on data the
+  checker can't see: `py/pandas-merge-validate` (`merge`/`join` with no
+  `validate=`) and `py/pandas-groupby-dropna` (`groupby` with no
+  `dropna=`). Turn them on with `truequery rules set`.
+- **What counts as a DataFrame.** A name the file builds from pandas
+  (`pd.read_*`, `pd.DataFrame(...)`, `pd.concat`, `pd.merge`, a method of
+  another known DataFrame) or annotates as `pd.DataFrame`. Anything else
+  isn't reported on.
+- **Receipt and JSON.** A file the pandas checks read is counted as
+  checked, with its own receipt entry (`Checked … · pandas in 4 Python
+  files`) and a `Not checked` line for what they can't follow. JSON adds
+  `pandas_files` (and `pandas_files` / `evidence.pandas` in the receipt);
+  nothing is renamed and `schema_version` stays 1. A `.py` file that
+  imports pandas is now listed among `files` even with no SQL in it.
+- **Hooks, ignores and settings.** An edit to a `.py` file that imports
+  pandas is checked like a SQL edit; the end-of-turn pass includes it.
+  `truequery ignore add` and `truequery rules set` work for the new rules
+  as for the SQL rules; an ignore follows its statement when lines above
+  it move.
+- **Proofs in pandas.** Each pandas rule has a proof (bad code, wrong
+  result; fixed code, right result) that the tests run with pandas 3.1.0
+  and numpy 2.4.6. pandas is a test dependency only, never a runtime one.
+- **Measured first.** Over 13 public pandas pipeline projects (1,088 files,
+  572 findings labelled by hand), the 5 checks on by default found 25,
+  with 1 false alarm. Re-running the SQL-in-Python corpus moved none of
+  its SQL findings. Numbers in [Evidence and limits](docs/evidence.md).
+- **The standard** has 225 practices (5 new pandas records;
+  `py/pandas-no-row-loop-mutations` is now about lost writes, not speed).
+
 ## 0.1.5 (2026-11-04)
 
 Run the checker in pre-commit and GitHub Actions.

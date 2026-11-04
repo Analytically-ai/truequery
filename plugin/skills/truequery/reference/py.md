@@ -262,6 +262,35 @@ rows = cur.fetchall()
 - severity: build=warning, change=warning
 - sources: Python models | SQLMesh docs
 
+## py/pandas-dedupe-unstable-sort
+
+*Dedupe after a sort with a unique tiebreaker or a stable sort*
+
+A sort_values that decides which row drop_duplicates keeps (keep="first" or "last") sorts by the deciding column plus a unique tiebreaker, or uses kind="stable" when the input order is the intended tiebreaker.
+
+Why: sort_values on one column uses quicksort by default, which is not stable: rows that tie on the sort key come out in an arbitrary order. The row that drop_duplicates then keeps for a key is arbitrary among the ties, and c…
+
+```sql
+-- bad
+latest = df.sort_values("ts").drop_duplicates("id", keep="last")
+```
+```sql
+-- good
+latest = df.sort_values(["ts", "capture_id"]).drop_duplicates("id", keep="last")
+```
+
+- checked by truequery: yes
+- enforcement: detector
+- modes: build,change,assure
+- severity: assure=warning, build=warning, change=warning
+- sources: pandas.DataFrame.sort_values | pandas docs; pandas.DataFrame.drop_duplicates | pandas docs
+- proof bad: `kept = df.sort_values("ts").drop_duplicates("id", keep="last")
+result = kept.sort_values("id")["capture"].tolist()
+` → [9, 1, 5]
+- proof good: `kept = df.sort_values(["ts", "capture"]).drop_duplicates("id", keep="last")
+result = kept.sort_values("id")["capture"].tolist()
+` → [9, 13, 17]
+
 ## py/pandas-filter-before-collect
 
 *Push filters and projections to the engine before collecting to pandas*
@@ -287,52 +316,180 @@ df = context.fetchdf(
 - severity: build=warning, change=warning
 - sources: Python models | SQLMesh docs
 
-## py/pandas-no-chained-assignment
+## py/pandas-groupby-dropna
 
-*Mutate DataFrames with .loc/.iloc single-step assignment, never chains*
+*Say what happens to missing group keys with dropna=*
 
-Pipeline code that mutates a pandas DataFrame must do so with a single .loc/.iloc assignment (or an explicit .copy() first); chained subscript-then-assign (df[a][b] = v, df.query(...)[col] = v) is forbidden.
+Every groupby in pipeline code passes dropna= explicitly: dropna=False to keep a group for rows whose key is missing, or dropna=True to state that dropping them is intended.
 
-Why: Chained assignment may write to a temporary copy instead of the frame, silently dropping the mutation: a cleaning step that looks applied in code review never lands, and downstream models train or report on dirty data wi…
+Why: groupby drops rows whose key is NaN or None by default. Their values vanish from every group, so totals by group no longer add up to the overall total, with no warning. The SQL equivalent keeps a NULL group, so a pipelin…
 
 ```sql
 -- bad
-df[df.region == "EU"]["vat"] = 0.2  # may write to a temp copy
+by_region = df.groupby("region")["amt"].sum()
 ```
 ```sql
 -- good
-df.loc[df.region == "EU", "vat"] = 0.2
+by_region = df.groupby("region", dropna=False)["amt"].sum()
 ```
 
 - checked by truequery: no (taught, not checked)
 - enforcement: detector
-- modes: build,change
-- severity: build=error, change=error
-- sources: Copy-on-Write (CoW) | pandas docs
+- modes: build,change,assure
+- severity: assure=warning, build=warning, change=warning
+- sources: pandas.DataFrame.groupby | pandas docs
+- proof bad: `result = df.groupby("region")["amt"].sum().reset_index()
+` → [('EU', 10), ('US', 20)]
+- proof good: `result = df.groupby("region", dropna=False)["amt"].sum().reset_index()
+` → [('EU', 10), ('US', 20), (None, 5)]
 
-## py/pandas-no-row-loop-mutations
+## py/pandas-groupby-first-mixes-rows
 
-*Vectorize DataFrame transforms instead of looping rows in Python*
+*Pick whole rows per group, not groupby().first() / .last()*
 
-Row-wise Python loops over DataFrames (for + iterrows/itertuples/index access, df.apply with row-wise Python logic where a vectorized op exists) must be replaced with vectorized pandas/NumPy operations in pipeline and model code paths that scale with data volume.
+Code that keeps one row per group keeps a whole input row (sort, then .nth(0) / .nth(-1), or drop_duplicates on the keys). groupby(...).first() and .last() are used only where mixing columns from different rows is intended, or with skipna=False.
 
-Why: Row loops are orders of magnitude slower than vectorized ops: a feature job that finishes in minutes on a sample blows past its task timeout and memory budget on full data, turning every backfill into a runaway run that …
+Why: GroupBy.first() and .last() take the first (last) non-null value of each column separately. When a group's first row has a null in some column, that column is filled from a later row, so one output row can combine values…
 
 ```sql
 -- bad
-for idx, row in df.iterrows():
-    df.at[idx, "total"] = row["qty"] * row["price"]
+latest = df.groupby("customer_id").first()
+```
+```sql
+-- good
+latest = df.groupby("customer_id").nth(0)
+```
+
+- checked by truequery: yes
+- enforcement: detector
+- modes: build,change
+- severity: build=warning, change=warning
+- sources: pandas.core.groupby.DataFrameGroupBy.first | pandas docs; pandas.core.groupby.DataFrameGroupBy.nth | pandas docs
+- proof bad: `result = df.groupby("id").first().reset_index()
+` → [(1, 'b@x', '111')]
+- proof good: `result = df.groupby("id").nth(0)
+` → [(1, None, '111')]
+
+## py/pandas-merge-validate
+
+*State the expected cardinality of every merge with validate=*
+
+Every pandas merge or join in pipeline code states the cardinality it expects with validate= ("one_to_one", "one_to_many", "many_to_one"), so a duplicate key raises instead of multiplying rows.
+
+Why: A merge on a key that is duplicated on one side returns one row per matching pair. A lookup table that gains a duplicate key silently doubles the matching fact rows, and every sum after it is inflated. validate= turns th…
+
+```sql
+-- bad
+enriched = orders.merge(customers, on="customer_id")
+```
+```sql
+-- good
+enriched = orders.merge(customers, on="customer_id", validate="many_to_one")
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: detector
+- modes: build,change,assure
+- severity: assure=warning, build=warning, change=warning
+- sources: pandas.DataFrame.merge | pandas docs
+- proof bad: `result = orders.merge(customers, on="cid")["amt"].sum()
+` → 50
+- proof good: `lookup = customers.drop_duplicates("cid")
+result = orders.merge(lookup, on="cid", validate="many_to_one")["amt"].sum()
+` → 40
+
+## py/pandas-no-chained-assignment
+
+*Change a DataFrame in one step on the DataFrame itself, never through a chain*
+
+Pipeline code that changes a pandas DataFrame does so in one step on the DataFrame itself: df.loc[rows, "col"] = v, or an explicit .copy() that is then used. A write through an intermediate selection (df[mask]["col"] = v, df["col"][mask] = v, df.query(...)["col"] = v, df.col[mask] = v) or an in-place method on one (df["col"].fillna(0, inplace=True)) is forbidden.
+
+Why: The intermediate selection is a temporary object. Writing to it changes the temporary, not the DataFrame: with Copy-on-Write (the default since pandas 3.0) such a write never reaches the DataFrame, and before that it dep…
+
+```sql
+-- bad
+df[df.region == "EU"]["vat"] = 0.2  # writes to a temporary copy
+df["vat"].fillna(0, inplace=True)   # same: df never changes
+```
+```sql
+-- good
+df.loc[df.region == "EU", "vat"] = 0.2
+df["vat"] = df["vat"].fillna(0)
+```
+
+- checked by truequery: yes
+- enforcement: detector
+- modes: build,change
+- severity: build=error, change=error
+- sources: Copy-on-Write (CoW) | pandas docs; Indexing and selecting data: returning a view versus a copy | pandas docs
+- proof bad: `df[df.region == "EU"]["vat"] = 0.2
+result = df
+` → [('EU', 0.0), ('US', 0.0)]
+- proof good: `df.loc[df.region == "EU", "vat"] = 0.2
+result = df
+` → [('EU', 0.2), ('US', 0.0)]
+
+## py/pandas-no-row-loop-mutations
+
+*Never write to the row of an iterrows() loop*
+
+Code that changes a DataFrame inside a `for i, row in df.iterrows()` loop writes through the DataFrame (df.loc[i, "col"] = v), or computes the column without a loop. Assigning to the loop's row (row["col"] = v, row.col = v) is forbidden unless the row itself is then used (collected, returned, passed on).
+
+Why: iterrows() yields each row as a new Series built for the loop. With Copy-on-Write (the default since pandas 3.0) it is always a copy: writing to it changes that copy, which is thrown away at the next iteration. Before pa…
+
+```sql
+-- bad
+for i, row in df.iterrows():
+    row["total"] = row["qty"] * row["price"]  # changes a copy
 ```
 ```sql
 -- good
 df["total"] = df["qty"] * df["price"]
 ```
 
-- checked by truequery: no (taught, not checked)
+- checked by truequery: yes
+- enforcement: detector
+- modes: build,change
+- severity: build=error, change=error
+- sources: pandas.DataFrame.iterrows | pandas docs
+- proof bad: `for i, row in df.iterrows():
+    row["total"] = row["qty"] * row["price"]
+result = df
+` → [(1, 10, 0), (2, 20, 0)]
+- proof good: `df["total"] = df["qty"] * df["price"]
+result = df
+` → [(1, 10, 10), (2, 20, 40)]
+
+## py/pandas-to-sql-replace
+
+*Load into an existing table without to_sql(if_exists="replace")*
+
+Pipeline code that reloads a table empties it (DELETE or TRUNCATE) and writes with to_sql(if_exists="append"), or creates the table itself; to_sql(if_exists="replace") is not used on a table whose definition matters.
+
+Why: if_exists="replace" drops the table and creates a new one from the DataFrame's dtypes. The primary key, NOT NULL and other constraints, indexes, declared column types (NUMERIC(10,2) becomes a float, a date may become tex…
+
+```sql
+-- bad
+df.to_sql("sales", con, if_exists="replace", index=False)
+```
+```sql
+-- good
+con.execute("DELETE FROM sales")
+df.to_sql("sales", con, if_exists="append", index=False)
+```
+
+- checked by truequery: yes
 - enforcement: detector
 - modes: build,change
 - severity: build=warning, change=warning
-- sources: Enhancing performance | pandas docs
+- sources: pandas.DataFrame.to_sql | pandas docs
+- proof bad: `df.to_sql("sales", con, if_exists="replace", index=False)
+result = con.execute("PRAGMA table_info(sales)").fetchall()
+` → [(0, 'id', 'INTEGER', 0, None, 0), (1, 'amt', 'REAL', 0, None, 0)]
+- proof good: `con.execute("DELETE FROM sales")
+df.to_sql("sales", con, if_exists="append", index=False)
+result = con.execute("PRAGMA table_info(sales)").fetchall()
+` → [(0, 'id', 'INTEGER', 0, None, 1), (1, 'amt', 'NUMERIC(10,2)', 1, None, 0)]
 
 ## py/pin-pipeline-dependencies
 

@@ -9,17 +9,17 @@ Add TrueQuery to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.5
+    rev: v0.1.6
     hooks:
       - id: truequery
 ```
 
-`truequery` runs `truequery detect` on staged `.sql` files. To check both `.sql` and `.py` files (for SQL inside Python files, such as Airflow DAGs and scripts), use `truequery-python`:
+`truequery` runs `truequery detect` on staged `.sql` files. To check both `.sql` and `.py` files (for SQL inside Python files, such as Airflow DAGs and scripts, and for pandas code), use `truequery-python`:
 
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.5
+    rev: v0.1.6
     hooks:
       - id: truequery-python
 ```
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Analytically-ai/truequery@v0.1.5
+      - uses: Analytically-ai/truequery@v0.1.6
         with:
           path: .
 ```
@@ -68,7 +68,7 @@ jobs:
 ### Uploading SARIF to GitHub Code Scanning
 
 ```yaml
-      - uses: Analytically-ai/truequery@v0.1.5
+      - uses: Analytically-ai/truequery@v0.1.6
         id: truequery
         continue-on-error: true
         with:

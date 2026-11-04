@@ -1,10 +1,16 @@
-"""All 22 research proofs run green in DuckDB (folded in from run_proofs.py).
+"""Every research proof runs green: SQL proofs in DuckDB (folded in from
+run_proofs.py), pandas proofs in pandas.
 
-Each proof asserts the bad query returns the recorded wrong answer and
-the fixed query returns the recorded right answer. setup_alt variants
+Each proof asserts the bad code returns the recorded wrong answer and
+the fixed code returns the recorded right answer. setup_alt variants
 run where present.
+
+pandas proofs were checked against pandas 3.1.0 and numpy 2.4.6, the
+versions pinned in the engine's `test` extra.
 """
 import ast
+import math
+import warnings
 
 import duckdb
 import pytest
@@ -49,7 +55,64 @@ def run_case(record_id, proof, setup, expect_bad, expect_good):
 
 def all_proofs():
     records = schema.load_all()
-    return {slug: r.proof for slug, r in records.items() if r.proof is not None}
+    return {slug: r.proof for slug, r in records.items()
+            if r.proof is not None and r.proof.engine == "duckdb"}
+
+
+def pandas_proofs():
+    records = schema.load_all()
+    return {slug: r.proof for slug, r in records.items()
+            if r.proof is not None and r.proof.engine == "pandas"}
+
+
+def _plain(value):
+    """A pandas/numpy result as plain Python, the shape DuckDB proofs
+    record: a DataFrame is a list of row tuples, a Series a list, NaN
+    and None are None."""
+    import pandas as pd
+    if isinstance(value, pd.DataFrame):
+        return [tuple(_plain(v) for v in row)
+                for row in value.itertuples(index=False, name=None)]
+    if isinstance(value, (pd.Series, pd.Index)):
+        return [_plain(v) for v in value.tolist()]
+    if isinstance(value, (list, tuple)):
+        return type(value)(_plain(v) for v in value)
+    if value is None or value is pd.NA or value is pd.NaT:
+        return None
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        value = value.item()  # numpy scalar
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
+def run_pandas(setup, code):
+    """Run setup then code in a fresh namespace; return `result`."""
+    pytest.importorskip("pandas")
+    import pandas as pd
+    space = {"pd": pd}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # e.g. ChainedAssignmentError
+        exec(setup, space)  # noqa: S102 (our own proof text)
+        exec(code, space)  # noqa: S102
+    return _plain(space["result"])
+
+
+@pytest.mark.parametrize("slug", sorted(pandas_proofs()))
+def test_pandas_proof_bad_and_good(slug):
+    proof = pandas_proofs()[slug]
+    bad = run_pandas(proof.setup, proof.bad)
+    assert bad == norm(proof.bad_result), (
+        f"{slug}: bad code returned {bad!r}, proof says {proof.bad_result!r}")
+    good = run_pandas(proof.setup, proof.good)
+    assert good == norm(proof.good_result), (
+        f"{slug}: good code returned {good!r}, "
+        f"proof says {proof.good_result!r}")
+
+
+def test_pandas_proofs_cover_every_pandas_rule():
+    from truequery.analyzers import pandas_checks
+    assert set(pandas_proofs()) == set(pandas_checks.RULES)
 
 
 @pytest.mark.parametrize("slug", sorted(all_proofs()))

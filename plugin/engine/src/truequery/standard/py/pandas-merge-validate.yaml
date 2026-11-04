@@ -1,0 +1,60 @@
+id: py/pandas-merge-validate
+title: State the expected cardinality of every merge with validate=
+domain: py
+modes: [build, change, assure]
+applies_to: [any]
+statement: >
+  Every pandas merge or join in pipeline code states the cardinality it
+  expects with validate= ("one_to_one", "one_to_many", "many_to_one"), so a
+  duplicate key raises instead of multiplying rows.
+rationale: >
+  A merge on a key that is duplicated on one side returns one row per
+  matching pair. A lookup table that gains a duplicate key silently doubles
+  the matching fact rows, and every sum after it is inflated. validate=
+  turns that into an error at the merge.
+failure_example: >
+  orders.merge(customers, on="customer_id") after a CRM import creates two
+  rows for one customer: that customer's orders appear twice and monthly
+  revenue is overstated by their spend.
+enforcement: detector
+detection_sketch: >
+  Flag pd.merge(...) and merge()/join() called on a known DataFrame with no
+  validate= argument. Not flagged: how="cross" (multiplication is the
+  point), calls with **kwargs (validate may be inside). A hazard rule: it
+  can't see whether the key is unique today.
+severity_suggestion: warning
+examples:
+  bad: |
+    enriched = orders.merge(customers, on="customer_id")
+  good: |
+    enriched = orders.merge(customers, on="customer_id", validate="many_to_one")
+sources:
+  - title: "pandas.DataFrame.merge | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.merge.html
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: validate checks that the merge is of the specified type
+      (one_to_one, one_to_many, many_to_one, many_to_many) and raises
+      MergeError when it is not.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sql/fanout-join-pre-aggregation]
+proof:
+  engine: pandas
+  setup: |
+    orders = pd.DataFrame({"order_id": [1, 2], "cid": [1, 2], "amt": [10, 30]})
+    customers = pd.DataFrame({"cid": [1, 1, 2],
+                              "name": ["Ann", "Ann (imported)", "Bo"]})
+  bad: |
+    result = orders.merge(customers, on="cid")["amt"].sum()
+  bad_result: "50"
+  good: |
+    lookup = customers.drop_duplicates("cid")
+    result = orders.merge(lookup, on="cid", validate="many_to_one")["amt"].sum()
+  good_result: "40"
+  note: >
+    Orders total 40. The duplicate customer row doubles order 1, so the bad
+    merge reports 50. With validate="many_to_one" on the raw customers,
+    pandas raises MergeError instead; the good code removes the duplicate
+    first and validates.

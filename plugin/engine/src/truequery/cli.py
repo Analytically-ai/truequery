@@ -554,10 +554,11 @@ def cmd_ignore_add(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     spans = E.statement_spans(path, text, (config or {}).get("dialect"))
     digest = E.stmt_hash_at(spans, line)
-    # Outside any SQL statement, only an Airflow DAG has findings a line
-    # ignore can cover (the DAG check).
-    if digest is None and not (path.endswith(".py") and
-                               E.project_checks.applies_to_file(path, text)):
+    # Outside any SQL statement, only an Airflow DAG (the DAG check) or
+    # a file that imports pandas has findings a line ignore can cover.
+    if digest is None and not (path.endswith(".py") and (
+            E.project_checks.applies_to_file(path, text)
+            or E.pandas_checks.imports_pandas(text))):
         print(f"truequery: line {line} is not inside a SQL statement",
               file=sys.stderr)
         return EXIT_ERROR
@@ -576,8 +577,8 @@ def cmd_ignore_add(args: argparse.Namespace) -> int:
              "stmt": digest, "offset": E.stmt_offset(spans, line),
              "reason": args.reason.strip()}
     if digest is None:
-        # A Python line outside its SQL (an Airflow DAG finding): that
-        # one line, matched by rule + file + line.
+        # A Python line outside any statement span (an Airflow DAG
+        # finding): that one line, matched by rule + file + line.
         del entry["stmt"], entry["offset"]
     if entry not in entries:
         entries.append(entry)
@@ -607,7 +608,8 @@ def build_parser() -> argparse.ArgumentParser:
         "detect", aliases=["check"],
         help="run enabled checks on files/dirs (zero config)",
         epilog=EXIT_HELP)
-    p_detect.add_argument("paths", nargs="+", help=".sql files or dirs")
+    p_detect.add_argument("paths", nargs="+",
+                          help=".sql and .py files or dirs")
     _add_output(p_detect)
     _add_rule_flags(p_detect)
     p_detect.set_defaults(func=cmd_detect)

@@ -1,41 +1,71 @@
 id: py/pandas-no-chained-assignment
-title: Mutate DataFrames with .loc/.iloc single-step assignment, never chains
+title: Change a DataFrame in one step on the DataFrame itself, never through a chain
 domain: py
 modes: [build, change]
 applies_to: [any]
 statement: >
-  Pipeline code that mutates a pandas DataFrame must do so with a single
-  .loc/.iloc assignment (or an explicit .copy() first); chained
-  subscript-then-assign (df[a][b] = v, df.query(...)[col] = v) is forbidden.
+  Pipeline code that changes a pandas DataFrame does so in one step on the
+  DataFrame itself: df.loc[rows, "col"] = v, or an explicit .copy() that is
+  then used. A write through an intermediate selection (df[mask]["col"] = v,
+  df["col"][mask] = v, df.query(...)["col"] = v, df.col[mask] = v) or an
+  in-place method on one (df["col"].fillna(0, inplace=True)) is forbidden.
 rationale: >
-  Chained assignment may write to a temporary copy instead of the frame,
-  silently dropping the mutation: a cleaning step that looks applied in
-  code review never lands, and downstream models train or report on dirty
-  data with no error anywhere.
+  The intermediate selection is a temporary object. Writing to it changes the
+  temporary, not the DataFrame: with Copy-on-Write (the default since pandas
+  3.0) such a write never reaches the DataFrame, and before that it depended
+  on whether pandas returned a view or a copy. A cleaning step that looks
+  applied in code review never lands, and downstream models train or report
+  on dirty data with no error.
 failure_example: >
   df[df.region == "EU"]["vat"] = 0.2 runs without error but leaves vat
   unchanged; the revenue model ships EU figures missing VAT for a month.
 enforcement: detector
 detection_sketch: >
-  Flag Subscript-of-Subscript assignment targets and assignments whose
-  base is a method call returning a new frame (query, sort_values,
-  boolean-mask-then-subscript). Ruff rule PLW2901 (chained assignment)
-  covers part of this. False positives: intentional writes into an
-  explicitly copied frame (df2 = df[mask].copy(); df2[col] = v) must not flag.
+  Flag an assignment target that subscripts an intermediate selection of a
+  known DataFrame (a subscript, a .loc/.iloc row selection, a column
+  attribute, or a method that returns a new frame such as query or
+  sort_values), and an inplace=True method called on such a selection.
+  A DataFrame is a name the file assigns from pandas or annotates as one.
+  Not flagged: a selection first bound to its own name (df2 = df[mask];
+  df2["c"] = v), which changes df2 as written.
 severity_suggestion: error
 examples:
   bad: |
-    df[df.region == "EU"]["vat"] = 0.2  # may write to a temp copy
+    df[df.region == "EU"]["vat"] = 0.2  # writes to a temporary copy
+    df["vat"].fillna(0, inplace=True)   # same: df never changes
   good: |
     df.loc[df.region == "EU", "vat"] = 0.2
+    df["vat"] = df["vat"].fillna(0)
 sources:
   - title: "Copy-on-Write (CoW) | pandas docs"
     url: https://pandas.pydata.org/docs/user_guide/copy_on_write.html
     publisher: pandas
-    accessed: 2026-10-12
-    supports: Chained indexing mutates unpredictable view/copy targets;
-      Copy-on-Write removes cross-object side effects, so single-step
-      .loc assignment is the reliable mutation form.
+    accessed: 2026-11-03
+    supports: With Copy-on-Write, chained assignment never works, because the
+      intermediate object behaves as a copy; this includes inplace methods
+      called on a column (df["foo"].replace(1, 5, inplace=True)).
+  - title: "Indexing and selecting data: returning a view versus a copy | pandas docs"
+    url: https://pandas.pydata.org/docs/user_guide/indexing.html#returning-a-view-versus-a-copy
+    publisher: pandas
+    accessed: 2026-11-03
+    supports: Setting values through chained indexing is unreliable; use a
+      single .loc assignment.
 confidence: high
 conflicts_with: []
 status: draft
+proof:
+  engine: pandas
+  setup: |
+    df = pd.DataFrame({"region": ["EU", "US"], "vat": [0.0, 0.0]})
+  bad: |
+    df[df.region == "EU"]["vat"] = 0.2
+    result = df
+  bad_result: "[('EU', 0.0), ('US', 0.0)]"
+  good: |
+    df.loc[df.region == "EU", "vat"] = 0.2
+    result = df
+  good_result: "[('EU', 0.2), ('US', 0.0)]"
+  note: >
+    pandas 3 raises a ChainedAssignmentError warning on the bad line, and the
+    DataFrame is unchanged. A warning is not an error: the step runs and the
+    pipeline carries on.

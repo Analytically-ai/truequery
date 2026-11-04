@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "truequery"
-version = "0.1.5"
+version = "0.1.6"
 description = "TrueQuery engine: offline, deterministic checks for SQL that silently returns the wrong answer"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,7 +34,9 @@ Homepage = "https://github.com/Analytically-ai/truequery"
 Issues = "https://github.com/Analytically-ai/truequery/issues"
 
 [project.optional-dependencies]
-test = ["duckdb", "pytest"]
+# pandas and numpy run the pandas proofs in the tests (pinned: the
+# versions the proofs were checked against). Never a runtime dependency.
+test = ["duckdb", "pytest", "pandas==3.1.0", "numpy==2.4.6"]
 
 [project.scripts]
 truequery = "truequery.cli:main"

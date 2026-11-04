@@ -35,7 +35,10 @@ OPTIONAL_KEYS = frozenset({
     "see_also", "contract_required", "proof", "decisions", "note",
 })
 PROOF_KEYS = frozenset({"setup", "bad", "bad_result", "good", "good_result"})
-PROOF_OPTIONAL = frozenset({"setup_alt", "bad_result_alt", "note"})
+PROOF_OPTIONAL = frozenset({"setup_alt", "bad_result_alt", "note", "engine"})
+# What runs a proof: SQL on DuckDB (the default), or Python with pandas
+# (setup, bad and good are Python; each sets `result`).
+PROOF_ENGINES = ("duckdb", "pandas")
 SOURCE_KEYS = frozenset({"title", "url", "publisher", "accessed", "supports"})
 
 STANDARD_DIR = os.path.join(os.path.dirname(__file__), "standard")
@@ -55,6 +58,7 @@ class Proof:
     note: str = ""
     setup_alt: str = ""
     bad_result_alt: str = ""
+    engine: str = "duckdb"
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,10 @@ def _check_proof(raw: dict, record_id: str) -> Proof | None:
     missing = PROOF_KEYS - set(proof)
     if missing:
         raise SchemaError(f"{record_id}: proof missing {sorted(missing)}")
-    return Proof(**{k: proof.get(k, "") for k in (
+    engine = proof.get("engine", "duckdb")
+    if engine not in PROOF_ENGINES:
+        raise SchemaError(f"{record_id}: unknown proof engine {engine!r}")
+    return Proof(engine=engine, **{k: proof.get(k, "") for k in (
         "setup", "bad", "bad_result", "good", "good_result", "note",
         "setup_alt", "bad_result_alt")})
 
