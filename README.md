@@ -60,8 +60,8 @@ confirm otherwise, and records the decision.
 **3. It checks the SQL with plain code as it's written.** The time-zone trap
 was caught by the definitions. The checker catches a different kind of
 mistake: SQL that runs without errors and still returns the wrong answer. It
-looks for 32 kinds of it (25 in SQL, 7 in pandas code), offline and with no
-AI involved, while the agent works:
+looks for 32 kinds of it (21 in SQL, 4 in dbt and orchestration, 7 in pandas
+code), offline and with no AI involved, while the agent works:
 
 ```sql
 -- Customers who never ordered

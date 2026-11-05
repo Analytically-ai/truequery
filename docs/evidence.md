@@ -100,7 +100,7 @@ right.
   an `iterrows()` loop never appeared in this corpus, so that check is not
   yet measured on real code. Re-running the SQL-in-Python projects moved
   none of their SQL findings and added 10 pandas findings, all hazards.
-- **Tests.** About 670 automated tests run on Linux, macOS and Windows
+- **Tests.** About 700 automated tests run on Linux, macOS and Windows
   with Python 3.11 to 3.14, including the plugin's own scripts end to end. 29
   practices in the standard carry an executable proof that runs on every
   change (22 on DuckDB, 7 in pandas). Snowflake and Redshift syntax (QUALIFY, FLATTEN, IFF,

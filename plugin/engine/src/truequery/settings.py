@@ -25,7 +25,7 @@ SEVERITIES = ("error", "warning", "advisory")
 SETTING_KEYS = ("enabled", "tier", "severity")
 SOURCE_LABELS = {"user": "user config", "project": "project config",
                  "cli": "CLI flags", "default": "shipped default"}
-NOTICE = "rule settings changed this session — confirm with the user"
+NOTICE = "[TrueQuery] rule settings changed this session — confirm with the user"
 
 
 def user_config_path(env: dict | None = None) -> str:
