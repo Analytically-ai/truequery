@@ -66,13 +66,17 @@ def _expected_counts():
     implemented = {slug: r for slug, r in std_registry.RECORDS.items()
                    if r["implemented"]}
     pandas = [r for slug, r in implemented.items() if slug.startswith("py/")]
+    sql = [r for slug, r in implemented.items() if slug.startswith("sql/")]
     enabled = sum(r["enabled"] for r in implemented.values())
     return {
         "checks": len(implemented),
         "checks on by default": enabled,
         "checks off by default": len(implemented) - enabled,
         "pandas checks": len(pandas),
-        "SQL checks": len(implemented) - len(pandas),
+        "SQL checks": len(sql),
+        # model/, dq/, ingest/, orch/: everything else.
+        "dbt and orchestration checks":
+            len(implemented) - len(sql) - len(pandas),
         "pandas checks on by default": sum(r["enabled"] for r in pandas),
     }
 
@@ -85,8 +89,12 @@ CLAIMS = (
     {"pattern": NUM + r"\s+of\s+(?:the\s+)?" + NUM + r"\s+checks\s+(?:are\s+)?"
                 r"on\s+by\s+default(?:\s+and\s+the\s+other\s+" + NUM + r")?",
      "facts": ("checks on by default", "checks", "checks off by default")},
-    {"pattern": NUM + r"\s+in\s+SQL,\s+" + NUM + r"\s+in\s+pandas\s+code",
-     "facts": ("SQL checks", "pandas checks")},
+    # Separate lines, so an older form of the split can't dodge the test.
+    {"pattern": NUM + r"\s+in\s+SQL\b", "facts": ("SQL checks",)},
+    {"pattern": NUM + r"\s+in\s+dbt\s+and\s+orchestration\b",
+     "facts": ("dbt and orchestration checks",)},
+    {"pattern": NUM + r"\s+in\s+pandas\s+code\b",
+     "facts": ("pandas checks",)},
     # The pandas bullet of the evidence page: "The 5 checks on by default".
     {"pattern": r"The\s+" + NUM + r"\s+checks\s+on\s+by\s+default\s+found",
      "facts": ("pandas checks on by default",), "only": "docs/evidence.md"},
@@ -160,8 +168,10 @@ def test_check_counts_in_docs_match_the_registry():
     "looks for 99 kinds of it",
     "All 99 checks",
     "Ninety-nine checks ship today",
-    "(99 in SQL, 7 in pandas code)",
-    "(25 in SQL, 99 in pandas code)",
+    "(99 in SQL, 4 in dbt and orchestration, 7 in pandas code)",
+    "(21 in SQL, 99 in dbt and orchestration, 7 in pandas code)",
+    "(21 in SQL, 4 in dbt and orchestration, 99 in pandas\n  code)",
+    "(25 in SQL, 7 in pandas code)",
     "99 of them on by default",
     "99 on by default",
     "the 99 pandas checks",
