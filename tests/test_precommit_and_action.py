@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -54,6 +55,63 @@ def test_doc_snippets_match_current_version():
             assert rev == expected, f"{rel} has rev: {rev}, want {expected}"
         for ref in action_refs:
             assert ref == expected, f"{rel} has @{ref}, want @{expected}"
+
+
+# `rev: v1.2.3`, `rev: "1.2.3"`, and `@v1.2.3` with whatever comes before it.
+PIN_REV = re.compile(r"""\brev:\s*["']?(v?\d[0-9A-Za-z._-]*)""")
+PIN_AT = re.compile(r"([\w./-]*)@(v\d[0-9A-Za-z._-]*)")
+
+
+def _version_pins(text):
+    """(offset, pin) for each pin of ours. A pin on someone else's action
+    (`actions/checkout@v4`) has its own version."""
+    pins = [(m.start(1), m.group(1)) for m in PIN_REV.finditer(text)]
+    for match in PIN_AT.finditer(text):
+        owner = match.group(1)
+        if not owner or owner.lower().split("/")[-1] == "truequery":
+            pins.append((match.start(2), match.group(2)))
+    return pins
+
+
+def _newest_changelog_section():
+    with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as handle:
+        text = handle.read()
+    # Keeps the newlines before it, so line numbers still hold.
+    match = re.search(r"^## .*?(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    assert match, "CHANGELOG.md: no `## ` section found"
+    return "\n" * text.count("\n", 0, match.start()) + match.group(0)
+
+
+def test_version_pins_in_every_user_facing_doc_match_current_version():
+    """Any `rev:` or `@v...` of ours, in the README, every doc and the
+    newest CHANGELOG section, is `v` + __version__."""
+    expected = f"v{__version__}"
+    documents = {"CHANGELOG.md (newest section)": _newest_changelog_section()}
+    paths = glob.glob(os.path.join(ROOT, "docs", "**", "*.md"), recursive=True)
+    paths.append(os.path.join(ROOT, "README.md"))
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            documents[os.path.relpath(path, ROOT)] = handle.read()
+    assert len(documents) > 2
+    stale = [
+        f"{rel}:{text.count(chr(10), 0, offset) + 1}: pins {pin}, "
+        f"expected {expected}"
+        for rel, text in documents.items()
+        for offset, pin in _version_pins(text)
+        if pin != expected
+    ]
+    assert not stale, "\n".join(stale)
+
+
+def test_version_pin_guard_tells_ours_from_someone_elses():
+    pins = [pin for _, pin in _version_pins(
+        "rev: v0.0.1\nrev: \"0.0.2\"\n"
+        "uses: Analytically-ai/truequery@v0.0.3\n"
+        "the @v0.0.4 tag\n"
+        "uses: actions/checkout@v4\n"
+        "uses: someone/truequery-fork@v9\n"
+        "claude plugin install truequery@analytically\n")]
+    assert sorted(pins) == ["0.0.2", "v0.0.1", "v0.0.3", "v0.0.4"]
 
 
 def test_root_pyproject_matches_engine_metadata():

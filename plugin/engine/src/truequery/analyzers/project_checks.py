@@ -1,7 +1,7 @@
 """Preview non-SQL checks (v1, Stop tier, never immediate).
 
-Each check is backed by an existing standard practice (cited in its
-``why``); practices with no detector-shaped record yet (Airflow dynamic
+Each check is backed by an existing standard practice (its rule id);
+practices with no detector-shaped record yet (Airflow dynamic
 ``start_date``, pandas ``merge(validate=)``) are NOT implemented here —
 they are listed as gaps in docs. Deterministic, offline, file/project
 evidence only.
@@ -79,8 +79,7 @@ def check_dbt_model(text, path, mode="build", registry=None,
             "model/unique-key-merge-key", registry, settings, mode, path,
             line,
             "incremental model declares no unique_key; a merge degrades "
-            "to append and duplicates rows on every re-run "
-            "(model/unique-key-merge-key)",
+            "to append and duplicates rows on every re-run",
             "add unique_key='<key>' to the model config and a "
             "unique + not_null test on the key"))
     return out
@@ -143,7 +142,7 @@ def check_schema_yaml(text, path, mode="build", registry=None,
             path, line_of(str(col.get("name"))),
             f"model {name}: key column {col.get('name')} lacks a "
             "unique + not_null test pair, so duplicate or null keys "
-            "pass silently (dq/uniqueness-key-no-duplicates)",
+            "pass silently",
             f"add unique and not_null tests on {col.get('name')}, or a "
             "unique_combination_of_columns test on the model"))
     for source in doc.get("sources") or []:
@@ -165,7 +164,7 @@ def check_schema_yaml(text, path, mode="build", registry=None,
                 mode, path, line_of(str(table.get("name", ""))),
                 f"source table {table.get('name')} tracks loaded_at_field "
                 "but declares no freshness check, so a stalled source is "
-                "invisible (ingest/declare-source-freshness)",
+                "invisible",
                 "add freshness: {warn_after/error_after} to the source"))
     return out
 
@@ -235,8 +234,7 @@ def check_python(text, path, mode="build", registry=None, settings=None):
             "orch/explicit-catchup-policy", registry, settings, mode,
             path, node.lineno,
             "Airflow DAG declares no explicit catchup; the default "
-            "backfills every missed interval on first deploy "
-            "(orch/explicit-catchup-policy)",
+            "backfills every missed interval on first deploy",
             "set catchup=False (or True deliberately) on the DAG"))
     return out
 
