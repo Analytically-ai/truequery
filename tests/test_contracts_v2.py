@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 
+import jsonschema
 import pytest
 
 from truequery import contract_v2 as C2
@@ -54,6 +55,22 @@ def test_v1_contracts_remain_backwards_compatible(tmp_path):
     assert loaded["orders"]["keys"] == ["order_id"]
 
 
+def test_v1_version_true_is_rejected(tmp_path):
+    cdir = tmp_path / "contracts"
+    cdir.mkdir()
+    (cdir / "orders.yaml").write_text(
+        "version: true\n"
+        "table: orders\n"
+        "grain: one row per order\n"
+        "keys: [order_id]\n",
+        encoding="utf-8",
+    )
+    loaded, problems = P.load_contracts_reporting(str(tmp_path))
+    assert loaded == {}
+    assert len(problems) == 1
+    assert "unsupported contract version True" in problems[0]
+
+
 def test_v2_contract_full_valid_and_normalizes_dataset_and_table(tmp_path):
     (tmp_path / "DATA.md").write_text(
         "# DATA.md\n\n```tq-config\n"
@@ -84,7 +101,7 @@ def test_v2_contract_full_valid_and_normalizes_dataset_and_table(tmp_path):
         "  - attempt_id\n"
         "freshness_sla:\n"
         "  column: fetched_at\n"
-        "  max_age: 24h\n"
+        "  max_age: 30min\n"
         "write_mode: append\n"
         "columns:\n"
         "  run_id: {type: string, nullable: false}\n"
@@ -176,15 +193,73 @@ def test_v2_composite_and_single_keys_work_with_keylookup(tmp_path):
         f["rule"] for f in res_bad["findings"]]
 
 
+def test_draft_and_invalid_contracts_never_suppress_findings_and_receipt_names_draft(
+    tmp_path
+):
+    """Review item #2:
+    1. No contract -> 1 error
+    2. status: draft -> 1 error (draft keys never suppress), receipt says `(1 draft)`
+    3. Invalid contract (`bogus: 1`) -> 1 error, receipt lists invalid contract
+    """
+    q_sql = (
+        "SELECT o.region, COUNT(*) FROM customers c\n"
+        "LEFT JOIN orders o ON c.id = o.customer_id GROUP BY 1;\n"
+    )
+    (tmp_path / "q.sql").write_text(q_sql, encoding="utf-8")
+    cdir = tmp_path / "contracts"
+    cdir.mkdir()
+    (cdir / "customers.yaml").write_text(
+        "version: 2\ndataset: customers\ngrain: one row per id\nkeys: [id]\n",
+        encoding="utf-8",
+    )
+
+    # Row 1: No contract for orders -> 1 error
+    keylookup._CACHE.clear()
+    code, out, _ = run_cli("review", "q.sql", cwd=tmp_path)
+    assert code == 1
+    assert "sql/count-star-after-left-join" in out
+    assert "contracts for 1 of 2 tables" in out
+
+    # Row 2: Draft contract for orders claiming customer_id is a key -> still 1 error,
+    # and receipt says `contracts for 2 of 2 tables (1 draft)`
+    (cdir / "orders.yaml").write_text(
+        "version: 2\n"
+        "dataset: orders\n"
+        "status: draft\n"
+        "inferred_from: 10-row sample\n"
+        "grain: TODO\n"
+        "keys: [customer_id]\n",
+        encoding="utf-8",
+    )
+    keylookup._CACHE.clear()
+    code, out, _ = run_cli("review", "q.sql", cwd=tmp_path)
+    assert code == 1
+    assert "sql/count-star-after-left-join" in out
+    assert "contracts for 2 of 2 tables (1 draft)" in out
+
+    # Row 3: Invalid contract (`bogus: 1`) claiming customer_id is a key -> still 1 error,
+    # and receipt lists the invalid contract
+    (cdir / "orders.yaml").write_text(
+        "table: orders\ngrain: one row per customer\nkeys: [customer_id]\nbogus: 1\n",
+        encoding="utf-8",
+    )
+    keylookup._CACHE.clear()
+    code, out, _ = run_cli("review", "q.sql", cwd=tmp_path)
+    assert code == 1
+    assert "sql/count-star-after-left-join" in out
+    assert "invalid contract: contracts/orders.yaml: unknown keys ['bogus']" in out
+
+
 def test_v2_draft_contract_requires_inferred_from_and_allows_todo_means():
     raw_draft = {
         "version": 2,
         "dataset": "events",
         "status": "draft",
         "inferred_from": "2,000-row sample of events.csv",
-        "grain": "one row per event_id",
+        "grain": "TODO",
         "keys": ["event_id"],
         "columns": {
+            "event_id": {"type": "string"},
             "status": {
                 "type": "string",
                 "values": {
@@ -202,56 +277,122 @@ def test_v2_draft_contract_requires_inferred_from_and_allows_todo_means():
     with pytest.raises(ValueError, match="inferred_from is required"):
         C2.validate_contract_v2(bad_draft, "contracts/events.yaml")
 
+    # grain: TODO on confirmed contract fails
+    confirmed_with_todo_grain = dict(raw_draft, status="confirmed")
+    with pytest.raises(ValueError, match="grain 'TODO' is unconfirmed"):
+        C2.validate_contract_v2(
+            confirmed_with_todo_grain, "contracts/events.yaml")
+
     # means: TODO on confirmed contract fails
-    confirmed_with_todo = dict(raw_draft, status="confirmed")
-    with pytest.raises(ValueError, match="only allowed when contract status is 'draft'"):
+    confirmed_with_todo = dict(
+        raw_draft, status="confirmed", grain="one row per event_id")
+    with pytest.raises(
+        ValueError, match="only allowed when contract status is 'draft'"
+    ):
         C2.validate_contract_v2(confirmed_with_todo, "contracts/events.yaml")
 
 
 @pytest.mark.parametrize("bad_patch,match", [
     ({"version": 3}, "version must be 2"),
+    ({"version": True}, "version must be 2"),
     ({"dataset": "a", "table": "b"}, "dataset .* and table .* must match"),
     ({"dataset": ""}, "dataset .* is required"),
+    ({"dataset": "orders; DROP TABLE x"}, "must be a plain table"),
     ({"grain": ""}, "grain must be a non-empty string"),
+    ({"grain": "TODO"}, "grain 'TODO' is unconfirmed"),
+    ({"grain": "unknown  # TODO"}, "is unconfirmed"),
     ({"keys": "id"}, "keys must be a list"),
     ({"keys": [[]]}, "composite key .* must be a non-empty list"),
+    ({"keys": ["a*b"]}, "must be a plain column identifier"),
+    ({"keys": ["run_idd"], "columns": {"run_id": {"type": "string"}}},
+     "keys\\[0\\] \\('run_idd'\\) is not in columns"),
+    ({"partition_key": "bad;col"}, "must be a plain column identifier"),
+    ({"keys": ["a"], "partition_key": "b", "columns": {"a": {"type": "string"}}},
+     "partition_key \\('b'\\) is not in columns"),
     ({"kind": "stream"}, "kind must be one of"),
     ({"kind": "files"}, "location is required"),
     ({"kind": "files", "location": {"path": "../outside.csv", "format": "csv"}},
-     "location.path must be a non-empty relative path without '\\.\\.'"),
+     "location.path must be a non-empty relative path without '\\.\\.' or '~'"),
+    ({"kind": "files", "location": {"path": "~/.ssh/*", "format": "csv"}},
+     "location.path must be a non-empty relative path without '\\.\\.' or '~'"),
     ({"kind": "files", "location": {"path": "/abs/file.csv", "format": "csv"}},
      "location.path must be a non-empty relative path"),
     ({"kind": "files", "location": {"path": "a.csv", "format": "xlsx"}},
      "location.format must be one of"),
+    ({"kind": "table", "location": {"relation": "x) FROM y --"}},
+     "location.relation .* must be a plain table"),
     ({"write_mode": "truncate"}, "write_mode must be one of"),
     ({"freshness_sla": {"column": "ts", "max_age": "24hours"}},
      "freshness_sla.max_age must match"),
-    ({"columns": {"ts": {"type": "timestamp", "time_zone": "EST"}}},
+    ({"freshness_sla": {"column": "ts", "max_age": "10m"}},
+     "freshness_sla.max_age must match"),
+    ({"freshness_sla": {"column": "bad*col", "max_age": "10min"}},
+     "freshness_sla.column .* must be a plain column identifier"),
+    ({"freshness_sla": {"column": "id", "max_age": "12h"},
+      "columns": {"order_id": {"type": "string"}, "id": {"type": "string"}}},
+     "freshness_sla.column 'id' must have type 'timestamp' or 'date'"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "ts": {"type": "timestamp", "time_zone": "EST"}}},
      "time_zone must be 'UTC', 'naive', or 'local:<Area>/<Location>'"),
-    ({"columns": {"amt": {"type": "integer", "unit": "minor"}}},
+    ({"columns": {"order_id": {"type": "string"},
+                  "ts": {"type": "integer", "time_zone": "UTC"}}},
+     "time_zone requires type: timestamp"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "sz": {"type": "string", "unit": "GiB"}}},
+     "unit 'GiB' requires numeric type 'integer' or 'number'"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "amt": {"type": "integer", "unit": "minor"}}},
      "requires currency or currency_column"),
-    ({"columns": {"amt": {"type": "integer", "currency": "USD"}}},
+    ({"columns": {"order_id": {"type": "string"},
+                  "amt": {"type": "integer", "currency": "USD"}}},
      "requires unit 'minor' or 'major'"),
-    ({"columns": {"amt": {"type": "integer", "unit": "minor", "currency": "us"}}},
+    ({"columns": {"order_id": {"type": "string"},
+                  "amt": {"type": "integer", "unit": "minor", "currency": "us"}}},
      "3-letter uppercase ISO-4217"),
-    ({"columns": {"amt": {"type": "integer", "unit": "minor",
+    ({"columns": {"order_id": {"type": "string"},
+                  "amt": {"type": "integer", "unit": "minor",
                           "currency": "USD", "currency_column": "c"}}},
      "cannot set both currency and currency_column"),
-    ({"columns": {"amt": {"type": "integer", "unit": "minor",
+    ({"columns": {"order_id": {"type": "string"},
+                  "amt": {"type": "integer", "unit": "minor",
                           "currency_column": "missing_col"}}},
      "currency_column references unknown column 'missing_col'"),
-    ({"columns": {"sz": {"type": "number", "unit": "GiB", "size_of": "p"},
+    ({"columns": {"order_id": {"type": "string"},
+                  "sz": {"type": "number", "size_of": "p"},
+                  "p": {"type": "path"}}},
+     "size_of requires a size unit"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "sz": {"type": "number", "unit": "ms", "size_of": "p"},
+                  "p": {"type": "path"}}},
+     "size_of requires a size unit"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "sz": {"type": "number", "unit": "GiB", "size_of": "p"},
                   "p": {"type": "string"}}},
      "size_of references 'p', which must be a column with type: path"),
-    ({"columns": {"p": {"type": "path", "status_column": "st"},
+    ({"columns": {"order_id": {"type": "string"},
+                  "p": {"type": "string", "status_column": "st"},
+                  "st": {"type": "string", "values": {"ok": {"means": "present"}}}}},
+     "status_column requires type: path"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "p": {"type": "path", "status_column": "st"},
                   "st": {"type": "string"}}},
      "status_column references 'st', which must be a column with values"),
-    ({"columns": {"p": {"type": "string", "relative_to": "root"}}},
+    ({"columns": {"order_id": {"type": "string"},
+                  "p": {"type": "path", "status_column": "st"},
+                  "st": {"type": "string", "values": ["ok", "fail"]}}},
+     "mapping each status to `means`"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "p": {"type": "path", "status_column": "st"},
+                  "st": {"type": "string", "values": {"ok": {}}}}},
+     "missing `means`"),
+    ({"columns": {"order_id": {"type": "string"},
+                  "p": {"type": "string", "relative_to": "root"}}},
      "relative_to requires type: path"),
-    ({"columns": {"email": {"type": "string", "pii": "hash"}}},
+    ({"columns": {"order_id": {"type": "string"},
+                  "email": {"type": "string", "pii": "hash"}}},
      "pii must be a boolean"),
     ({"freshness_sla": {"column": "missing_ts", "max_age": "12h"},
-      "columns": {"id": {"type": "string"}}},
+      "columns": {"order_id": {"type": "string"}}},
      "freshness_sla.column 'missing_ts' is not in columns"),
 ])
 def test_v2_contract_rejects_invalid_fields(bad_patch, match):
@@ -270,12 +411,16 @@ def test_v2_contract_rejects_invalid_fields(bad_patch, match):
 
 @pytest.mark.parametrize("where_str,expected_cols", [
     ("status = 'fetched'", ["status"]),
+    ("status = 'a--b'", ["status"]),
+    ("status = 'a;b'", ["status"]),
+    ("status = '/*not_a_comment*/'", ["status"]),
     ("status <> 'removed_on_purpose'", ["status"]),
     ("status IN ('fetched', 'released') AND size > 0", ["size", "status"]),
     ("delta >= -1 AND delta <= 10", ["delta"]),
     ("attempts IN (-1, 0, 1, 2)", ["attempts"]),
     ("created_at BETWEEN '2026-01-01' AND '2026-01-31'", ["created_at"]),
-    ("deleted_at IS NULL AND NOT is_test", ["deleted_at", "is_test"]),
+    ("deleted_at IS NULL AND is_test = FALSE", ["deleted_at", "is_test"]),
+    ("is_active IS TRUE AND NOT (is_internal = TRUE)", ["is_active", "is_internal"]),
     ("path LIKE 'logs/%' OR path ILIKE 'archive/%'", ["path"]),
     ("(a = 1 OR b = 2) AND c IS NOT NULL", ["a", "b", "c"]),
 ])
@@ -287,7 +432,7 @@ def test_metric_where_allowlist_accepts_safe_filters(where_str, expected_cols):
 
 
 @pytest.mark.parametrize("bad_where,match", [
-    ("status = 'fetched'; DROP TABLE fetch_log", "must not contain ';'"),
+    ("status = 'fetched'; DROP TABLE fetch_log", "single filter condition"),
     ("read_text('/etc/passwd') IS NOT NULL", "disallowed expression"),
     ("COALESCE(status, 'x') = 'fetched'", "disallowed expression"),
     ("LOWER(status) = 'fetched'", "disallowed expression"),
@@ -300,6 +445,12 @@ def test_metric_where_allowlist_accepts_safe_filters(where_str, expected_cols):
     ("'logs/%' LIKE path", "LIKE left side must be a column"),
     ("1 = 1", "must reference a column"),
     ("status = 'fetched' OR 1 = 1", "must reference a column"),
+    ("TRUE OR status = 'x'", "boolean literal"),
+    ("status = 'x' OR TRUE", "boolean literal"),
+    ("TRUE = status", "boolean literal"),
+    ("a IN ('x') OR a", "bare column"),
+    ("NOT is_test", "bare column"),
+    ("status", "bare column"),
     ("status + 1 > 2", "disallowed expression"),
     ("status = 'fetched' -- comment", "must not contain SQL comments"),
     ("status = 'fetched' /* comment */", "must not contain SQL comments"),
@@ -353,7 +504,7 @@ def test_metric_v1_valid_ratio_and_simple():
         "measure": {
             "agg": "sum",
             "column": "amount_cents",
-            "where": "status = 'paid' AND NOT is_internal",
+            "where": "status = 'paid' AND is_internal = FALSE",
         },
         "grain": ["order_date"],
         "unit": "minor",
@@ -382,6 +533,15 @@ def test_metric_v1_valid_ratio_and_simple():
       "measure": {"agg": "sum", "column": "*"}},
      "column '\\*' is only valid when agg is 'count'"),
     ({"metric": "m", "kind": "simple", "dataset": "d",
+      "measure": {"agg": "sum", "column": "x) FROM read_text('/etc/passwd') --"}},
+     "must be a plain column identifier"),
+    ({"metric": "m", "kind": "simple", "dataset": "d",
+      "measure": {"agg": "sum", "column": "price*qty"}},
+     "must be a plain column identifier"),
+    ({"metric": "m", "kind": "simple", "dataset": "d; DROP TABLE x",
+      "measure": {"agg": "count", "column": "*"}},
+     "dataset .* must be a plain table"),
+    ({"metric": "m", "kind": "simple", "dataset": "d",
       "measure": {"agg": "median", "column": "x"}},
      "agg must be one of"),
 ])
@@ -390,7 +550,40 @@ def test_metric_v1_rejects_invalid_definitions(bad_metric, match):
         C2.validate_metric(bad_metric, "metrics/bad.yaml")
 
 
-# -- 3. Cross-file validation & `truequery contract validate` CLI -------------
+# -- 3. Cross-file validation, duplicates & `truequery contract validate` -----
+
+def test_duplicate_contracts_and_metrics_are_rejected(tmp_path):
+    cdir = tmp_path / "contracts"
+    cdir.mkdir()
+    mdir = tmp_path / "metrics"
+    mdir.mkdir()
+    (cdir / "orders_a.yaml").write_text(
+        "version: 2\ndataset: orders\ngrain: one row per id\nkeys: [id]\n",
+        encoding="utf-8",
+    )
+    (cdir / "orders_b.yaml").write_text(
+        "version: 2\ndataset: orders\ngrain: one row per id\nkeys: [id]\n",
+        encoding="utf-8",
+    )
+    (cdir / "items.yaml").write_text(
+        "version: 2\ndataset: items\ngrain: one row per id\nkeys: [id]\n",
+        encoding="utf-8",
+    )
+    (mdir / "rev_1.yaml").write_text(
+        "version: 1\nmetric: rev\nkind: simple\ndataset: items\n"
+        "measure: {agg: count, column: '*'}\n",
+        encoding="utf-8",
+    )
+    (mdir / "rev_2.yaml").write_text(
+        "version: 1\nmetric: rev\nkind: simple\ndataset: items\n"
+        "measure: {agg: count, column: '*'}\n",
+        encoding="utf-8",
+    )
+    code, out, _ = run_cli("contract", "validate", cwd=tmp_path)
+    assert code == 1
+    assert "contracts/orders_b.yaml: [error] contract: duplicate contract for dataset 'orders' (already defined in contracts/orders_a.yaml)" in out
+    assert "metrics/rev_2.yaml: [error] metric: duplicate metric 'rev' (already defined in metrics/rev_1.yaml)" in out
+
 
 def test_cross_file_validation_and_cli_contract_validate(tmp_path):
     (tmp_path / "DATA.md").write_text(
@@ -453,6 +646,7 @@ def test_cross_file_validation_and_cli_contract_validate(tmp_path):
         "grain: one row per id\n"
         "keys: [id]\n"
         "columns:\n"
+        "  id: {type: string}\n"
         "  p: {type: path, relative_to: missing_base}\n",
         encoding="utf-8",
     )
@@ -472,6 +666,17 @@ def test_cross_file_validation_and_cli_contract_validate(tmp_path):
     assert "metrics/bad_metric.yaml: [error] metric:" in out
     assert "unknown column(s) ['no_such_col']" in out
     assert "2 errors in 2 contracts and 2 metrics checked" in out
+
+    # Review JSON receipt separates invalid_contracts and invalid_metrics
+    (tmp_path / "q.sql").write_text(
+        "SELECT run_id FROM fetch_log;\n", encoding="utf-8")
+    code, rout, _ = run_cli("review", "q.sql", "--json", cwd=tmp_path)
+    assert code == 0
+    r_nc = json.loads(rout)["receipt"]["not_checked"]
+    assert len(r_nc["invalid_contracts"]) == 1
+    assert r_nc["invalid_contracts"][0].startswith("contracts/bad_base.yaml:")
+    assert len(r_nc["invalid_metrics"]) == 1
+    assert r_nc["invalid_metrics"][0].startswith("metrics/bad_metric.yaml:")
 
     # SARIF output on errors
     code, sout, _ = run_cli("contract", "validate", "--sarif", cwd=tmp_path)
@@ -506,26 +711,34 @@ def test_context_renders_v2_facts_draft_directive_and_metrics(tmp_path):
         "inferred_from: 100-row sample of fetch.csv\n"
         "kind: files\n"
         "location: {path: 'fetch.csv', base: data_root, format: csv}\n"
+        "freshness_sla: {column: fetched_at, max_age: 24h}\n"
         "grain: one row per (run_id, url)\n"
         "keys: [[run_id, url]]\n"
         "columns:\n"
-        "  size: {type: number, unit: GiB}\n"
+        "  run_id: {type: string, nullable: false}\n"
+        "  url: {type: string, nullable: false}\n"
+        "  path: {type: path, relative_to: data_root, status_column: status}\n"
+        "  size: {type: number, unit: GiB, size_of: path}\n"
         "  fetched_at: {type: timestamp, time_zone: UTC}\n"
         "  status:\n"
         "    type: string\n"
+        "    nullable: false\n"
         "    values:\n"
         "      fetched: {means: present}\n"
-        "      removed_on_purpose: {means: absent_expected}\n",
+        "      removed_on_purpose: {means: absent_expected}\n"
+        "  email: {type: string, pii: true}\n",
         encoding="utf-8",
     )
     (mdir / "collection_rate.yaml").write_text(
         "version: 1\n"
         "metric: collection_rate\n"
+        "meaning: share of items collected\n"
         "kind: ratio\n"
         "dataset: fetch_log\n"
         "numerator: {agg: count, column: '*', where: \"status = 'fetched'\"}\n"
         "denominator: {agg: count, column: '*', "
         "where: \"status <> 'removed_on_purpose'\"}\n"
+        "grain: per run_id\n"
         "unit: ratio\n",
         encoding="utf-8",
     )
@@ -536,147 +749,117 @@ def test_context_renders_v2_facts_draft_directive_and_metrics(tmp_path):
 
     code, out, err = run_cli("context", "--target", "q.sql", cwd=tmp_path)
     assert code == 0, err
-    assert "contract fetch_log: grain=one row per (run_id, url) keys=(run_id,url) kind=files status=draft" in out
-    assert "columns fetch_log: size(number, unit=GiB); fetched_at(timestamp, tz=UTC); status(string, values=[fetched:present,removed_on_purpose:absent_expected])" in out
-    assert "metric collection_rate: kind=ratio dataset=fetch_log unit=ratio" in out
+    assert (
+        "contract fetch_log: grain=one row per (run_id, url) "
+        "keys=(run_id,url) kind=files status=draft "
+        "location=(fetch.csv, format=csv, base=data_root) "
+        "freshness_sla=fetched_at<=24h"
+    ) in out
+    assert "path(path, base=data_root, status_column=status)" in out
+    assert "size(number, unit=GiB, size_of=path)" in out
+    assert "status(string, nullable=false, values=[fetched:present,removed_on_purpose:absent_expected])" in out
+    assert "email(string, pii=true)" in out
+    assert (
+        "metric collection_rate: kind=ratio dataset=fetch_log "
+        "meaning='share of items collected' "
+        "numerator=count(*) where status = 'fetched' "
+        "denominator=count(*) where status <> 'removed_on_purpose' "
+        "grain=per run_id unit=ratio"
+    ) in out
     assert "CONTRACT_DRAFT: fetch_log (100-row sample of fetch.csv)" in out
 
-    code, jout, _ = run_cli("context", "--target", "q.sql", "--json", cwd=tmp_path)
-    assert code == 0
-    doc = json.loads(jout)
-    assert "fetch_log" in doc["contracts"]
-    assert "collection_rate" in doc["metrics"]
-    assert any(d.startswith("CONTRACT_DRAFT: fetch_log")
-               for d in doc["directives"])
+
+# -- 4. Real JSON Schema (Draft 2020-12) parity test --------------------------
+
+# Cross-field/cross-column/AST rules that JSON Schema Draft 2020-12 cannot
+# express because they require comparing two dynamic property values/keys or
+# parsing SQL into an AST:
+NON_JSON_SCHEMA_CONTRACT_CASES = {
+    "dataset_table_mismatch": (
+        {"version": 2, "dataset": "a", "table": "b", "grain": "one row",
+         "keys": ["id"]},
+        "dataset .* and table .* must match",
+    ),
+    "key_not_in_columns": (
+        {"version": 2, "dataset": "orders", "grain": "one row",
+         "keys": ["run_idd"], "columns": {"run_id": {"type": "string"}}},
+        "keys\\[0\\] \\('run_idd'\\) is not in columns",
+    ),
+    "partition_key_not_in_columns": (
+        {"version": 2, "dataset": "orders", "grain": "one row",
+         "keys": ["a"], "partition_key": "b",
+         "columns": {"a": {"type": "string"}}},
+        "partition_key \\('b'\\) is not in columns",
+    ),
+    "freshness_col_not_timestamp_or_date": (
+        {"version": 2, "dataset": "orders", "grain": "one row",
+         "keys": ["id"], "freshness_sla": {"column": "id", "max_age": "12h"},
+         "columns": {"id": {"type": "string"}}},
+        "freshness_sla.column 'id' must have type 'timestamp' or 'date'",
+    ),
+    "currency_column_missing_target": (
+        {"version": 2, "dataset": "orders", "grain": "one row",
+         "keys": ["id"],
+         "columns": {"id": {"type": "string"},
+                     "amt": {"type": "integer", "unit": "minor",
+                             "currency_column": "missing_col"}}},
+        "currency_column references unknown column",
+    ),
+    "size_of_target_not_path": (
+        {"version": 2, "dataset": "orders", "grain": "one row",
+         "keys": ["id"],
+         "columns": {"id": {"type": "string"},
+                     "sz": {"type": "number", "unit": "GiB", "size_of": "p"},
+                     "p": {"type": "string"}}},
+        "size_of references 'p', which must be a column with type: path",
+    ),
+    "status_column_target_without_means": (
+        {"version": 2, "dataset": "orders", "grain": "one row",
+         "keys": ["id"],
+         "columns": {"id": {"type": "string"},
+                     "p": {"type": "path", "status_column": "st"},
+                     "st": {"type": "string", "values": ["ok", "fail"]}}},
+        "mapping each status to `means`",
+    ),
+}
+
+NON_JSON_SCHEMA_METRIC_CASES = {
+    "where_sql_ast_function": (
+        {"version": 1, "metric": "m", "kind": "simple", "dataset": "d",
+         "measure": {"agg": "count", "column": "*",
+                     "where": "read_text('/etc/passwd') IS NOT NULL"}},
+        "disallowed expression",
+    ),
+    "where_sql_ast_tautology": (
+        {"version": 1, "metric": "m", "kind": "simple", "dataset": "d",
+         "measure": {"agg": "count", "column": "*",
+                     "where": "TRUE OR status = 'x'"}},
+        "boolean literal",
+    ),
+}
 
 
-# -- 4. JSON Schema parity test -----------------------------------------------
-
-def _mini_jsonschema_validate(instance, schema, root_schema=None):
-    """Deterministic subset validator for Draft 2020-12 JSON Schemas used in
-    contract-v2.schema.json and metric-v1.schema.json, so parity tests run
-    offline without requiring third-party jsonschema packages."""
-    import re as _re
-    if root_schema is None:
-        root_schema = schema
-    if "$ref" in schema:
-        ref = schema["$ref"]
-        assert ref.startswith("#/$defs/"), f"unsupported ref {ref}"
-        def_name = ref.split("/")[-1]
-        return _mini_jsonschema_validate(
-            instance, root_schema["$defs"][def_name], root_schema)
-
-    if "const" in schema:
-        if instance != schema["const"]:
-            return False
-
-    if "enum" in schema:
-        if instance not in schema["enum"]:
-            return False
-
-    if "type" in schema:
-        t = schema["type"]
-        types = t if isinstance(t, list) else [t]
-        matched_type = False
-        for expected in types:
-            if expected == "null" and instance is None:
-                matched_type = True
-            elif expected == "boolean" and isinstance(instance, bool):
-                matched_type = True
-            elif (expected == "integer"
-                  and isinstance(instance, int)
-                  and not isinstance(instance, bool)):
-                matched_type = True
-            elif (expected == "number"
-                  and isinstance(instance, (int, float))
-                  and not isinstance(instance, bool)):
-                matched_type = True
-            elif expected == "string" and isinstance(instance, str):
-                matched_type = True
-            elif expected == "array" and isinstance(instance, list):
-                matched_type = True
-            elif expected == "object" and isinstance(instance, dict):
-                matched_type = True
-        if not matched_type:
-            return False
-
-    if isinstance(instance, str):
-        if "minLength" in schema and len(instance) < schema["minLength"]:
-            return False
-        if "pattern" in schema and not _re.search(schema["pattern"], instance):
-            return False
-
-    if isinstance(instance, list):
-        if "minItems" in schema and len(instance) < schema["minItems"]:
-            return False
-        if "items" in schema:
-            for item in instance:
-                if not _mini_jsonschema_validate(
-                        item, schema["items"], root_schema):
-                    return False
-
-    if isinstance(instance, dict):
-        if "minProperties" in schema and len(instance) < schema["minProperties"]:
-            return False
-        for req in schema.get("required", []):
-            if req not in instance:
-                return False
-        props = schema.get("properties", {})
-        addl = schema.get("additionalProperties", True)
-        for k, v in instance.items():
-            if k in props:
-                if not _mini_jsonschema_validate(v, props[k], root_schema):
-                    return False
-            else:
-                if addl is False:
-                    return False
-                if isinstance(addl, dict):
-                    if not _mini_jsonschema_validate(v, addl, root_schema):
-                        return False
-
-    if "anyOf" in schema:
-        if not any(_mini_jsonschema_validate(instance, sub, root_schema)
-                   for sub in schema["anyOf"]):
-            return False
-
-    if "oneOf" in schema:
-        if sum(1 for sub in schema["oneOf"]
-               if _mini_jsonschema_validate(instance, sub, root_schema)) != 1:
-            return False
-
-    if "not" in schema:
-        if _mini_jsonschema_validate(instance, schema["not"], root_schema):
-            return False
-
-    if "if" in schema:
-        if _mini_jsonschema_validate(instance, schema["if"], root_schema):
-            if not _mini_jsonschema_validate(
-                    instance, schema["then"], root_schema):
-                return False
-
-    if "allOf" in schema:
-        for sub in schema["allOf"]:
-            if not _mini_jsonschema_validate(instance, sub, root_schema):
-                return False
-
-    return True
-
-
-def test_published_json_schemas_exist_and_match_contract_v2_and_metric_v1():
+def test_published_json_schemas_with_real_jsonschema_validator():
     contract_schema_path = os.path.join(SCHEMAS_DIR, "contract-v2.schema.json")
     metric_schema_path = os.path.join(SCHEMAS_DIR, "metric-v1.schema.json")
-    assert os.path.isfile(contract_schema_path)
-    assert os.path.isfile(metric_schema_path)
-
     with open(contract_schema_path, encoding="utf-8") as handle:
         c_schema = json.load(handle)
     with open(metric_schema_path, encoding="utf-8") as handle:
         m_schema = json.load(handle)
 
-    assert c_schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert m_schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    jsonschema.Draft202012Validator.check_schema(c_schema)
+    jsonschema.Draft202012Validator.check_schema(m_schema)
+    c_validator = jsonschema.Draft202012Validator(c_schema)
+    m_validator = jsonschema.Draft202012Validator(m_schema)
 
-    # Parity on unit vocabulary
+    assert c_schema["$id"] == (
+        "https://raw.githubusercontent.com/Analytically-ai/truequery/main/"
+        "plugin/engine/src/truequery/schemas/contract-v2.schema.json"
+    )
+    assert m_schema["$id"] == (
+        "https://raw.githubusercontent.com/Analytically-ai/truequery/main/"
+        "plugin/engine/src/truequery/schemas/metric-v1.schema.json"
+    )
     assert tuple(c_schema["$defs"]["unitEnum"]["enum"]) == C2.ALL_UNITS
 
     valid_contracts = [
@@ -688,6 +871,8 @@ def test_published_json_schemas_exist_and_match_contract_v2_and_metric_v1():
             "grain": "one row per (run_id, url)",
             "keys": [["run_id", "url"]],
             "columns": {
+                "run_id": {"type": "string"},
+                "url": {"type": "string"},
                 "path": {"type": "path", "relative_to": "root",
                          "status_column": "status"},
                 "size": {"type": "number", "unit": "GiB", "size_of": "path"},
@@ -706,8 +891,9 @@ def test_published_json_schemas_exist_and_match_contract_v2_and_metric_v1():
             "table": "orders",
             "grain": "one row per order_id",
             "keys": ["order_id"],
-            "freshness_sla": {"column": "created_at", "max_age": "24h"},
+            "freshness_sla": {"column": "created_at", "max_age": "30min"},
             "columns": {
+                "order_id": {"type": "string"},
                 "created_at": {"type": "timestamp",
                                "time_zone": "local:America/New_York"},
                 "amount_cents": {"type": "integer", "unit": "minor",
@@ -717,44 +903,85 @@ def test_published_json_schemas_exist_and_match_contract_v2_and_metric_v1():
         },
     ]
     for doc in valid_contracts:
-        assert _mini_jsonschema_validate(doc, c_schema), doc
+        c_validator.validate(doc)
         C2.validate_contract_v2(doc, "test.yaml")
 
-    invalid_schema_contracts = [
+    schema_rejected_contracts = [
         {"version": 1, "dataset": "x", "grain": "g", "keys": ["id"]},
+        {"version": True, "dataset": "x", "grain": "g", "keys": ["id"]},
         {"version": 2, "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "x; DROP TABLE y", "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "grain": "   ", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "grain": "TODO", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "grain": "unknown  # TODO", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["   "]},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["a*b"]},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "partition_key": "bad;col"},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
          "extra_unknown": 1},
-        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
-         "columns": {"c": {"type": "unknown_type"}}},
-        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
-         "columns": {"c": {"time_zone": "PST"}}},
-        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
-         "columns": {"c": {"pii": "mask"}}},
         {"version": 2, "dataset": "x", "status": "draft", "grain": "g",
          "keys": ["id"]},
         {"version": 2, "dataset": "x", "status": "confirmed", "grain": "g",
          "keys": ["id"],
-         "columns": {"s": {"values": {"ok": {"means": "TODO"}}}}},
+         "columns": {"id": {"type": "string"},
+                     "s": {"values": {"ok": {"means": "TODO"}}}}},
         {"version": 2, "dataset": "x", "kind": "files", "grain": "g",
          "keys": ["id"]},
+        {"version": 2, "dataset": "x", "kind": "files",
+         "location": {"path": "../outside.csv", "format": "csv"},
+         "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "kind": "files",
+         "location": {"path": "/abs/outside.csv", "format": "csv"},
+         "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "kind": "files",
+         "location": {"path": "~/.ssh/*", "format": "csv"},
+         "grain": "g", "keys": ["id"]},
         {"version": 2, "dataset": "x", "kind": "table",
          "location": {"path": "a.csv", "format": "csv"},
          "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "kind": "table",
+         "location": {"relation": "x) FROM y --"},
+         "grain": "g", "keys": ["id"]},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
-         "columns": {"amt": {"type": "integer", "unit": "minor"}}},
+         "freshness_sla": {"column": "ts", "max_age": "10m"}},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
-         "columns": {"amt": {"type": "integer", "currency": "USD"}}},
+         "columns": {"id": {"type": "unknown_type"}}},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
-         "columns": {"amt": {"type": "integer", "unit": "minor",
-                             "currency": "USD", "currency_column": "c"}}},
+         "columns": {"id": {"type": "timestamp", "time_zone": "PST"}}},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
-         "columns": {"p": {"relative_to": "root"}}},
+         "columns": {"id": {"type": "integer", "time_zone": "UTC"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "string", "unit": "GiB"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "number", "size_of": "p"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "number", "unit": "ms", "size_of": "p"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "string", "status_column": "st"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"pii": "mask"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "integer", "unit": "minor"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "integer", "currency": "USD"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "integer", "unit": "minor",
+                            "currency": "USD", "currency_column": "c"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"relative_to": "root"}}},
     ]
-    for bad in invalid_schema_contracts:
-        assert not _mini_jsonschema_validate(bad, c_schema), bad
+    for bad in schema_rejected_contracts:
+        assert not c_validator.is_valid(bad), f"expected schema to reject: {bad}"
         with pytest.raises(ValueError):
             C2.validate_contract_v2(bad, "test.yaml")
+
+    # Verify the exact set of cross-field/cross-column contract rules that
+    # JSON Schema cannot express (passes JSON Schema, caught by contract_v2.py):
+    for name, (doc, match) in NON_JSON_SCHEMA_CONTRACT_CASES.items():
+        assert c_validator.is_valid(doc), name
+        with pytest.raises(ValueError, match=match):
+            C2.validate_contract_v2(doc, "test.yaml")
 
     valid_metrics = [
         {
@@ -777,10 +1004,10 @@ def test_published_json_schemas_exist_and_match_contract_v2_and_metric_v1():
         },
     ]
     for mdoc in valid_metrics:
-        assert _mini_jsonschema_validate(mdoc, m_schema), mdoc
+        m_validator.validate(mdoc)
         C2.validate_metric(mdoc, "metric.yaml")
 
-    invalid_schema_metrics = [
+    schema_rejected_metrics = [
         {"metric": "m", "kind": "derived", "dataset": "d"},
         {"metric": "m", "kind": "ratio", "dataset": "d",
          "numerator": {"agg": "count", "column": "*"}},
@@ -790,15 +1017,26 @@ def test_published_json_schemas_exist_and_match_contract_v2_and_metric_v1():
          "measure": {"agg": "median", "column": "x"}},
         {"metric": "m", "kind": "simple", "dataset": "d",
          "measure": {"agg": "sum", "column": "*"}},
+        {"metric": "m", "kind": "simple", "dataset": "d",
+         "measure": {"agg": "sum", "column": "x) FROM read_text('/etc/passwd') --"}},
+        {"metric": "m", "kind": "simple", "dataset": "d",
+         "measure": {"agg": "sum", "column": "price*qty"}},
+        {"metric": "m", "kind": "simple", "dataset": "d; DROP TABLE x",
+         "measure": {"agg": "count", "column": "*"}},
         {"metric": "m", "kind": "ratio", "dataset": "d",
          "numerator": {"agg": "count", "column": "*"},
          "denominator": {"agg": "count", "column": "*"},
          "measure": None},
     ]
-    for bad_m in invalid_schema_metrics:
-        assert not _mini_jsonschema_validate(bad_m, m_schema), bad_m
+    for bad_m in schema_rejected_metrics:
+        assert not m_validator.is_valid(bad_m), bad_m
         with pytest.raises(ValueError):
             C2.validate_metric(bad_m, "metric.yaml")
+
+    for name, (mdoc, match) in NON_JSON_SCHEMA_METRIC_CASES.items():
+        assert m_validator.is_valid(mdoc), name
+        with pytest.raises(ValueError, match=match):
+            C2.validate_metric(mdoc, "metric.yaml")
 
 
 def test_cli_edge_cases_project_dir_and_explicit_metric_order(tmp_path):
@@ -857,4 +1095,3 @@ def test_cli_edge_cases_project_dir_and_explicit_metric_order(tmp_path):
     )
     assert code == 0
     assert out.strip() == "clean: 1 contract and 1 metric validated, no errors"
-
