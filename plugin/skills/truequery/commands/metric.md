@@ -17,11 +17,13 @@ and analytics engineers. Follows `flow.md`.
    (`sem/single-governed-metric-definition`,
    `sem/metric-grain-declaration`, `sem/metric-filters-declared-not-hidden`,
    `sem/unit-consistency`, `sem/time-dimension-standardized`).
-3. **Write it** into DATA.md (a `## Metrics` entry: name, meaning,
-   formula, grain, filters, unit, owner) and, if the stack has a
-   semantic layer, into it too (dbt metric / MetricFlow / LookML
-   measure) so the governed definition is the computed one
-   (`sem/derived-metrics-compose-from-governed`).
+3. **Write it** into `metrics/<name>.yaml` (`kind: simple|ratio`,
+   `dataset`, `measure` or `numerator`/`denominator` with `agg`,
+   `column`, `where`, `grain`, `unit`, `owner`), link it from `DATA.md`
+   (under `## Metrics`), and run `truequery contract validate`. If the
+   stack has a semantic layer, write it there too (dbt metric /
+   MetricFlow / LookML measure) so the governed definition is the
+   computed one (`sem/derived-metrics-compose-from-governed`).
 4. Add a smoke test or a `truequery`-checkable assertion where the stack
    allows (e.g. the metric over a known fixture period), per
    `sem/metric-smoke-test-on-change`.

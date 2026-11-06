@@ -403,7 +403,9 @@ def render_receipt(receipt: dict) -> str:
         lines.append(f"{'Not checked':<13}SQL inside "
                      f"{_plural(len(other), 'Python file')}: {_listed(other)}")
     for problem in nc.get("invalid_contracts", []):
-        lines.append(f"{'Not checked':<13}invalid contract: {problem}")
+        label = ("invalid metric" if problem.startswith("metrics/")
+                 else "invalid contract")
+        lines.append(f"{'Not checked':<13}{label}: {problem}")
     lines.append(f"{'Not checked':<13}{DATA_LIMIT}")
     for limit in nc["recall_limits"]:
         lines.append(f"{'Not checked':<13}{limit}")

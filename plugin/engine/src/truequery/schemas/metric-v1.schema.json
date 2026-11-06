@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truequery.ai/schemas/metric-v1.schema.json",
+  "title": "TrueQuery Governed Metric v1",
+  "description": "TrueQuery version 1 governed metric definition schema (metrics/*.yaml).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["metric", "kind", "dataset"],
+  "properties": {
+    "version": {
+      "const": 1,
+      "default": 1
+    },
+    "metric": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique metric identifier."
+    },
+    "meaning": {
+      "type": ["string", "null"],
+      "description": "Plain-English meaning of the metric."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["simple", "ratio"],
+      "description": "Metric structure: 'simple' (uses measure) or 'ratio' (uses numerator and denominator)."
+    },
+    "dataset": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Dataset name matching a contract in contracts/."
+    },
+    "numerator": {
+      "$ref": "#/$defs/measureBlock"
+    },
+    "denominator": {
+      "$ref": "#/$defs/measureBlock"
+    },
+    "measure": {
+      "$ref": "#/$defs/measureBlock"
+    },
+    "grain": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "minLength": 1},
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      ]
+    },
+    "unit": {
+      "type": ["string", "null"],
+      "enum": [
+        "bytes", "KB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB",
+        "ms", "s", "min", "h", "d",
+        "ratio", "percent", "bps",
+        "minor", "major",
+        null
+      ]
+    },
+    "owner": {
+      "type": ["string", "null"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"kind": {"const": "ratio"}},
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["numerator", "denominator"],
+        "not": {"required": ["measure"]}
+      }
+    },
+    {
+      "if": {
+        "properties": {"kind": {"const": "simple"}},
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["measure"],
+        "not": {
+          "anyOf": [
+            {"required": ["numerator"]},
+            {"required": ["denominator"]}
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "measureBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agg", "column"],
+      "properties": {
+        "agg": {
+          "type": "string",
+          "enum": ["count", "count_distinct", "sum", "avg", "min", "max"]
+        },
+        "column": {
+          "type": "string",
+          "minLength": 1
+        },
+        "where": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"agg": {"not": {"const": "count"}}},
+            "required": ["agg"]
+          },
+          "then": {
+            "properties": {"column": {"not": {"const": "*"}}}
+          }
+        }
+      ]
+    }
+  }
+}

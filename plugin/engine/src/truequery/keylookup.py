@@ -56,8 +56,12 @@ def _from_contracts(cdir, index):
         doc = _read_yaml(os.path.join(cdir, name))
         if not isinstance(doc, dict):
             continue
-        table = str(doc.get("table") or os.path.splitext(name)[0]).lower()
-        for key in doc.get("keys") or []:
+        table = str(doc.get("dataset") or doc.get("table")
+                    or os.path.splitext(name)[0]).lower()
+        raw_keys = doc.get("keys")
+        if not isinstance(raw_keys, list):
+            continue
+        for key in raw_keys:
             _add(index, table, key if isinstance(key, list) else [key])
 
 
