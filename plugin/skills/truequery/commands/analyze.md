@@ -4,7 +4,8 @@ When: an Explore-mode question ("why did revenue dip?", "how many
 active users?"). Stack-neutral.
 
 1. Call `truequery context [--target <path>]` first. Note MODE, the contracts
-   in scope, and every CONTRACT_MISSING directive.
+   and `metrics/*.yaml` definitions in scope, `DATA.md`, and every
+   CONTRACT_MISSING directive.
 2. Restate the question, then fix the grain in words: "one row per
    <what>". If the grain is ambiguous, ask before querying.
 3. Write the query against contracted tables where they exist. For

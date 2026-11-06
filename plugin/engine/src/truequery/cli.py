@@ -238,15 +238,15 @@ def cmd_review(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     modes = [r.mode for r in results]
     contracts, invalid_contracts = P.load_contracts_reporting(root)
-    metrics, invalid_metrics = P.load_metrics_reporting(
+    _, invalid_metrics = P.load_metrics_reporting(
         root, contracts=contracts)
-    invalid = list(invalid_contracts) + list(invalid_metrics)
     tables = _review_tables(results, args.dialect)
     receipt = RP.build_receipt(results, modes, contracts, tables,
                                tier_overrides=active_overrides(
                                    P.load_config(root)),
                                rule_settings=eff.settings_line(),
-                               invalid_contracts=invalid)
+                               invalid_contracts=invalid_contracts,
+                               invalid_metrics=invalid_metrics)
     if args.sarif:
         print(RP.render_sarif(results, ENGINE_VERSION))
     elif args.json:
@@ -375,18 +375,80 @@ def cmd_context(args: argparse.Namespace) -> int:
                     line += f" kind={contract.get('kind', 'table')}"
                     if contract.get("status") == "draft":
                         line += " status=draft"
+                    loc_str = _format_location_short(contract.get("location"))
+                    if loc_str:
+                        line += f" location={loc_str}"
+                    sla_str = _format_freshness_short(
+                        contract.get("freshness_sla"))
+                    if sla_str:
+                        line += f" freshness_sla={sla_str}"
                 print(line)
                 for cline in _format_v2_contract_details(table, contract):
                     print(cline)
         for mname, metric in sorted(scoped_metrics.items()):
-            print(f"metric {mname}: kind={metric['kind']} "
-                  f"dataset={metric['dataset']}"
-                  + (f" unit={metric['unit']}" if metric.get("unit") else ""))
+            print(_format_metric_context_line(mname, metric))
         if not tables:
             print("(target references no tables)")
         for directive in directives:
             print(directive)
     return EXIT_CLEAN
+
+
+def _format_location_short(loc) -> str:
+    if not isinstance(loc, dict):
+        return ""
+    bits: list[str] = []
+    if loc.get("path"):
+        bits.append(str(loc["path"]))
+    if loc.get("format"):
+        bits.append(f"format={loc['format']}")
+    if loc.get("database"):
+        bits.append(f"db={loc['database']}")
+    if loc.get("relation"):
+        bits.append(f"relation={loc['relation']}")
+    if loc.get("base"):
+        bits.append(f"base={loc['base']}")
+    return "(" + ", ".join(bits) + ")" if bits else ""
+
+
+def _format_freshness_short(sla) -> str:
+    if isinstance(sla, str) and sla.strip():
+        return sla.strip()
+    if isinstance(sla, dict) and sla.get("column") and sla.get("max_age"):
+        return f"{sla['column']}<={sla['max_age']}"
+    return ""
+
+
+def _format_measure_short(block) -> str:
+    if not isinstance(block, dict):
+        return ""
+    expr = f"{block.get('agg')}({block.get('column')})"
+    if block.get("where"):
+        expr += f" where {block['where']}"
+    return expr
+
+
+def _format_metric_context_line(mname: str, metric: dict) -> str:
+    parts = [f"metric {mname}: kind={metric['kind']}",
+             f"dataset={metric['dataset']}"]
+    if metric.get("meaning"):
+        parts.append(f"meaning={metric['meaning']!r}")
+    if metric["kind"] == "ratio":
+        parts.append(
+            f"numerator={_format_measure_short(metric.get('numerator'))}")
+        parts.append(
+            f"denominator={_format_measure_short(metric.get('denominator'))}")
+    elif metric.get("measure"):
+        parts.append(
+            f"measure={_format_measure_short(metric.get('measure'))}")
+    grain = metric.get("grain")
+    if grain:
+        g_str = (",".join(str(g) for g in grain)
+                 if isinstance(grain, list) else str(grain))
+        parts.append(f"grain={g_str}")
+    if metric.get("unit"):
+        parts.append(f"unit={metric['unit']}")
+    return " ".join(parts)
 
 
 def _format_v2_contract_details(table: str, contract: dict) -> list[str]:
@@ -402,6 +464,10 @@ def _format_v2_contract_details(table: str, contract: dict) -> list[str]:
             tags: list[str] = []
             if spec.get("type"):
                 tags.append(str(spec["type"]))
+            if spec.get("nullable") is False:
+                tags.append("nullable=false")
+            elif spec.get("nullable") is True:
+                tags.append("nullable=true")
             if spec.get("unit"):
                 u = str(spec["unit"])
                 if spec.get("currency"):
@@ -409,10 +475,14 @@ def _format_v2_contract_details(table: str, contract: dict) -> list[str]:
                 elif spec.get("currency_column"):
                     u += f" @{spec['currency_column']}"
                 tags.append(f"unit={u}")
+            if spec.get("size_of"):
+                tags.append(f"size_of={spec['size_of']}")
             if spec.get("time_zone"):
                 tags.append(f"tz={spec['time_zone']}")
             if spec.get("relative_to"):
                 tags.append(f"base={spec['relative_to']}")
+            if spec.get("status_column"):
+                tags.append(f"status_column={spec['status_column']}")
             if isinstance(spec.get("values"), dict):
                 vals = ",".join(
                     f"{k}:{v['means']}" if isinstance(v, dict) and v.get("means")
@@ -423,6 +493,8 @@ def _format_v2_contract_details(table: str, contract: dict) -> list[str]:
             elif isinstance(spec.get("values"), list):
                 tags.append("values=[" + ",".join(
                     str(v) for v in spec["values"]) + "]")
+            if spec.get("pii") is True:
+                tags.append("pii=true")
             if tags:
                 col_bits.append(f"{cname}({', '.join(tags)})")
         if col_bits:

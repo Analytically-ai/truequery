@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://truequery.ai/schemas/contract-v2.schema.json",
+  "$id": "https://raw.githubusercontent.com/Analytically-ai/truequery/main/plugin/engine/src/truequery/schemas/contract-v2.schema.json",
   "title": "TrueQuery Dataset Contract v2",
   "description": "TrueQuery version 2 dataset contract schema for tables and file collections.",
   "type": "object",
@@ -16,13 +16,11 @@
       "description": "Contract schema version (must be 2)."
     },
     "dataset": {
-      "type": "string",
-      "minLength": 1,
+      "$ref": "#/$defs/dottedIdentifier",
       "description": "Dataset or relation name."
     },
     "table": {
-      "type": "string",
-      "minLength": 1,
+      "$ref": "#/$defs/dottedIdentifier",
       "description": "Alias for dataset (preserved for v1 compatibility)."
     },
     "meaning": {
@@ -43,7 +41,7 @@
     },
     "inferred_from": {
       "type": ["string", "null"],
-      "minLength": 1,
+      "pattern": "\\S",
       "description": "Required when status is 'draft'; describes the sample or source."
     },
     "location": {
@@ -51,7 +49,7 @@
     },
     "grain": {
       "type": "string",
-      "minLength": 1,
+      "pattern": "\\S",
       "description": "Plain-English grain declaration (e.g. 'one row per fetch attempt')."
     },
     "keys": {
@@ -59,17 +57,11 @@
       "description": "Candidate keys: string elements are single-column keys; nested string arrays are composite keys.",
       "items": {
         "oneOf": [
-          {
-            "type": "string",
-            "minLength": 1
-          },
+          {"$ref": "#/$defs/identifier"},
           {
             "type": "array",
             "minItems": 1,
-            "items": {
-              "type": "string",
-              "minLength": 1
-            }
+            "items": {"$ref": "#/$defs/identifier"}
           }
         ]
       }
@@ -77,11 +69,11 @@
     "partition_key": {
       "oneOf": [
         {"type": "null"},
-        {"type": "string", "minLength": 1},
+        {"$ref": "#/$defs/identifier"},
         {
           "type": "array",
           "minItems": 1,
-          "items": {"type": "string", "minLength": 1}
+          "items": {"$ref": "#/$defs/identifier"}
         }
       ]
     },
@@ -94,10 +86,10 @@
           "additionalProperties": false,
           "required": ["column", "max_age"],
           "properties": {
-            "column": {"type": "string", "minLength": 1},
+            "column": {"$ref": "#/$defs/identifier"},
             "max_age": {
               "type": "string",
-              "pattern": "^[1-9]\\d*(?:ms|s|m|h|d)$"
+              "pattern": "^[1-9]\\d*(?:ms|s|min|h|d)$"
             }
           }
         }
@@ -116,6 +108,9 @@
     },
     "columns": {
       "type": ["object", "null"],
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
       "additionalProperties": {
         "$ref": "#/$defs/columnSpec"
       }
@@ -130,7 +125,7 @@
       "then": {
         "required": ["inferred_from"],
         "properties": {
-          "inferred_from": {"type": "string", "minLength": 1}
+          "inferred_from": {"type": "string", "pattern": "\\S"}
         }
       }
     },
@@ -143,6 +138,12 @@
       },
       "then": {
         "properties": {
+          "grain": {
+            "type": "string",
+            "not": {
+              "pattern": "(?i)(?:^\\s*unknown\\b|\\bTODO\\b)"
+            }
+          },
           "columns": {
             "type": ["object", "null"],
             "additionalProperties": {
@@ -179,18 +180,31 @@
     }
   ],
   "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "dottedIdentifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "safeRelPath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!~)(?![A-Za-z]:)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?!.*(?:^|[\\\\/])~(?:[\\\\/]|$)).*\\S.*$"
+    },
     "filesLocation": {
       "type": "object",
       "additionalProperties": false,
       "required": ["path", "format"],
       "properties": {
         "path": {
-          "type": "string",
-          "minLength": 1
+          "$ref": "#/$defs/safeRelPath"
         },
         "base": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
         },
         "format": {
           "type": "string",
@@ -203,18 +217,28 @@
       "additionalProperties": false,
       "properties": {
         "database": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/safeRelPath"}
+          ]
         },
         "relation": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/dottedIdentifier"}
+          ]
         },
         "base": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
         }
       }
+    },
+    "sizeUnitEnum": {
+      "type": "string",
+      "enum": ["bytes", "KB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB"]
     },
     "unitEnum": {
       "type": "string",
@@ -276,24 +300,32 @@
           "pattern": "^[A-Z]{3}$"
         },
         "currency_column": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
         },
         "size_of": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
         },
         "time_zone": {
           "type": ["string", "null"],
           "pattern": "^(?:UTC|naive|local:[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)+)$"
         },
         "relative_to": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
         },
         "status_column": {
-          "type": ["string", "null"],
-          "minLength": 1
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
         },
         "values": {
           "oneOf": [
@@ -374,12 +406,56 @@
         },
         {
           "if": {
+            "required": ["unit"],
+            "properties": {"unit": {"type": "string"}}
+          },
+          "then": {
+            "properties": {
+              "type": {"enum": ["integer", "number", null]}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["time_zone"],
+            "properties": {"time_zone": {"type": "string"}}
+          },
+          "then": {
+            "required": ["type"],
+            "properties": {"type": {"const": "timestamp"}}
+          }
+        },
+        {
+          "if": {
             "required": ["relative_to"],
             "properties": {"relative_to": {"type": "string"}}
           },
           "then": {
             "required": ["type"],
             "properties": {"type": {"const": "path"}}
+          }
+        },
+        {
+          "if": {
+            "required": ["status_column"],
+            "properties": {"status_column": {"type": "string"}}
+          },
+          "then": {
+            "required": ["type"],
+            "properties": {"type": {"const": "path"}}
+          }
+        },
+        {
+          "if": {
+            "required": ["size_of"],
+            "properties": {"size_of": {"type": "string"}}
+          },
+          "then": {
+            "required": ["unit"],
+            "properties": {
+              "unit": {"$ref": "#/$defs/sizeUnitEnum"},
+              "type": {"enum": ["integer", "number", null]}
+            }
           }
         }
       ]

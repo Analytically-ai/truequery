@@ -299,12 +299,13 @@ def load_contract(path: str) -> dict:
     if not isinstance(raw, dict):
         raise ContractError(f"{path}: top level must be a mapping")
     version = raw.get("version")
+    if isinstance(version, bool) or version not in (None, 1, 2):
+        raise ContractError(
+            f"{path}: unsupported contract version {version!r} "
+            "(expected 1 or 2)")
     if version == 2:
         return contract_v2.validate_contract_v2(
             raw, path, error_cls=ContractError)
-    if version not in (None, 1):
-        raise ContractError(
-            f"{path}: unsupported contract version {version!r} (expected 1 or 2)")
     unknown = set(raw) - set(CONTRACT_REQUIRED) - set(CONTRACT_OPTIONAL)
     if unknown:
         raise ContractError(f"{path}: unknown keys {sorted(unknown)}")
@@ -313,8 +314,22 @@ def load_contract(path: str) -> dict:
         raise ContractError(f"{path}: missing keys {missing}")
     if not isinstance(raw["table"], str) or not raw["table"]:
         raise ContractError(f"{path}: table must be a non-empty string")
+    if not contract_v2.is_valid_dotted_ident(raw["table"]):
+        raise ContractError(
+            f"{path}: table ({raw['table']!r}) must be a plain table or "
+            "schema.table identifier")
+    if not isinstance(raw["grain"], str) or not raw["grain"].strip():
+        raise ContractError(f"{path}: grain must be a non-empty string")
     if not isinstance(raw["keys"], list):
         raise ContractError(f"{path}: keys must be a list")
+    v1_cols = raw.get("columns") if isinstance(raw.get("columns"), dict) else None
+    try:
+        contract_v2.validate_keys_identifiers(
+            raw["keys"], path, columns=v1_cols)
+        contract_v2.validate_partition_key_identifiers(
+            raw.get("partition_key"), path, columns=v1_cols)
+    except ValueError as exc:
+        raise ContractError(str(exc)) from None
     return raw
 
 
@@ -353,11 +368,22 @@ def load_contracts(root: str) -> dict[str, dict]:
     return load_contracts_reporting(root)[0]
 
 
+def is_draft_contract(contract: dict) -> bool:
+    """True when a contract is explicitly status: draft or has an unconfirmed
+    TODO/unknown grain (such as contracts seeded by `truequery init`)."""
+    if contract.get("status") == "draft":
+        return True
+    grain = str(contract.get("grain") or "")
+    return bool(contract_v2._TODO_WORD_RE.search(grain)
+                or grain.strip().lower().startswith("unknown"))
+
+
 def load_contracts_reporting(root: str) -> tuple[dict[str, dict], list[str]]:
     """({lower(table): contract}, [problem, ...]). A contract that fails
     strict load is left out and named in the problems, which the
     receipt prints under "not checked"."""
     out: dict[str, dict] = {}
+    seen_files: dict[str, str] = {}
     problems: list[str] = []
     cdir = os.path.join(root, "contracts")
     if not os.path.isdir(cdir):
@@ -381,7 +407,16 @@ def load_contracts_reporting(root: str) -> tuple[dict[str, dict], list[str]]:
         if base_problems:
             problems.extend(base_problems)
             continue
-        out[contract["table"].lower()] = contract
+        t_key = contract["table"].lower()
+        if t_key in seen_files:
+            prev = seen_files[t_key]
+            problems.append(
+                f"{rel_path}: duplicate contract for dataset "
+                f"{contract['table']!r} (already defined in {prev})")
+            out.pop(t_key, None)
+            continue
+        seen_files[t_key] = rel_path
+        out[t_key] = contract
     return out, problems
 
 
@@ -535,6 +570,41 @@ def validate_contracts_and_metrics(
     contracts_checked: list[str] = []
     metrics_checked: list[str] = []
     problems: list[dict] = []
+    seen_datasets: dict[str, str] = {}
+    seen_metrics: dict[str, str] = {}
+
+    cdir_eff = os.path.abspath(os.path.join(eff_root, "contracts"))
+    if os.path.isdir(cdir_eff) and any(
+            os.path.dirname(p) == cdir_eff for p, k in ordered_targets
+            if k == "contract"):
+        for cname in sorted(os.listdir(cdir_eff)):
+            if not cname.endswith((".yaml", ".yml")):
+                continue
+            cfull = os.path.abspath(os.path.join(cdir_eff, cname))
+            if cfull in seen:
+                continue
+            try:
+                cdoc = load_contract(cfull)
+                seen_datasets.setdefault(
+                    cdoc["table"].lower(), _rel(cfull, root))
+            except (OSError, ValueError):
+                pass
+    mdir_eff = os.path.abspath(os.path.join(eff_root, "metrics"))
+    if os.path.isdir(mdir_eff) and any(
+            os.path.dirname(p) == mdir_eff for p, k in ordered_targets
+            if k == "metric"):
+        for mname in sorted(os.listdir(mdir_eff)):
+            if not mname.endswith((".yaml", ".yml")):
+                continue
+            mfull = os.path.abspath(os.path.join(mdir_eff, mname))
+            if mfull in seen:
+                continue
+            try:
+                mdoc = contract_v2.load_metric(mfull)
+                seen_metrics.setdefault(
+                    mdoc["metric"].lower(), _rel(mfull, root))
+            except (OSError, ValueError):
+                pass
 
     for full_p, actual_kind in ordered_targets:
         rel_p = _rel(full_p, root)
@@ -555,8 +625,21 @@ def validate_contracts_and_metrics(
                        if b_prob.startswith(rel_p + ": ") else b_prob)
                 problems.append({"file": rel_p, "kind": "contract",
                                  "message": msg})
+            ds_key = contract["table"].lower()
+            if ds_key in seen_datasets:
+                prev = seen_datasets[ds_key]
+                problems.append({
+                    "file": rel_p,
+                    "kind": "contract",
+                    "message": (f"duplicate contract for dataset "
+                                f"{contract['table']!r} (already defined in "
+                                f"{prev})"),
+                })
+                project_contracts.pop(ds_key, None)
+                continue
+            seen_datasets[ds_key] = rel_p
             if not any(p["file"] == rel_p for p in problems):
-                project_contracts[contract["table"].lower()] = contract
+                project_contracts[ds_key] = contract
         else:
             metrics_checked.append(rel_p)
             try:
@@ -568,6 +651,17 @@ def validate_contracts_and_metrics(
                 problems.append({"file": rel_p, "kind": "metric",
                                  "message": msg})
                 continue
+            m_key = metric["metric"].lower()
+            if m_key in seen_metrics:
+                prev = seen_metrics[m_key]
+                problems.append({
+                    "file": rel_p,
+                    "kind": "metric",
+                    "message": (f"duplicate metric {metric['metric']!r} "
+                                f"(already defined in {prev})"),
+                })
+            else:
+                seen_metrics[m_key] = rel_p
             for m_prob in contract_v2.check_metric_against_contracts(
                     metric, project_contracts, rel_p, match_fn=match_contract):
                 msg = (m_prob[len(rel_p) + 2:]

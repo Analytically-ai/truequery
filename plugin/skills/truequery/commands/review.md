@@ -17,10 +17,10 @@ Any mode; any stack.
      depend on (upstream models, macros, schema and test YAML, and the
      build script or profile that sets session settings such as the
      time zone).
-   - **Audit every definition**: for each rule in `DATA.md` and in the
-     team's own definition docs, find the code that implements it and
-     say whether it does. Re-check each known deviation in `DATA.md`:
-     still there, or fixed?
+   - **Audit every definition**: for each rule or metric in
+     `metrics/*.yaml`, `DATA.md`, and the team's own definition docs,
+     find the code that implements it and say whether it does. Re-check
+     each known deviation in `DATA.md`: still there, or fixed?
    - **Per model**: grain and keys through every join
      (`model/grain-preserved-joins`); units, currencies and minor units
      in every sum; the time zone of every date cut

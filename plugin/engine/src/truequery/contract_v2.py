@@ -39,7 +39,12 @@ _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 # Validated by regex, never zoneinfo (tzdata may be absent on minimal OS/Windows).
 _LOCAL_TZ_RE = re.compile(
     r"^local:[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)+$")
-_DURATION_RE = re.compile(r"^[1-9]\d*(?:ms|s|m|h|d)$")
+_DURATION_RE = re.compile(r"^[1-9]\d*(?:ms|s|min|h|d)$")
+# Safe SQL identifier (column name) and dotted relation (schema.table).
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DOTTED_IDENT_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
+_TODO_WORD_RE = re.compile(r"\bTODO\b", re.IGNORECASE)
 
 CONTRACT_V2_TOP_KEYS = frozenset({
     "version", "dataset", "table", "meaning", "kind", "status",
@@ -71,6 +76,11 @@ ALLOWED_WHERE_NODES = frozenset({
     exp.In, exp.Between, exp.Is, exp.Like, exp.ILike,
 })
 
+_PREDICATE_NODES = frozenset({
+    exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE,
+    exp.In, exp.Between, exp.Is, exp.Like, exp.ILike,
+})
+
 
 def _yaml_problem(exc) -> str:
     mark = getattr(exc, "problem_mark", None)
@@ -83,15 +93,26 @@ def _non_empty_str(val) -> bool:
     return isinstance(val, str) and bool(val.strip())
 
 
+def is_valid_ident(val) -> bool:
+    return isinstance(val, str) and bool(_IDENT_RE.match(val))
+
+
+def is_valid_dotted_ident(val) -> bool:
+    return isinstance(val, str) and bool(_DOTTED_IDENT_RE.match(val))
+
+
 def _is_safe_rel_path(val: str) -> bool:
-    """True when val is a relative path/glob that does not traverse '..'."""
+    """True when val is a relative path/glob that does not traverse '..' or '~'."""
     if not _non_empty_str(val):
         return False
     norm = val.replace("\\", "/")
-    if norm.startswith("/") or re.match(r"^[A-Za-z]:", norm):
+    if (norm.startswith("/") or norm.startswith("~")
+            or re.match(r"^[A-Za-z]:", norm)):
         return False
     parts = [p for p in norm.split("/") if p]
-    return ".." not in parts
+    if not parts:
+        return False
+    return ".." not in parts and "~" not in parts
 
 
 def validate_bases(bases, source: str = "DATA.md tq-config") -> dict[str, dict]:
@@ -112,8 +133,9 @@ def validate_bases(bases, source: str = "DATA.md tq-config") -> dict[str, dict]:
         raise ValueError(f"{source}: bases must be a mapping")
     normalized: dict[str, dict] = {}
     for name, spec in bases.items():
-        if not _non_empty_str(name):
-            raise ValueError(f"{source}: base name must be a non-empty string")
+        if not is_valid_ident(name):
+            raise ValueError(
+                f"{source}: base name {name!r} must be a valid identifier")
         if isinstance(spec, str):
             if not _non_empty_str(spec):
                 raise ValueError(
@@ -126,9 +148,10 @@ def validate_bases(bases, source: str = "DATA.md tq-config") -> dict[str, dict]:
                     f"{source}: bases.{name} has unknown keys {sorted(unknown)}")
             env_var = spec.get("env")
             default_val = spec.get("default")
-            if env_var is not None and not _non_empty_str(env_var):
+            if env_var is not None and not is_valid_ident(env_var):
                 raise ValueError(
-                    f"{source}: bases.{name}.env must be a non-empty string")
+                    f"{source}: bases.{name}.env must be a valid environment "
+                    "variable name")
             if default_val is not None and not _non_empty_str(default_val):
                 raise ValueError(
                     f"{source}: bases.{name}.default must be a non-empty string")
@@ -142,23 +165,69 @@ def validate_bases(bases, source: str = "DATA.md tq-config") -> dict[str, dict]:
     return normalized
 
 
-def _validate_keys_v2(keys, path: str) -> None:
+def validate_keys_identifiers(keys, path: str,
+                              columns: dict | None = None) -> None:
     if not isinstance(keys, list):
         raise ValueError(f"{path}: keys must be a list")
+    col_set = set(columns.keys()) if isinstance(columns, dict) and columns else None
     for idx, item in enumerate(keys):
         if isinstance(item, str):
-            if not item.strip():
+            if not is_valid_ident(item):
                 raise ValueError(
-                    f"{path}: keys[{idx}] must be a non-empty string")
+                    f"{path}: keys[{idx}] ({item!r}) must be a plain column "
+                    "identifier")
+            if col_set is not None and item not in col_set:
+                raise ValueError(
+                    f"{path}: keys[{idx}] ({item!r}) is not in columns")
         elif isinstance(item, list):
-            if not item or not all(_non_empty_str(c) for c in item):
+            if not item:
                 raise ValueError(
                     f"{path}: composite key keys[{idx}] must be a non-empty "
                     "list of column names")
+            for c_idx, col in enumerate(item):
+                if not is_valid_ident(col):
+                    raise ValueError(
+                        f"{path}: keys[{idx}][{c_idx}] ({col!r}) must be a "
+                        "plain column identifier")
+                if col_set is not None and col not in col_set:
+                    raise ValueError(
+                        f"{path}: keys[{idx}][{c_idx}] ({col!r}) is not in "
+                        "columns")
         else:
             raise ValueError(
                 f"{path}: keys[{idx}] must be a column name or list of "
                 "column names")
+
+
+def validate_partition_key_identifiers(part_key, path: str,
+                                       columns: dict | None = None) -> None:
+    if part_key is None:
+        return
+    col_set = set(columns.keys()) if isinstance(columns, dict) and columns else None
+    if isinstance(part_key, str):
+        if not is_valid_ident(part_key):
+            raise ValueError(
+                f"{path}: partition_key ({part_key!r}) must be a plain column "
+                "identifier")
+        if col_set is not None and part_key not in col_set:
+            raise ValueError(
+                f"{path}: partition_key ({part_key!r}) is not in columns")
+    elif isinstance(part_key, list):
+        if not part_key:
+            raise ValueError(
+                f"{path}: partition_key list must contain column names")
+        for idx, col in enumerate(part_key):
+            if not is_valid_ident(col):
+                raise ValueError(
+                    f"{path}: partition_key[{idx}] ({col!r}) must be a plain "
+                    "column identifier")
+            if col_set is not None and col not in col_set:
+                raise ValueError(
+                    f"{path}: partition_key[{idx}] ({col!r}) is not in "
+                    "columns")
+    else:
+        raise ValueError(
+            f"{path}: partition_key must be a string, list of strings, or null")
 
 
 def _validate_location_v2(loc, kind: str, path: str) -> None:
@@ -175,16 +244,16 @@ def _validate_location_v2(loc, kind: str, path: str) -> None:
         if not isinstance(loc_path, str) or not _is_safe_rel_path(loc_path):
             raise ValueError(
                 f"{path}: location.path must be a non-empty relative path "
-                "without '..'")
+                "without '..' or '~'")
         fmt = loc.get("format")
         if fmt not in CONTRACT_V2_FORMATS:
             raise ValueError(
                 f"{path}: location.format must be one of "
                 f"{list(CONTRACT_V2_FORMATS)}")
         base = loc.get("base")
-        if base is not None and not _non_empty_str(base):
+        if base is not None and not is_valid_ident(base):
             raise ValueError(
-                f"{path}: location.base must be a non-empty string or null")
+                f"{path}: location.base must be a valid base identifier or null")
     else:
         if loc is None:
             return
@@ -199,15 +268,16 @@ def _validate_location_v2(loc, kind: str, path: str) -> None:
                 not isinstance(db, str) or not _is_safe_rel_path(db)):
             raise ValueError(
                 f"{path}: location.database must be a non-empty relative path "
-                "without '..'")
+                "without '..' or '~'")
         rel = loc.get("relation")
-        if rel is not None and not _non_empty_str(rel):
+        if rel is not None and not is_valid_dotted_ident(rel):
             raise ValueError(
-                f"{path}: location.relation must be a non-empty string")
+                f"{path}: location.relation ({rel!r}) must be a plain "
+                "table or schema.table identifier")
         base = loc.get("base")
-        if base is not None and not _non_empty_str(base):
+        if base is not None and not is_valid_ident(base):
             raise ValueError(
-                f"{path}: location.base must be a non-empty string or null")
+                f"{path}: location.base must be a valid base identifier or null")
 
 
 def _validate_freshness_v2(freshness, columns: dict, path: str) -> None:
@@ -222,16 +292,23 @@ def _validate_freshness_v2(freshness, columns: dict, path: str) -> None:
             f"{path}: freshness_sla has unknown keys {sorted(unknown)}")
     col = freshness.get("column")
     max_age = freshness.get("max_age")
-    if not _non_empty_str(col):
+    if not is_valid_ident(col):
         raise ValueError(
-            f"{path}: freshness_sla.column must be a non-empty string")
+            f"{path}: freshness_sla.column ({col!r}) must be a plain column "
+            "identifier")
     if not isinstance(max_age, str) or not _DURATION_RE.match(max_age):
         raise ValueError(
-            f"{path}: freshness_sla.max_age must match <int><ms|s|m|h|d> "
+            f"{path}: freshness_sla.max_age must match <int><ms|s|min|h|d> "
             f"(got {max_age!r})")
-    if columns and col not in columns:
-        raise ValueError(
-            f"{path}: freshness_sla.column {col!r} is not in columns")
+    if columns:
+        if col not in columns:
+            raise ValueError(
+                f"{path}: freshness_sla.column {col!r} is not in columns")
+        col_type = (columns.get(col) or {}).get("type")
+        if col_type not in ("timestamp", "date"):
+            raise ValueError(
+                f"{path}: freshness_sla.column {col!r} must have type "
+                f"'timestamp' or 'date' (got {col_type!r})")
 
 
 def _validate_values_v2(values, col_name: str, is_draft: bool,
@@ -294,8 +371,10 @@ def _validate_columns_v2(columns, is_draft: bool, path: str) -> dict:
     if not isinstance(columns, dict):
         raise ValueError(f"{path}: columns must be a mapping")
     for col_name, spec in columns.items():
-        if not _non_empty_str(col_name):
-            raise ValueError(f"{path}: column names must be non-empty strings")
+        if not is_valid_ident(col_name):
+            raise ValueError(
+                f"{path}: column name {col_name!r} must be a plain column "
+                "identifier")
         if not isinstance(spec, dict):
             raise ValueError(
                 f"{path}: columns.{col_name} must be a mapping")
@@ -319,10 +398,15 @@ def _validate_columns_v2(columns, is_draft: bool, path: str) -> dict:
                 raise ValueError(
                     f"{path}: columns.{col_name}.{text_key} must be a string")
         unit = spec.get("unit")
-        if unit is not None and unit not in ALL_UNITS:
-            raise ValueError(
-                f"{path}: columns.{col_name}.unit must be one of "
-                f"{list(ALL_UNITS)}")
+        if unit is not None:
+            if unit not in ALL_UNITS:
+                raise ValueError(
+                    f"{path}: columns.{col_name}.unit must be one of "
+                    f"{list(ALL_UNITS)}")
+            if ctype is not None and ctype not in ("integer", "number"):
+                raise ValueError(
+                    f"{path}: columns.{col_name}.unit {unit!r} requires "
+                    f"numeric type 'integer' or 'number' (got {ctype!r})")
         currency = spec.get("currency")
         currency_col = spec.get("currency_column")
         if currency is not None and (
@@ -331,10 +415,10 @@ def _validate_columns_v2(columns, is_draft: bool, path: str) -> dict:
             raise ValueError(
                 f"{path}: columns.{col_name}.currency must be a 3-letter "
                 "uppercase ISO-4217 code (e.g. USD)")
-        if currency_col is not None and not _non_empty_str(currency_col):
+        if currency_col is not None and not is_valid_ident(currency_col):
             raise ValueError(
                 f"{path}: columns.{col_name}.currency_column must be a "
-                "non-empty string")
+                "plain column identifier")
         if currency is not None and currency_col is not None:
             raise ValueError(
                 f"{path}: columns.{col_name} cannot set both currency and "
@@ -356,26 +440,44 @@ def _validate_columns_v2(columns, is_draft: bool, path: str) -> dict:
                 raise ValueError(
                     f"{path}: columns.{col_name}.time_zone must be 'UTC', "
                     "'naive', or 'local:<Area>/<Location>'")
+            if ctype != "timestamp":
+                raise ValueError(
+                    f"{path}: columns.{col_name}.time_zone requires "
+                    f"type: timestamp (got {ctype!r})")
         rel_to = spec.get("relative_to")
         if rel_to is not None:
-            if not _non_empty_str(rel_to):
+            if not is_valid_ident(rel_to):
                 raise ValueError(
                     f"{path}: columns.{col_name}.relative_to must be a "
-                    "non-empty string")
+                    "valid base identifier")
             if ctype != "path":
                 raise ValueError(
                     f"{path}: columns.{col_name}.relative_to requires "
                     "type: path")
         size_of = spec.get("size_of")
-        if size_of is not None and not _non_empty_str(size_of):
-            raise ValueError(
-                f"{path}: columns.{col_name}.size_of must be a non-empty "
-                "column name")
+        if size_of is not None:
+            if not is_valid_ident(size_of):
+                raise ValueError(
+                    f"{path}: columns.{col_name}.size_of must be a plain "
+                    "column identifier")
+            if unit not in SIZE_UNITS:
+                raise ValueError(
+                    f"{path}: columns.{col_name}.size_of requires a size "
+                    f"unit {list(SIZE_UNITS)} (got {unit!r})")
+            if ctype is not None and ctype not in ("integer", "number"):
+                raise ValueError(
+                    f"{path}: columns.{col_name}.size_of requires numeric "
+                    "type 'integer' or 'number'")
         status_col = spec.get("status_column")
-        if status_col is not None and not _non_empty_str(status_col):
-            raise ValueError(
-                f"{path}: columns.{col_name}.status_column must be a "
-                "non-empty column name")
+        if status_col is not None:
+            if not is_valid_ident(status_col):
+                raise ValueError(
+                    f"{path}: columns.{col_name}.status_column must be a "
+                    "plain column identifier")
+            if ctype != "path":
+                raise ValueError(
+                    f"{path}: columns.{col_name}.status_column requires "
+                    f"type: path (got {ctype!r})")
         if "values" in spec and spec["values"] is not None:
             _validate_values_v2(spec["values"], col_name, is_draft, path)
         pii = spec.get("pii")
@@ -400,10 +502,21 @@ def _validate_columns_v2(columns, is_draft: bool, path: str) -> dict:
         status_col = spec.get("status_column")
         if status_col is not None:
             target = columns.get(status_col)
-            if not isinstance(target, dict) or not target.get("values"):
+            t_values = target.get("values") if isinstance(target, dict) else None
+            if not isinstance(t_values, dict) or not t_values:
                 raise ValueError(
                     f"{path}: columns.{col_name}.status_column references "
-                    f"{status_col!r}, which must be a column with values")
+                    f"{status_col!r}, which must be a column with values "
+                    "mapping each status to `means`")
+            missing_means = [
+                k for k, v in t_values.items()
+                if not isinstance(v, dict) or not v.get("means")
+            ]
+            if missing_means:
+                raise ValueError(
+                    f"{path}: columns.{col_name}.status_column references "
+                    f"{status_col!r}, whose values {missing_means} are "
+                    "missing `means`")
     return columns
 
 
@@ -422,7 +535,8 @@ def _validate_contract_v2_inner(raw: dict, path: str) -> dict:
     unknown = set(raw) - CONTRACT_V2_TOP_KEYS
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
-    if raw.get("version") != 2:
+    ver = raw.get("version")
+    if isinstance(ver, bool) or ver != 2:
         raise ValueError(f"{path}: version must be 2")
 
     dataset = raw.get("dataset")
@@ -432,16 +546,10 @@ def _validate_contract_v2_inner(raw: dict, path: str) -> dict:
             f"{path}: dataset ({dataset!r}) and table ({table!r}) must match "
             "when both are given")
     name = dataset if dataset is not None else table
-    if not _non_empty_str(name):
+    if not is_valid_dotted_ident(name):
         raise ValueError(
-            f"{path}: dataset (or table) is required and must be a non-empty "
-            "string")
-
-    if "grain" not in raw or not _non_empty_str(raw.get("grain")):
-        raise ValueError(f"{path}: grain must be a non-empty string")
-    if "keys" not in raw:
-        raise ValueError(f"{path}: missing keys ['keys']")
-    _validate_keys_v2(raw["keys"], path)
+            f"{path}: dataset (or table) is required and must be a plain "
+            "table or schema.table identifier")
 
     kind = raw.get("kind", "table")
     if kind not in CONTRACT_V2_KINDS:
@@ -460,6 +568,19 @@ def _validate_contract_v2_inner(raw: dict, path: str) -> dict:
     elif inferred_from is not None and not isinstance(inferred_from, str):
         raise ValueError(f"{path}: inferred_from must be a string or null")
 
+    grain = raw.get("grain")
+    if "grain" not in raw or not _non_empty_str(grain):
+        raise ValueError(f"{path}: grain must be a non-empty string")
+    if status != "draft" and (
+            _TODO_WORD_RE.search(grain)
+            or grain.strip().lower().startswith("unknown")):
+        raise ValueError(
+            f"{path}: grain {grain!r} is unconfirmed (contains TODO/unknown); "
+            "confirm the grain or set status: draft")
+
+    if "keys" not in raw:
+        raise ValueError(f"{path}: missing keys ['keys']")
+
     for opt_str in ("meaning", "quirks"):
         val = raw.get(opt_str)
         if val is not None and not isinstance(val, str):
@@ -475,25 +596,12 @@ def _validate_contract_v2_inner(raw: dict, path: str) -> dict:
             f"{path}: write_mode must be one of "
             f"{list(CONTRACT_V2_WRITE_MODES)}")
 
-    part_key = raw.get("partition_key")
-    if part_key is not None:
-        if isinstance(part_key, str):
-            if not part_key.strip():
-                raise ValueError(
-                    f"{path}: partition_key must not be an empty string")
-        elif isinstance(part_key, list):
-            if not part_key or not all(_non_empty_str(p) for p in part_key):
-                raise ValueError(
-                    f"{path}: partition_key list must contain non-empty "
-                    "column names")
-        else:
-            raise ValueError(
-                f"{path}: partition_key must be a string, list of strings, "
-                "or null")
-
     _validate_location_v2(raw.get("location"), kind, path)
     columns = _validate_columns_v2(
         raw.get("columns"), status == "draft", path)
+    validate_keys_identifiers(raw["keys"], path, columns=columns)
+    validate_partition_key_identifiers(
+        raw.get("partition_key"), path, columns=columns)
     _validate_freshness_v2(raw.get("freshness_sla"), columns, path)
 
     out = dict(raw)
@@ -508,22 +616,57 @@ def _validate_contract_v2_inner(raw: dict, path: str) -> dict:
 
 # -- Metrics (metrics/*.yaml) -------------------------------------------------
 
+def _check_boolean_structure(node: exp.Expression, path: str,
+                             field_name: str) -> None:
+    """Verify `node` is a valid boolean filter tree where every leaf is an
+    comparison/predicate (never a bare Column, bare Boolean, or bare Literal)."""
+    ntype = type(node)
+    if ntype is exp.Paren:
+        _check_boolean_structure(node.this, path, field_name)
+        return
+    if ntype is exp.Not:
+        _check_boolean_structure(node.this, path, field_name)
+        return
+    if ntype in (exp.And, exp.Or):
+        _check_boolean_structure(node.this, path, field_name)
+        _check_boolean_structure(node.expression, path, field_name)
+        return
+    if ntype in _PREDICATE_NODES:
+        return
+    if ntype is exp.Column:
+        raise ValueError(
+            f"{path}: {field_name}.where bare column {node.sql()!r} is not "
+            "allowed as a condition; use an explicit comparison (e.g. "
+            f"`{node.sql()} = TRUE` or `{node.sql()} IS TRUE`)")
+    if ntype is exp.Boolean:
+        raise ValueError(
+            f"{path}: {field_name}.where boolean literal {node.sql()!r} is "
+            "only allowed on the right side of a comparison or IS")
+    raise ValueError(
+        f"{path}: {field_name}.where must be a filter predicate, not "
+        f"{ntype.__name__}")
+
+
 def validate_metric_where(where_str: str, path: str, field_name: str,
                           allowed_columns: set[str] | None = None) -> list[str]:
     """Validate a metric `where` clause against the exact-type AST allowlist.
 
     Returns the sorted list of column names referenced in `where_str`.
     Raises ValueError on any disallowed syntax, function call, subquery,
-    table qualifier, SQL comment, or unknown column.
+    table qualifier, SQL comment, bare column/boolean, or unknown column.
     """
     if not _non_empty_str(where_str):
         raise ValueError(f"{path}: {field_name}.where must be a non-empty string")
-    if ";" in where_str:
+    try:
+        stmts = [s for s in sqlglot.parse(where_str) if s is not None]
+    except Exception as exc:
         raise ValueError(
-            f"{path}: {field_name}.where must not contain ';'")
-    if "--" in where_str or "/*" in where_str or "*/" in where_str:
+            f"{path}: {field_name}.where could not parse as a filter "
+            f"condition: {exc}") from None
+    if len(stmts) != 1:
         raise ValueError(
-            f"{path}: {field_name}.where must not contain SQL comments")
+            f"{path}: {field_name}.where must be a single filter condition "
+            "(no ';' or multiple statements)")
     try:
         node = sqlglot.parse_one(where_str, into=exp.Condition)
     except Exception as exc:
@@ -533,11 +676,6 @@ def validate_metric_where(where_str: str, path: str, field_name: str,
     if node is None:
         raise ValueError(
             f"{path}: {field_name}.where could not parse as a filter condition")
-    if type(node) in (exp.Literal, exp.Null, exp.Boolean, exp.Neg,
-                      exp.Identifier):
-        raise ValueError(
-            f"{path}: {field_name}.where must be a filter predicate, not a "
-            f"bare {type(node).__name__}")
 
     nodes = list(node.walk())
     for sub in nodes:
@@ -563,6 +701,8 @@ def validate_metric_where(where_str: str, path: str, field_name: str,
                     f"{path}: {field_name}.where unary '-' is only allowed "
                     "on numeric literals")
 
+    _check_boolean_structure(node, path, field_name)
+
     referenced_cols: set[str] = set()
     for sub in nodes:
         ntype = type(sub)
@@ -572,11 +712,20 @@ def validate_metric_where(where_str: str, path: str, field_name: str,
                     f"{path}: {field_name}.where column {sub.sql()!r} must "
                     "not be table-qualified")
             col_name = sub.name
-            if not col_name:
+            if not is_valid_ident(col_name):
                 raise ValueError(
-                    f"{path}: {field_name}.where contains an empty column "
-                    "reference")
+                    f"{path}: {field_name}.where column {col_name!r} must "
+                    "be a plain column identifier")
             referenced_cols.add(col_name)
+        elif ntype is exp.Boolean:
+            parent = sub.parent
+            if not (type(parent) in (exp.EQ, exp.NEQ, exp.Is)
+                    and parent.expression is sub
+                    and type(parent.this) is exp.Column):
+                raise ValueError(
+                    f"{path}: {field_name}.where boolean literal "
+                    f"{sub.sql()!r} is only allowed as the right side of a "
+                    "column comparison or IS")
         elif ntype in (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE):
             if (type(sub.this) is not exp.Column
                     and type(sub.expression) is not exp.Column):
@@ -602,10 +751,6 @@ def validate_metric_where(where_str: str, path: str, field_name: str,
                 raise ValueError(
                     f"{path}: {field_name}.where IN left side must be "
                     "a column")
-            if sub.args.get("query") is not None or sub.args.get("field") is not None:
-                raise ValueError(
-                    f"{path}: {field_name}.where IN (...) must use a literal "
-                    "list, not a subquery")
             exprs = sub.expressions
             if not exprs:
                 raise ValueError(
@@ -666,9 +811,15 @@ def _validate_measure_block(block, field_name: str,
     if not _non_empty_str(col):
         raise ValueError(
             f"{path}: {field_name}.column must be a non-empty string")
-    if col == "*" and agg != "count":
+    if col == "*":
+        if agg != "count":
+            raise ValueError(
+                f"{path}: {field_name}.column '*' is only valid when agg is "
+                "'count'")
+    elif not is_valid_ident(col):
         raise ValueError(
-            f"{path}: {field_name}.column '*' is only valid when agg is 'count'")
+            f"{path}: {field_name}.column ({col!r}) must be a plain column "
+            "identifier")
     cols_used: set[str] = set()
     if col != "*":
         cols_used.add(col)
@@ -692,14 +843,17 @@ def validate_metric(raw: dict, path: str,
     if unknown:
         raise ValueError(f"{path}: unknown keys {sorted(unknown)}")
     version = raw.get("version", 1)
-    if version != 1:
+    if isinstance(version, bool) or version != 1:
         raise ValueError(f"{path}: version must be 1")
     metric_name = raw.get("metric")
-    if not _non_empty_str(metric_name):
-        raise ValueError(f"{path}: metric must be a non-empty string")
+    if not is_valid_ident(metric_name):
+        raise ValueError(
+            f"{path}: metric ({metric_name!r}) must be a plain identifier")
     dataset = raw.get("dataset")
-    if not _non_empty_str(dataset):
-        raise ValueError(f"{path}: dataset must be a non-empty string")
+    if not is_valid_dotted_ident(dataset):
+        raise ValueError(
+            f"{path}: dataset ({dataset!r}) must be a plain table or "
+            "schema.table identifier")
     kind = raw.get("kind")
     if kind not in METRIC_KINDS:
         raise ValueError(
@@ -721,12 +875,13 @@ def validate_metric(raw: dict, path: str,
             if not grain.strip():
                 raise ValueError(f"{path}: grain must not be an empty string")
         elif isinstance(grain, list):
-            if not grain or not all(_non_empty_str(g) for g in grain):
+            if not grain or not all(is_valid_ident(g) for g in grain):
                 raise ValueError(
-                    f"{path}: grain list must contain non-empty strings")
+                    f"{path}: grain list must contain plain column identifiers")
         else:
             raise ValueError(
-                f"{path}: grain must be a string, list of strings, or null")
+                f"{path}: grain must be a string, list of column identifiers, "
+                "or null")
 
     if kind == "ratio":
         if "measure" in raw:
@@ -794,7 +949,6 @@ def check_contract_bases(contract: dict, declared_bases: dict,
     return problems
 
 
-
 def load_metrics_reporting(
     root: str,
     contracts: dict[str, dict] | None = None,
@@ -802,6 +956,7 @@ def load_metrics_reporting(
 ) -> tuple[dict[str, dict], list[str]]:
     """({lower(metric): metric_dict}, [problem, ...]) for metrics/*.yaml."""
     out: dict[str, dict] = {}
+    seen_files: dict[str, str] = {}
     problems: list[str] = []
     mdir = os.path.join(root, "metrics")
     if not os.path.isdir(mdir):
@@ -822,7 +977,16 @@ def load_metrics_reporting(
             if m_problems:
                 problems.extend(m_problems)
                 continue
-        out[metric["metric"].lower()] = metric
+        m_key = metric["metric"].lower()
+        if m_key in seen_files:
+            prev = seen_files[m_key]
+            problems.append(
+                f"{rel_path}: duplicate metric {metric['metric']!r} "
+                f"(already defined in {prev})")
+            out.pop(m_key, None)
+            continue
+        seen_files[m_key] = rel_path
+        out[m_key] = metric
     return out, problems
 
 
@@ -854,4 +1018,3 @@ def check_metric_against_contracts(
         except ValueError as exc:
             problems.append(str(exc))
     return problems
-
