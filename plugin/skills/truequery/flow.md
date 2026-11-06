@@ -34,11 +34,15 @@ is a gap in the standard instead of improvising one.
 
 ## 3. Contract first
 
-Before code, write or extend `contracts/<name>.yaml`: grain, keys,
-columns with units, freshness, PII flags, owner if known. A contract
-written from a step-2 answer cites that answer; an unconfirmed grain is
-marked TODO and called a draft when cited
-(`model/grain-preserved-joins`, `dq/uniqueness-composite-grain`).
+Before code, write or extend `contracts/<name>.yaml` (`version: 2`,
+`dataset`, `kind: table|files`, `location`, `grain`, `keys`, `columns`
+with `type`, `unit`, `currency`, `time_zone`, `relative_to`, `values`
+with `means: present|absent_expected|absent_unexpected`, `pii`,
+`freshness_sla`, `write_mode`) and run `truequery contract validate`.
+A contract written from a step-2 answer cites that answer; an
+unconfirmed contract sets `status: draft` with `inferred_from` and is
+called a draft when cited (`model/grain-preserved-joins`,
+`dq/uniqueness-composite-grain`).
 
 ## 4. Build
 

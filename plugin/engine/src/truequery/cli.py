@@ -237,7 +237,10 @@ def cmd_review(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return EXIT_ERROR
     modes = [r.mode for r in results]
-    contracts, invalid = P.load_contracts_reporting(root)
+    contracts, invalid_contracts = P.load_contracts_reporting(root)
+    metrics, invalid_metrics = P.load_metrics_reporting(
+        root, contracts=contracts)
+    invalid = list(invalid_contracts) + list(invalid_metrics)
     tables = _review_tables(results, args.dialect)
     receipt = RP.build_receipt(results, modes, contracts, tables,
                                tier_overrides=active_overrides(
@@ -327,11 +330,19 @@ def cmd_context(args: argparse.Namespace) -> int:
         mode = P.resolve_mode(rel or "", config, None)
         tables = P.referenced_tables(target_text, dialect)
     contracts = P.load_contracts(root)
+    metrics = P.load_metrics(root)
+    scoped_metrics = (P.metrics_for_tables(tables, contracts, metrics)
+                      if args.target else {m["metric"]: m
+                                           for _, m in sorted(metrics.items())})
     directives = [f"MODE: {mode}", "STANDARD: 0.1",
                   "EVIDENCE_AVAILABLE: file"]
     for table in tables:
-        if P.match_contract(table, contracts) is None:
+        key = P.match_contract(table, contracts)
+        if key is None:
             directives.append(f"CONTRACT_MISSING: {table}")
+        elif contracts[key].get("status") == "draft":
+            src = contracts[key].get("inferred_from") or "unconfirmed"
+            directives.append(f"CONTRACT_DRAFT: {table} ({src})")
     if stale:
         directives.append("CONTEXT_STALE")
     doc = {"mode": mode, "standard": "0.1",
@@ -341,6 +352,7 @@ def cmd_context(args: argparse.Namespace) -> int:
            "contracts": {t: contracts[P.match_contract(t, contracts)]
                          for t in tables
                          if P.match_contract(t, contracts) is not None},
+           "metrics": scoped_metrics,
            "directives": directives,
            "stale": stale}
     if args.sarif:
@@ -357,13 +369,134 @@ def cmd_context(args: argparse.Namespace) -> int:
             key = P.match_contract(table, contracts)
             contract = contracts.get(key) if key is not None else None
             if contract is not None:
-                print(f"contract {table}: grain={contract['grain']} "
-                      f"keys={P._format_keys(contract['keys']) or '—'}")
+                line = (f"contract {table}: grain={contract['grain']} "
+                        f"keys={P._format_keys(contract['keys']) or '—'}")
+                if contract.get("version") == 2:
+                    line += f" kind={contract.get('kind', 'table')}"
+                    if contract.get("status") == "draft":
+                        line += " status=draft"
+                print(line)
+                for cline in _format_v2_contract_details(table, contract):
+                    print(cline)
+        for mname, metric in sorted(scoped_metrics.items()):
+            print(f"metric {mname}: kind={metric['kind']} "
+                  f"dataset={metric['dataset']}"
+                  + (f" unit={metric['unit']}" if metric.get("unit") else ""))
         if not tables:
             print("(target references no tables)")
         for directive in directives:
             print(directive)
     return EXIT_CLEAN
+
+
+def _format_v2_contract_details(table: str, contract: dict) -> list[str]:
+    if contract.get("version") != 2:
+        return []
+    lines: list[str] = []
+    cols = contract.get("columns") or {}
+    if isinstance(cols, dict):
+        col_bits: list[str] = []
+        for cname, spec in cols.items():
+            if not isinstance(spec, dict):
+                continue
+            tags: list[str] = []
+            if spec.get("type"):
+                tags.append(str(spec["type"]))
+            if spec.get("unit"):
+                u = str(spec["unit"])
+                if spec.get("currency"):
+                    u += f" {spec['currency']}"
+                elif spec.get("currency_column"):
+                    u += f" @{spec['currency_column']}"
+                tags.append(f"unit={u}")
+            if spec.get("time_zone"):
+                tags.append(f"tz={spec['time_zone']}")
+            if spec.get("relative_to"):
+                tags.append(f"base={spec['relative_to']}")
+            if isinstance(spec.get("values"), dict):
+                vals = ",".join(
+                    f"{k}:{v['means']}" if isinstance(v, dict) and v.get("means")
+                    else str(k)
+                    for k, v in spec["values"].items()
+                )
+                tags.append(f"values=[{vals}]")
+            elif isinstance(spec.get("values"), list):
+                tags.append("values=[" + ",".join(
+                    str(v) for v in spec["values"]) + "]")
+            if tags:
+                col_bits.append(f"{cname}({', '.join(tags)})")
+        if col_bits:
+            lines.append(f"  columns {table}: " + "; ".join(col_bits))
+    return lines
+
+
+def cmd_contract_validate(args: argparse.Namespace) -> int:
+    root = os.path.abspath(".")
+    try:
+        report = P.validate_contracts_and_metrics(root, args.paths or None)
+    except (P.ContextError, ValueError) as exc:
+        print(f"truequery: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    problems = report["problems"]
+    nc = len(report["contracts_checked"])
+    nm = len(report["metrics_checked"])
+    if args.sarif:
+        sarif_results = [{
+            "ruleId": f"{p['kind']}-schema",
+            "level": "error",
+            "message": {"text": p["message"]},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": p["file"]},
+                }}],
+        } for p in problems]
+        doc = {
+            "version": "2.1.0",
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "runs": [{
+                "tool": {"driver": {
+                    "name": "truequery",
+                    "version": ENGINE_VERSION,
+                    "informationUri":
+                        "https://github.com/Analytically-ai/truequery",
+                    "rules": [
+                        {"id": "contract-schema",
+                         "name": "Dataset contract validation",
+                         "shortDescription": {
+                             "text": "Dataset contract schema or cross-file "
+                                     "reference error."}},
+                        {"id": "metric-schema",
+                         "name": "Metric definition validation",
+                         "shortDescription": {
+                             "text": "Metric schema, filter allowlist, or "
+                                     "dataset/column reference error."}},
+                    ],
+                }},
+                "results": sarif_results,
+            }],
+        }
+        print(json.dumps(doc, indent=2, sort_keys=True))
+    elif args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        for p in problems:
+            print(f"{p['file']}: [error] {p['kind']}: {p['message']}")
+        checked_parts = []
+        if nc or not nm:
+            checked_parts.append(RP._plural(nc, "contract"))
+        if nm:
+            checked_parts.append(RP._plural(nm, "metric"))
+        checked_str = " and ".join(checked_parts)
+        if not problems:
+            if nc == 0 and nm == 0:
+                print("truequery contract validate: no contract or metric "
+                      "files found")
+            else:
+                print(f"clean: {checked_str} validated, no errors")
+        else:
+            print(f"{RP._plural(len(problems), 'error')} in "
+                  f"{checked_str} checked")
+    return EXIT_FINDINGS if problems else EXIT_CLEAN
 
 
 def _rules_set(args: argparse.Namespace, root) -> int:
@@ -715,6 +848,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("--reason", default=None,
                        help="who and what evidence (required)")
     p_add.set_defaults(func=cmd_ignore_add)
+
+    p_contract = sub.add_parser(
+        "contract", help="validate dataset contracts and metric definitions")
+    p_contract_sub = p_contract.add_subparsers(dest="contract_command",
+                                               required=True)
+    p_cval = p_contract_sub.add_parser(
+        "validate",
+        help="validate contracts/*.yaml, metrics/*.yaml, and DATA.md bases")
+    p_cval.add_argument("paths", nargs="*",
+                        help="contract or metric files/dirs (default: "
+                             "contracts/ and metrics/)")
+    cval_out = p_cval.add_mutually_exclusive_group()
+    cval_out.add_argument("--json", action="store_true",
+                          help="machine-readable report")
+    cval_out.add_argument("--sarif", action="store_true",
+                          help="SARIF 2.1.0 report")
+    p_cval.set_defaults(func=cmd_contract_validate)
     return parser
 
 
