@@ -19,6 +19,7 @@ import os
 
 import yaml
 
+from truequery import project as P
 from truequery.project import SKIP_DIRS
 
 _CACHE: dict[tuple, dict[str, list[frozenset]]] = {}
@@ -50,14 +51,15 @@ def _test_entries(spec):
 
 
 def _from_contracts(cdir, index):
-    for name in sorted(os.listdir(cdir)):
-        if not name.endswith((".yaml", ".yml")):
+    root = os.path.dirname(cdir)
+    contracts, _ = P.load_contracts_reporting(root)
+    for table, doc in sorted(contracts.items()):
+        if P.is_draft_contract(doc):
             continue
-        doc = _read_yaml(os.path.join(cdir, name))
-        if not isinstance(doc, dict):
+        raw_keys = doc.get("keys")
+        if not isinstance(raw_keys, list):
             continue
-        table = str(doc.get("table") or os.path.splitext(name)[0]).lower()
-        for key in doc.get("keys") or []:
+        for key in raw_keys:
             _add(index, table, key if isinstance(key, list) else [key])
 
 

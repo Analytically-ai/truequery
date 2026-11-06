@@ -24,12 +24,18 @@ only (steps 1–5) — for scripts and CI.
 6. Teach interview (skip questions already answered by the repo), in
    one call as in `flow.md` step 2 (four in the question tool, a fifth
    in text), each with a suggested default — (a) what counts as
-   revenue / the headline metric, (b) which accounts are test or
-   internal, (c) the money convention (smallest unit? currency?),
-   (d) the business date for orders/events, (e) who owns corrections.
-   Write the answers into `DATA.md` as house definitions and into
-   contracts where they pin a grain or key. In a non-interactive
-   session, record the defaults as assumptions instead and say so.
+   revenue / the headline metric, (b) which accounts or status values
+   are test, internal, or expected absences (`means: absent_expected`),
+   (c) the money and unit conventions (`unit: minor|major` + `currency`,
+   or binary vs decimal file sizes `GiB` vs `GB`), (d) the business date
+   and time zone of naive timestamps (`UTC`, `naive`, or `local:<zone>`),
+   (e) who owns corrections and any base directories (`bases:` in
+   `DATA.md` `tq-config`).
+   Write the answers into `DATA.md` as house definitions, into
+   `contracts/*.yaml` (`version: 2`), and into `metrics/*.yaml` where
+   they define a governed metric, then run `truequery contract validate`.
+   In a non-interactive session, record the defaults as assumptions
+   instead and say so.
 
 7. Updates. TrueQuery ships improvements often, and Claude Code doesn't
    auto-update third-party plugins unless asked. Tell the user once, in

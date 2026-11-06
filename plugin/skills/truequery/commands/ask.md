@@ -5,7 +5,8 @@ month?" or "are we losing customers?". Uses `analyze` underneath;
 follows `flow.md`.
 
 1. **Look** quietly (flow step 1): `truequery context`, the relevant
-   contracts and definitions. Do not narrate tooling to the user.
+   contracts, `metrics/*.yaml`, and `DATA.md` definitions. Do not
+   narrate tooling to the user.
 2. **Conflict check first**: if the question contradicts a definition
    ("money we made" where revenue has a house meaning), use the house
    meaning and say so in everyday words in the answer ("I counted only
