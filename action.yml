@@ -1,5 +1,5 @@
 name: TrueQuery
-description: Offline, deterministic checks for SQL (in .sql and Python files) that silently returns the wrong answer, plus a verification receipt.
+description: Offline, deterministic checks for SQL and pandas code that silently return the wrong answer, plus a verification receipt.
 author: Analytically.ai
 
 branding:
@@ -97,6 +97,10 @@ runs:
         import subprocess
         import sys
 
+        # GitHub reads the log as UTF-8; a Windows runner's pipes default to cp1252.
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
         def write_outputs(exit_code: int, sarif_written: str) -> None:
             gh_out = os.environ.get("GITHUB_OUTPUT")
             if gh_out:
@@ -133,7 +137,17 @@ runs:
         if os.environ.get("TQ_ALLOW_UNVERIFIED", "false").strip().lower() == "true":
             base_args.append("--allow-unverified")
 
-        proc = subprocess.run(base_args + paths, capture_output=True, text=True)
+        def run_truequery(args):
+            return subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env={**os.environ, "PYTHONUTF8": "1"},
+            )
+
+        proc = run_truequery(base_args + paths)
         if proc.stdout:
             sys.stdout.write(proc.stdout)
         if proc.stderr:
@@ -142,7 +156,7 @@ runs:
         sarif_path = os.environ.get("TQ_SARIF_FILE", "").strip()
         sarif_written = ""
         if sarif_path:
-            sarif_proc = subprocess.run(base_args + ["--sarif"] + paths, capture_output=True, text=True)
+            sarif_proc = run_truequery(base_args + ["--sarif"] + paths)
             if sarif_proc.stdout and sarif_proc.stdout.strip():
                 parent = os.path.dirname(os.path.abspath(sarif_path))
                 if parent:

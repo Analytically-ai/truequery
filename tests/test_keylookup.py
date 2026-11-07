@@ -5,8 +5,14 @@ matches at most one row, so COUNT(*) stays correct and the rule stays
 silent. Partial coverage or no declared key still fires.
 """
 import os
+import subprocess
+import sys
+
+import pytest
 
 from truequery.analyzers.sql import check_text
+
+SRC = os.path.join(os.path.dirname(__file__), "..", "plugin", "engine", "src")
 
 FX_CONTRACT = """\
 table: fx_rates
@@ -147,3 +153,78 @@ def test_any_one_alternative_key_is_a_lookup(tmp_path):
         ALT_KEYS_CONTRACT, encoding="utf-8")
     res = check_text(ALT_Q, path=str(tmp_path / "q.sql"))
     assert "sql/count-star-after-left-join" not in _rules(res)
+
+
+# -- only a contract that passes validation can suppress ----------------------
+
+INVALID_KEYS_Q = """\
+SELECT o.region, COUNT(*) FROM customers c
+LEFT JOIN orders o ON c.id = o.customer_id GROUP BY 1;
+"""
+VALID_ORDERS = "table: orders\ngrain: guess\nkeys: [customer_id]\n"
+
+
+def _contract_project(tmp_path, **files):
+    cdir = tmp_path / "contracts"
+    cdir.mkdir()
+    for name, text in files.items():
+        (cdir / f"{name}.yaml").write_text(text, encoding="utf-8")
+    query = tmp_path / "q.sql"
+    query.write_text(INVALID_KEYS_Q, encoding="utf-8")
+    return str(query)
+
+
+def _errors(res):
+    return [f["rule"] for f in res["findings"] if f["severity"] == "error"]
+
+
+@pytest.mark.parametrize("contract", [
+    pytest.param(VALID_ORDERS + "bogus: 1\n", id="unknown-key"),
+    pytest.param("table: orders\nkeys: [customer_id]\n", id="missing-grain"),
+    pytest.param("grain: guess\nkeys: [customer_id]\n", id="missing-table"),
+    pytest.param("table: orders\ngrain: guess\nkeys: customer_id\n",
+                 id="keys-not-a-list"),
+    pytest.param("table: 7\ngrain: guess\nkeys: [customer_id]\n",
+                 id="table-not-a-string"),
+])
+def test_invalid_contract_does_not_hide_a_finding(tmp_path, contract):
+    path = _contract_project(tmp_path, orders=contract)
+    res = check_text(INVALID_KEYS_Q, path=path)
+    assert _errors(res) == ["sql/count-star-after-left-join"]
+
+
+def test_valid_contract_with_the_same_keys_still_suppresses(tmp_path):
+    path = _contract_project(tmp_path, orders=VALID_ORDERS)
+    res = check_text(INVALID_KEYS_Q, path=path)
+    assert _rules(res) == []
+
+
+def test_invalid_contract_next_to_a_valid_one_only_loses_its_own_keys(tmp_path):
+    path = _contract_project(
+        tmp_path,
+        customers="table: customers\ngrain: guess\nkeys: [id]\nbogus: 1\n",
+        orders=VALID_ORDERS)
+    res = check_text(INVALID_KEYS_Q, path=path)
+    assert _rules(res) == []
+
+
+def test_two_valid_contracts_for_one_table_both_count(tmp_path):
+    """Key lookup has always merged them. `load_contracts_reporting` keeps
+    only the last per table, so it can't be what supplies the keys."""
+    path = _contract_project(
+        tmp_path,
+        a_orders=VALID_ORDERS,
+        b_orders="table: orders\ngrain: guess\nkeys: [order_id]\n")
+    res = check_text(INVALID_KEYS_Q, path=path)
+    assert _rules(res) == []
+
+
+def test_invalid_contract_is_found_and_named_end_to_end(tmp_path):
+    path = _contract_project(tmp_path, orders=VALID_ORDERS + "bogus: 1\n")
+    proc = subprocess.run(
+        [sys.executable, "-m", "truequery.cli", "review", path],
+        cwd=tmp_path, capture_output=True, encoding="utf-8",
+        env={**os.environ, "PYTHONPATH": SRC, "PYTHONUTF8": "1"}, timeout=60)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "sql/count-star-after-left-join" in proc.stdout
+    assert "invalid contract: contracts/orders.yaml" in proc.stdout

@@ -7,8 +7,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "truequery"
-version = "0.1.6"
-description = "TrueQuery engine: offline, deterministic checks for SQL that silently returns the wrong answer"
+version = "0.1.7"
+description = "TrueQuery engine: offline, deterministic checks for SQL and pandas code that silently return the wrong answer"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
