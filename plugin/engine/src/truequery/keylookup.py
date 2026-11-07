@@ -12,16 +12,20 @@ have several (a surrogate id and a natural key). Sources:
   ``unique_combination_of_columns`` test.
 
 Deterministic, cached per project. Offline, file-level evidence only.
-A contract that fails validation or is still a draft contributes nothing,
-so its keys can't hide a finding (the receipt names invalid and draft
-contracts). Unreadable YAML contributes nothing either; this index never
-breaks a check.
+A contract that fails validation, is a duplicate (a second file for the
+same table), or is still a draft contributes nothing, so its keys can't
+hide a finding (the receipt names invalid, duplicate, and draft contracts).
+Unreadable YAML contributes nothing either; this index never breaks a check.
 """
 import os
 
 import yaml
 
-from truequery.project import SKIP_DIRS, is_draft_contract, load_contract
+from truequery.project import (
+    SKIP_DIRS,
+    is_draft_contract,
+    load_contracts_reporting,
+)
 
 _CACHE: dict[tuple, dict[str, list[frozenset]]] = {}
 
@@ -51,19 +55,14 @@ def _test_entries(spec):
                 yield str(name), args if isinstance(args, dict) else {}
 
 
-def _from_contracts(cdir, index):
-    for name in sorted(os.listdir(cdir)):
-        if not name.endswith((".yaml", ".yml")):
-            continue
-        # Validate one file at a time: two valid contracts for a table both
-        # add their keys here, while invalid or draft contracts add none.
-        try:
-            contract = load_contract(os.path.join(cdir, name))
-        except (OSError, ValueError):
-            continue
+def _from_contracts(root, index):
+    # Share load_contracts_reporting so one rule holds everywhere: the
+    # first valid contract for a table (sorted by file name) is the
+    # contract, while invalid, duplicate, and draft contracts add no keys.
+    contracts, _ = load_contracts_reporting(root)
+    for table, contract in sorted(contracts.items()):
         if is_draft_contract(contract):
             continue
-        table = contract["table"].lower()
         for key in contract["keys"]:
             _add(index, table, key if isinstance(key, list) else [key])
 
@@ -135,7 +134,7 @@ def declared_keys_for(path):
     if cache_key not in _CACHE:
         index: dict[str, list[frozenset]] = {}
         if cdir is not None:
-            _from_contracts(os.path.join(cdir, "contracts"), index)
+            _from_contracts(cdir, index)
         for yml in _models_ymls(root) if root is not None else []:
             _from_dbt_yaml(yml, index)
         _CACHE[cache_key] = index

@@ -746,6 +746,70 @@ def test_duplicate_contracts_and_metrics_are_rejected(tmp_path):
     assert "metrics/rev_2.yaml: [error] metric: duplicate metric 'rev' (already defined in metrics/rev_1.yaml)" in out
 
 
+def test_first_contract_wins_across_context_validate_and_metrics(tmp_path):
+    cdir = tmp_path / "contracts"
+    cdir.mkdir()
+    mdir = tmp_path / "metrics"
+    mdir.mkdir()
+    (cdir / "a.yaml").write_text(
+        "version: 2\ndataset: orders\ngrain: one row per order\n"
+        "keys: [order_id]\ncolumns:\n  order_id: {type: string}\n",
+        encoding="utf-8",
+    )
+    (cdir / "b.yaml").write_text(
+        "version: 2\ndataset: orders\ngrain: one row per customer\n"
+        "keys: [customer_id]\ncolumns:\n  customer_id: {type: string}\n",
+        encoding="utf-8",
+    )
+    (mdir / "orders_cnt.yaml").write_text(
+        "version: 1\nmetric: orders_cnt\nkind: simple\ndataset: orders\n"
+        "measure: {agg: count, column: order_id}\n",
+        encoding="utf-8",
+    )
+    query = tmp_path / "q.sql"
+    query.write_text(
+        "SELECT o.region, COUNT(*) FROM customers c "
+        "LEFT JOIN orders o ON c.id = o.customer_id GROUP BY 1;\n",
+        encoding="utf-8",
+    )
+
+    # 1. `context` uses a.yaml (keys=order_id) and marks only customers missing
+    code, out, err = run_cli("context", "--target", "q.sql", cwd=tmp_path)
+    assert code == 0, err
+    assert "contract orders: grain=one row per order keys=order_id" in out
+    assert "keys=customer_id" not in out
+    assert "CONTRACT_MISSING: customers" in out
+    assert "CONTRACT_MISSING: orders" not in out
+    assert "metric orders_cnt:" in out
+
+    # 2. `contract validate` on the first contract passes; on the second fails
+    code_a, out_a, _ = run_cli(
+        "contract", "validate", "contracts/a.yaml", cwd=tmp_path)
+    assert code_a == 0
+    assert out_a.strip() == "clean: 1 contract validated, no errors"
+
+    code_b, out_b, _ = run_cli(
+        "contract", "validate", "contracts/b.yaml", cwd=tmp_path)
+    assert code_b == 1
+    assert (
+        "contracts/b.yaml: [error] contract: duplicate contract for dataset "
+        "'orders' (already defined in contracts/a.yaml)"
+    ) in out_b
+
+    # 3. Whole-project `contract validate` keeps a.yaml for metric validation
+    (mdir / "bad_col.yaml").write_text(
+        "version: 1\nmetric: bad_col\nkind: simple\ndataset: orders\n"
+        "measure: {agg: count, column: customer_id}\n",
+        encoding="utf-8",
+    )
+    code_all, out_all, _ = run_cli("contract", "validate", cwd=tmp_path)
+    assert code_all == 1
+    assert "contracts/b.yaml: [error] contract: duplicate contract" in out_all
+    assert "contracts/a.yaml:" not in out_all
+    assert "metrics/orders_cnt.yaml:" not in out_all
+    assert "metrics/bad_col.yaml: [error] metric:" in out_all
+
+
 def test_cross_file_validation_and_cli_contract_validate(tmp_path):
     (tmp_path / "DATA.md").write_text(
         "# DATA.md\n\n```tq-config\n"

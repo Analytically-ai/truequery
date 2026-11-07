@@ -1021,7 +1021,6 @@ def load_metrics_reporting(
             problems.append(
                 f"{rel_path}: duplicate metric {metric['metric']!r} "
                 f"(already defined in {prev})")
-            out.pop(m_key, None)
             continue
         seen_files[m_key] = rel_path
         out[m_key] = metric

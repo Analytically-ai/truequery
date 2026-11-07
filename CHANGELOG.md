@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A second contract for the same table is now reported as a duplicate, and its
+  keys are no longer used.
+
 ## 0.1.7 (2026-11-07)
 
 - An invalid contract no longer hides a finding. Its keys used to suppress
