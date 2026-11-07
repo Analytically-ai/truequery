@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tomllib
 
+import pytest
 import yaml
 
 from truequery import __version__
@@ -124,6 +125,7 @@ def test_root_pyproject_matches_engine_metadata():
         engine_cfg = tomllib.load(handle)
 
     assert root_cfg["project"]["name"] == engine_cfg["project"]["name"] == "truequery"
+    assert root_cfg["project"]["description"] == engine_cfg["project"]["description"]
     assert root_cfg["project"]["dependencies"] == engine_cfg["project"]["dependencies"]
     assert root_cfg["project"]["scripts"] == engine_cfg["project"]["scripts"]
     assert root_cfg["project"]["requires-python"] == engine_cfg["project"]["requires-python"]
@@ -318,6 +320,76 @@ def test_github_action_manifest_and_runner(tmp_path):
     assert sarif_doc["version"] == "2.1.0"
     results = sarif_doc["runs"][0]["results"]
     assert any(r["ruleId"] == "sql/null-equality-comparison" for r in results)
+
+
+# Stands in for subprocess.run on a Windows runner: the script's own stdout
+# starts as cp1252, and text=True alone decodes a child's output as cp1252.
+_WINDOWS_DRIVER = """
+import json, subprocess, sys
+sys.stdout.reconfigure(encoding="cp1252")
+sys.stderr.reconfigure(encoding="cp1252")
+RAW = sys.argv[1].encode("utf-8") + bytes([0x81]) + b"\\n"
+calls = []
+def fake_run(args, **kwargs):
+    calls.append({"sarif": "--sarif" in args,
+                  "env": (kwargs.get("env") or {}).get("PYTHONUTF8")})
+    text = RAW.decode(kwargs.get("encoding") or "cp1252",
+                      kwargs.get("errors") or "strict")
+    with open(sys.argv[2], "w", encoding="utf-8") as handle:
+        json.dump(calls, handle)
+    return subprocess.CompletedProcess(args, 3, text, text)
+subprocess.run = fake_run
+exec(sys.argv[3])
+"""
+
+
+def test_action_logs_are_utf8_on_a_windows_runner(tmp_path):
+    """We can't run a Windows runner here, so this drives the Action's real
+    script with what differs there: cp1252 for its stdout and its pipes."""
+    calls_file = tmp_path / "calls.json"
+    sarif_file = tmp_path / "report.sarif"
+    env = {**os.environ, "TQ_VENV_DIR": str(tmp_path), "TQ_PATH": ".",
+           "TQ_SARIF_FILE": str(sarif_file), "TQ_SUMMARY": "false",
+           "GITHUB_OUTPUT": str(tmp_path / "output.txt")}
+    env.pop("PYTHONUTF8", None)
+    env.pop("PYTHONIOENCODING", None)
+    # An arrow isn't in cp1252: writing it as cp1252 would crash the step.
+    message = "rule \u2014 why \u00b7 more \u2192 end"
+    proc = subprocess.run(
+        [sys.executable, "-c", _WINDOWS_DRIVER, message, str(calls_file),
+         _extract_action_python()],
+        cwd=tmp_path, env=env, capture_output=True, timeout=60)
+    assert proc.returncode == 3, proc.stderr.decode("utf-8", "replace")
+    assert proc.stdout.decode("utf-8") == message + "\ufffd\n"
+    assert proc.stderr.decode("utf-8") == message + "\ufffd\n"
+    with open(calls_file, encoding="utf-8") as handle:
+        calls = json.load(handle)
+    assert [c["sarif"] for c in calls] == [False, True]  # both calls
+    assert [c["env"] for c in calls] == ["1", "1"]
+    assert sarif_file.read_text(encoding="utf-8") == message + "\ufffd\n"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses a POSIX shell script")
+def test_action_reads_a_real_child_process_as_utf8(tmp_path):
+    """The same keywords on a real subprocess: the setting reaches the child
+    and a stray byte doesn't crash the step."""
+    bindir = tmp_path / "venv" / "bin"
+    bindir.mkdir(parents=True)
+    fake = bindir / "truequery"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "printf 'utf8=%s \\342\\200\\224 \\377\\n' \"$PYTHONUTF8\"\n"
+        "exit 3\n", encoding="utf-8")
+    fake.chmod(0o755)
+    env = {**os.environ, "TQ_VENV_DIR": str(tmp_path / "venv"), "TQ_PATH": ".",
+           "TQ_SUMMARY": "false",
+           "GITHUB_OUTPUT": str(tmp_path / "output.txt")}
+    env.pop("PYTHONUTF8", None)
+    proc = subprocess.run(
+        [sys.executable, "-c", _extract_action_python()],
+        cwd=tmp_path, env=env, capture_output=True, timeout=60)
+    assert proc.returncode == 3, proc.stderr.decode("utf-8", "replace")
+    assert proc.stdout.decode("utf-8") == "utf8=1 \u2014 \ufffd\n"
 
 
 def test_github_action_error_edges(tmp_path):

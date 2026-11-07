@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.7 (2026-11-07)
+
+- An invalid contract no longer hides a finding. Its keys used to suppress
+  `sql/count-star-after-left-join`, while the receipt listed the contract as
+  invalid. **Heads-up:** a project with an invalid contract may see new
+  findings.
+- Four project rules (`model/unique-key-merge-key`,
+  `dq/uniqueness-key-no-duplicates`, `ingest/declare-source-freshness`,
+  `orch/explicit-catchup-policy`) no longer print their rule name twice.
+- The "rule settings changed" notice now starts with `[TrueQuery]`.
+- The PyPI page's check counts are corrected.
+- Windows logs in the GitHub Action show `—` and `·` correctly.
+
 ## 0.1.6 (2026-11-04)
 
 pandas pipelines are checked too.

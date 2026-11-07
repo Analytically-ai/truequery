@@ -12,14 +12,15 @@ have several (a surrogate id and a natural key). Sources:
   ``unique_combination_of_columns`` test.
 
 Deterministic, cached per project. Offline, file-level evidence only.
-Unreadable YAML contributes nothing (the receipt reports invalid
-contracts; this index never breaks a check).
+A contract that fails validation contributes nothing, so its keys can't
+hide a finding (the receipt names it as invalid). Unreadable YAML
+contributes nothing either; this index never breaks a check.
 """
 import os
 
 import yaml
 
-from truequery.project import SKIP_DIRS
+from truequery.project import SKIP_DIRS, load_contract
 
 _CACHE: dict[tuple, dict[str, list[frozenset]]] = {}
 
@@ -53,11 +54,15 @@ def _from_contracts(cdir, index):
     for name in sorted(os.listdir(cdir)):
         if not name.endswith((".yaml", ".yml")):
             continue
-        doc = _read_yaml(os.path.join(cdir, name))
-        if not isinstance(doc, dict):
+        # The same validation as load_contracts_reporting, one file at a
+        # time: that function keeps one contract per table, and two valid
+        # contracts for a table both add their keys here.
+        try:
+            contract = load_contract(os.path.join(cdir, name))
+        except (OSError, ValueError):
             continue
-        table = str(doc.get("table") or os.path.splitext(name)[0]).lower()
-        for key in doc.get("keys") or []:
+        table = contract["table"].lower()
+        for key in contract["keys"]:
             _add(index, table, key if isinstance(key, list) else [key])
 
 

@@ -9,7 +9,7 @@ Add TrueQuery to `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.6
+    rev: v0.1.7
     hooks:
       - id: truequery
 ```
@@ -19,7 +19,7 @@ repos:
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.6
+    rev: v0.1.7
     hooks:
       - id: truequery-python
 ```
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Analytically-ai/truequery@v0.1.6
+      - uses: Analytically-ai/truequery@v0.1.7
         with:
           path: .
 ```
@@ -68,7 +68,7 @@ jobs:
 ### Uploading SARIF to GitHub Code Scanning
 
 ```yaml
-      - uses: Analytically-ai/truequery@v0.1.6
+      - uses: Analytically-ai/truequery@v0.1.7
         id: truequery
         continue-on-error: true
         with:

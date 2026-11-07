@@ -21,7 +21,8 @@ what it didn't.
 One tool for every coding agent: **Claude Code** and **Muse Code** today,
 **Gemini CLI** and **Codex** next, then **Cursor** and **GitHub Copilot**.
 The checker runs anywhere: any terminal, any CI, any agent.
-[Install for your agent →](#install)
+[Install for your agent →](#install) ·
+[Read the docs →](https://analytically.ai/truequery/docs)
 
 ## One question, two answers
 
@@ -142,6 +143,8 @@ answers.
 
 `model`, `ingest` and `orchestrate` also work: they start `build` with that
 intent.
+
+[The docs](https://analytically.ai/truequery/docs) have a page for each command in the table.
 
 ## The checker
 
@@ -308,12 +311,12 @@ That installs `truequery` and the short alias `tq`.
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.6
+    rev: v0.1.7
     hooks:
       - id: truequery
 ```
 
-**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.6` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
+**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.7` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
 
 ### Try it on the demo shop
 
