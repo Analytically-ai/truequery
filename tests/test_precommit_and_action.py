@@ -360,8 +360,9 @@ def test_action_logs_are_utf8_on_a_windows_runner(tmp_path):
          _extract_action_python()],
         cwd=tmp_path, env=env, capture_output=True, timeout=60)
     assert proc.returncode == 3, proc.stderr.decode("utf-8", "replace")
-    assert proc.stdout.decode("utf-8") == message + "\ufffd\n"
-    assert proc.stderr.decode("utf-8") == message + "\ufffd\n"
+    # Windows writes \r\n; what matters here is that the bytes are UTF-8.
+    for stream in (proc.stdout, proc.stderr):
+        assert stream.decode("utf-8").replace("\r\n", "\n") == message + "\ufffd\n"
     with open(calls_file, encoding="utf-8") as handle:
         calls = json.load(handle)
     assert [c["sarif"] for c in calls] == [False, True]  # both calls
