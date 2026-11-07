@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 
 import sqlglot
 import yaml
@@ -40,11 +41,18 @@ _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _LOCAL_TZ_RE = re.compile(
     r"^local:[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)+$")
 _DURATION_RE = re.compile(r"^[1-9]\d*(?:ms|s|min|h|d)$")
-# Safe SQL identifier (column name) and dotted relation (schema.table).
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_DOTTED_IDENT_RE = re.compile(
-    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
-_TODO_WORD_RE = re.compile(r"\bTODO\b", re.IGNORECASE)
+# Names in Contract v2 and Metric v1 allow Unicode letters, digits (plus
+# combining marks for NFD strings), `_`, spaces, `-`, and `$`, with `.`
+# between non-empty parts in `dataset`, `table`, and `location.relation`.
+# Quotes, backticks, `;`, parentheses, `*`, and all other punctuation or
+# control characters are rejected.
+#
+# NOTE FOR PR B: Every identifier interpolated into SQL MUST be quoted
+# (e.g. `exp.column(col, quoted=True)` / `exp.table_(..., quoted=True)`) and
+# metric SQL MUST be built from the parsed sqlglot AST tree, NEVER from the
+# raw `where` text.
+_ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_TODO_WORD_RE = re.compile(r"\bTODO\b")
 
 CONTRACT_V2_TOP_KEYS = frozenset({
     "version", "dataset", "table", "meaning", "kind", "status",
@@ -93,12 +101,39 @@ def _non_empty_str(val) -> bool:
     return isinstance(val, str) and bool(val.strip())
 
 
+def _is_ident_char(ch: str) -> bool:
+    if ch in ("_", " ", "-", "$"):
+        return True
+    cat = unicodedata.category(ch)
+    return cat[0] == "L" or cat == "Nd" or cat in ("Mn", "Mc")
+
+
 def is_valid_ident(val) -> bool:
-    return isinstance(val, str) and bool(_IDENT_RE.match(val))
+    """True when `val` is a single v2/metric name part (Unicode letters,
+    decimal digits, `_`, spaces, `-`, `$`; non-empty and without leading or
+    trailing spaces). PR B must quote every identifier when building SQL."""
+    if not isinstance(val, str) or not val or val != val.strip():
+        return False
+    if unicodedata.category(val[0]) in ("Mn", "Mc"):
+        return False
+    return all(_is_ident_char(ch) for ch in val)
 
 
 def is_valid_dotted_ident(val) -> bool:
-    return isinstance(val, str) and bool(_DOTTED_IDENT_RE.match(val))
+    """True when `val` is one or more `.`-separated `is_valid_ident` parts."""
+    if not isinstance(val, str) or not val:
+        return False
+    parts = val.split(".")
+    return bool(parts) and all(is_valid_ident(part) for part in parts)
+
+
+def is_unconfirmed_grain(grain) -> bool:
+    """True only when `grain` contains the word TODO or is 'unknown' (including
+    the `unknown  # TODO: ...` form `truequery init` writes)."""
+    if not isinstance(grain, str):
+        return False
+    norm = unicodedata.normalize("NFC", grain.strip())
+    return bool(_TODO_WORD_RE.search(norm) or norm.lower() == "unknown")
 
 
 def _is_safe_rel_path(val: str) -> bool:
@@ -148,7 +183,9 @@ def validate_bases(bases, source: str = "DATA.md tq-config") -> dict[str, dict]:
                     f"{source}: bases.{name} has unknown keys {sorted(unknown)}")
             env_var = spec.get("env")
             default_val = spec.get("default")
-            if env_var is not None and not is_valid_ident(env_var):
+            if env_var is not None and (
+                    not isinstance(env_var, str)
+                    or not _ENV_VAR_RE.match(env_var)):
                 raise ValueError(
                     f"{source}: bases.{name}.env must be a valid environment "
                     "variable name")
@@ -571,12 +608,10 @@ def _validate_contract_v2_inner(raw: dict, path: str) -> dict:
     grain = raw.get("grain")
     if "grain" not in raw or not _non_empty_str(grain):
         raise ValueError(f"{path}: grain must be a non-empty string")
-    if status != "draft" and (
-            _TODO_WORD_RE.search(grain)
-            or grain.strip().lower().startswith("unknown")):
+    if status != "draft" and is_unconfirmed_grain(grain):
         raise ValueError(
-            f"{path}: grain {grain!r} is unconfirmed (contains TODO/unknown); "
-            "confirm the grain or set status: draft")
+            f"{path}: grain {grain!r} is unconfirmed (contains TODO or is "
+            "'unknown'); confirm the grain or set status: draft")
 
     if "keys" not in raw:
         raise ValueError(f"{path}: missing keys ['keys']")
@@ -654,6 +689,9 @@ def validate_metric_where(where_str: str, path: str, field_name: str,
     Returns the sorted list of column names referenced in `where_str`.
     Raises ValueError on any disallowed syntax, function call, subquery,
     table qualifier, SQL comment, bare column/boolean, or unknown column.
+
+    NOTE FOR PR B: Metric SQL must be built from the parsed sqlglot AST tree
+    with every identifier quoted, never by splicing the raw `where_str` text.
     """
     if not _non_empty_str(where_str):
         raise ValueError(f"{path}: {field_name}.where must be a non-empty string")

@@ -314,22 +314,8 @@ def load_contract(path: str) -> dict:
         raise ContractError(f"{path}: missing keys {missing}")
     if not isinstance(raw["table"], str) or not raw["table"]:
         raise ContractError(f"{path}: table must be a non-empty string")
-    if not contract_v2.is_valid_dotted_ident(raw["table"]):
-        raise ContractError(
-            f"{path}: table ({raw['table']!r}) must be a plain table or "
-            "schema.table identifier")
-    if not isinstance(raw["grain"], str) or not raw["grain"].strip():
-        raise ContractError(f"{path}: grain must be a non-empty string")
     if not isinstance(raw["keys"], list):
         raise ContractError(f"{path}: keys must be a list")
-    v1_cols = raw.get("columns") if isinstance(raw.get("columns"), dict) else None
-    try:
-        contract_v2.validate_keys_identifiers(
-            raw["keys"], path, columns=v1_cols)
-        contract_v2.validate_partition_key_identifiers(
-            raw.get("partition_key"), path, columns=v1_cols)
-    except ValueError as exc:
-        raise ContractError(str(exc)) from None
     return raw
 
 
@@ -373,9 +359,7 @@ def is_draft_contract(contract: dict) -> bool:
     TODO/unknown grain (such as contracts seeded by `truequery init`)."""
     if contract.get("status") == "draft":
         return True
-    grain = str(contract.get("grain") or "")
-    return bool(contract_v2._TODO_WORD_RE.search(grain)
-                or grain.strip().lower().startswith("unknown"))
+    return contract_v2.is_unconfirmed_grain(contract.get("grain"))
 
 
 def load_contracts_reporting(root: str) -> tuple[dict[str, dict], list[str]]:

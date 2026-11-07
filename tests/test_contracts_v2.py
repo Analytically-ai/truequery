@@ -55,6 +55,167 @@ def test_v1_contracts_remain_backwards_compatible(tmp_path):
     assert loaded["orders"]["keys"] == ["order_id"]
 
 
+def test_v1_contracts_keep_exact_0_1_6_name_rules(tmp_path):
+    """v1 contracts keep exact 0.1.6 rules with no new name checks."""
+    cdir = tmp_path / "contracts"
+    cdir.mkdir()
+    examples = {
+        "bq_unquoted.yaml": (
+            "table: my-project.ds.orders\n"
+            "grain: one row per order\n"
+            "keys: [order_id]\n"
+        ),
+        "bq_backticked.yaml": (
+            'table: "`my-project.ds.orders`"\n'
+            "grain: one row per order\n"
+            "keys: [order_id]\n"
+        ),
+        "spaced_names.yaml": (
+            'table: "Order Items"\n'
+            "grain: unknown users per day\n"
+            'keys: ["Order ID"]\n'
+            'partition_key: "Order Date"\n'
+        ),
+    }
+    for fname, content in examples.items():
+        path = cdir / fname
+        path.write_text(content, encoding="utf-8")
+        doc = P.load_contract(str(path))
+        assert doc["table"]
+
+    loaded, problems = P.load_contracts_reporting(str(tmp_path))
+    assert problems == []
+    assert set(loaded) == {
+        "my-project.ds.orders",
+        "`my-project.ds.orders`",
+        "order items",
+    }
+    assert not P.is_draft_contract(loaded["order items"])
+
+    code, out, err = run_cli("contract", "validate", cwd=tmp_path)
+    assert code == 0, err
+    assert "3 contracts validated, no errors" in out
+
+
+def test_v2_and_metric_names_allow_unicode_spaces_hyphens_dollar_and_reject_syntax():
+    c_doc = C2.validate_contract_v2({
+        "version": 2,
+        "dataset": "my-project.ds.Order Items",
+        "kind": "table",
+        "location": {"relation": "my-project.raw.Order Items"},
+        "grain": "unknown users per day",
+        "keys": ["order-id", ["file size", "número"]],
+        "partition_key": "order-date",
+        "freshness_sla": {"column": "updated ts", "max_age": "12h"},
+        "columns": {
+            "order-id": {"type": "string"},
+            "file size": {"type": "number", "unit": "bytes", "size_of": "artifact path"},
+            "artifact path": {"type": "path"},
+            "número": {"type": "integer"},
+            "nu\u0301mero_nfd": {"type": "integer"},
+            "$amount": {"type": "number", "unit": "major", "currency": "USD"},
+            "order-date": {"type": "date"},
+            "updated ts": {"type": "timestamp", "time_zone": "UTC"},
+        },
+    }, "contracts/order_items.yaml")
+    assert c_doc["dataset"] == "my-project.ds.Order Items"
+
+    m_doc = C2.validate_metric({
+        "version": 1,
+        "metric": "total-file size$",
+        "kind": "simple",
+        "dataset": "my-project.ds.Order Items",
+        "measure": {
+            "agg": "sum",
+            "column": "file size",
+            "where": '"order-id" <> \'test\' AND número > 0',
+        },
+        "grain": ["order-date", "número"],
+        "unit": "bytes",
+    }, "metrics/file_size.yaml", allowed_columns=set(c_doc["columns"]))
+    assert m_doc["metric"] == "total-file size$"
+
+    for bad_col in [
+        "price*qty",
+        "x) FROM read_text('/etc/passwd') --",
+        "`order_id`",
+        '"order_id"',
+        "'order_id'",
+        "a;b",
+        "fn(x)",
+        "a.b",
+        " leading",
+        "trailing ",
+    ]:
+        with pytest.raises(ValueError, match="plain column identifier"):
+            C2.validate_metric({
+                "version": 1,
+                "metric": "m",
+                "kind": "simple",
+                "dataset": "orders",
+                "measure": {"agg": "sum", "column": bad_col},
+            }, "metrics/m.yaml")
+
+    for bad_ds in [
+        "`my-project.ds.orders`",
+        '"my-project.ds.orders"',
+        "orders; DROP TABLE x",
+        "x) FROM y --",
+        "a..b",
+        ".orders",
+        "orders.",
+    ]:
+        with pytest.raises(ValueError, match="plain table"):
+            C2.validate_contract_v2({
+                "version": 2,
+                "dataset": bad_ds,
+                "grain": "one row per id",
+                "keys": ["id"],
+            }, "contracts/bad.yaml")
+
+
+def test_grain_unconfirmed_only_for_todo_word_or_exact_unknown(tmp_path):
+    # Real grain starting with 'unknown' is confirmed, not draft
+    doc = C2.validate_contract_v2({
+        "version": 2,
+        "dataset": "daily_traffic",
+        "grain": "unknown users per day",
+        "keys": ["day"],
+    }, "contracts/daily_traffic.yaml")
+    assert not P.is_draft_contract(doc)
+
+    # Exact 'unknown', 'TODO', and the `unknown  # TODO: ...` form `init` writes
+    # are unconfirmed:
+    for unconfirmed in [
+        "unknown",
+        "  UNKNOWN  ",
+        "TODO",
+        "one row per TODO",
+        "unknown  # TODO: one row per <what>",
+    ]:
+        assert C2.is_unconfirmed_grain(unconfirmed)
+        with pytest.raises(ValueError, match="is unconfirmed"):
+            C2.validate_contract_v2({
+                "version": 2,
+                "dataset": "daily_traffic",
+                "grain": unconfirmed,
+                "keys": ["day"],
+            }, "contracts/daily_traffic.yaml")
+
+    # Verify the unquoted YAML form written by `truequery init` (`grain: unknown  # TODO: ...`)
+    cdir = tmp_path / "contracts"
+    cdir.mkdir()
+    (cdir / "seeded.yaml").write_text(
+        "table: seeded\n"
+        "grain: unknown  # TODO: one row per <what>\n"
+        "keys: [id]\n",
+        encoding="utf-8",
+    )
+    loaded = P.load_contract(str(cdir / "seeded.yaml"))
+    assert loaded["grain"] == "unknown"
+    assert P.is_draft_contract(loaded)
+
+
 def test_v1_version_true_is_rejected(tmp_path):
     cdir = tmp_path / "contracts"
     cdir.mkdir()
@@ -901,6 +1062,19 @@ def test_published_json_schemas_with_real_jsonschema_validator():
                 "email": {"type": "string", "pii": True},
             },
         },
+        {
+            "version": 2,
+            "dataset": "my-project.ds.Order Items",
+            "location": {"relation": "my-project.raw.Order Items"},
+            "grain": "unknown users per day",
+            "keys": ["order-id", ["file size", "número", "nº_pedido", "latency_µs", "$amount"]],
+        },
+        {
+            "version": 2,
+            "dataset": "pagos",
+            "grain": "una fila por método de pago",
+            "keys": ["id"],
+        },
     ]
     for doc in valid_contracts:
         c_validator.validate(doc)
@@ -911,11 +1085,16 @@ def test_published_json_schemas_with_real_jsonschema_validator():
         {"version": True, "dataset": "x", "grain": "g", "keys": ["id"]},
         {"version": 2, "grain": "g", "keys": ["id"]},
         {"version": 2, "dataset": "x; DROP TABLE y", "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "`my-project.ds.orders`", "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "orders\n", "grain": "g", "keys": ["id"]},
         {"version": 2, "dataset": "x", "grain": "   ", "keys": ["id"]},
         {"version": 2, "dataset": "x", "grain": "TODO", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "grain": "unknown", "keys": ["id"]},
         {"version": 2, "dataset": "x", "grain": "unknown  # TODO", "keys": ["id"]},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["   "]},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["a*b"]},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["price＊qty"]},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ['"Order ID"']},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
          "partition_key": "bad;col"},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
@@ -1002,6 +1181,14 @@ def test_published_json_schemas_with_real_jsonschema_validator():
             "measure": {"agg": "sum", "column": "size"},
             "unit": "GiB",
         },
+        {
+            "metric": "total-file size$",
+            "kind": "simple",
+            "dataset": "my-project.ds.Order Items",
+            "measure": {"agg": "sum", "column": "file size"},
+            "grain": ["order-id", "número"],
+            "unit": "bytes",
+        },
     ]
     for mdoc in valid_metrics:
         m_validator.validate(mdoc)
@@ -1021,7 +1208,11 @@ def test_published_json_schemas_with_real_jsonschema_validator():
          "measure": {"agg": "sum", "column": "x) FROM read_text('/etc/passwd') --"}},
         {"metric": "m", "kind": "simple", "dataset": "d",
          "measure": {"agg": "sum", "column": "price*qty"}},
+        {"metric": "m", "kind": "simple", "dataset": "d",
+         "measure": {"agg": "sum", "column": "`file size`"}},
         {"metric": "m", "kind": "simple", "dataset": "d; DROP TABLE x",
+         "measure": {"agg": "count", "column": "*"}},
+        {"metric": "m", "kind": "simple", "dataset": "`my-project.ds.orders`",
          "measure": {"agg": "count", "column": "*"}},
         {"metric": "m", "kind": "ratio", "dataset": "d",
          "numerator": {"agg": "count", "column": "*"},

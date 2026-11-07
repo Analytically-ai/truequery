@@ -141,7 +141,7 @@
           "grain": {
             "type": "string",
             "not": {
-              "pattern": "(?i)(?:^\\s*unknown\\b|\\bTODO\\b)"
+              "pattern": "(?:^\\s*[Uu][Nn][Kk][Nn][Oo][Ww][Nn]\\s*(?!\\n)$|(?:^|[^A-Za-z0-9_\\u00c0-\\u024f])TODO(?:$|[^A-Za-z0-9_\\u00c0-\\u024f]))"
             }
           },
           "columns": {
@@ -182,11 +182,11 @@
   "$defs": {
     "identifier": {
       "type": "string",
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      "pattern": "^[A-Za-z0-9_$\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-](?:[A-Za-z0-9_ $\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-]*[A-Za-z0-9_$\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-])?(?!\\n)$"
     },
     "dottedIdentifier": {
       "type": "string",
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+      "pattern": "^[A-Za-z0-9_$\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-](?:[A-Za-z0-9_ $\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-]*[A-Za-z0-9_$\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-])?(?:\\.[A-Za-z0-9_$\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-](?:[A-Za-z0-9_ $\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-]*[A-Za-z0-9_$\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-])?)*(?!\\n)$"
     },
     "safeRelPath": {
       "type": "string",
