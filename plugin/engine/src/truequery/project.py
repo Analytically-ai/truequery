@@ -15,6 +15,7 @@ import yaml
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 
+from truequery import contract_v2
 from truequery.analyzers import sql as analyzer
 
 SKIP_DIRS = ("target", "dbt_packages", "node_modules", ".venv", ".git",
@@ -246,6 +247,8 @@ def load_config(root: str) -> dict | None:
                           "(key: value lines)")
     try:
         data["dialect"] = normalize_dialect(data.get("dialect"))
+        if "bases" in data:
+            data["bases"] = contract_v2.validate_bases(data.get("bases"))
     except ValueError as exc:
         raise ConfigError(f"DATA.md tq-config: {exc}") from None
     return data
@@ -275,7 +278,7 @@ def _glob_match(relpath: str, pattern: str) -> bool:
 
 # -- contracts ---------------------------------------------------------------
 CONTRACT_REQUIRED = ("table", "grain", "keys")
-CONTRACT_OPTIONAL = ("partition_key", "pii", "freshness_sla",
+CONTRACT_OPTIONAL = ("version", "partition_key", "pii", "freshness_sla",
                      "allowed_values", "deprecated", "quirks",
                      "columns", "units")
 
@@ -291,8 +294,18 @@ def load_contract(path: str) -> dict:
     except yaml.YAMLError as exc:
         raise ContractError(f"{path}: not valid YAML: {_yaml_problem(exc)}") \
             from None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ContractError(f"{path}: cannot read file: {exc}") from None
     if not isinstance(raw, dict):
         raise ContractError(f"{path}: top level must be a mapping")
+    version = raw.get("version")
+    if isinstance(version, bool) or version not in (None, 1, 2):
+        raise ContractError(
+            f"{path}: unsupported contract version {version!r} "
+            "(expected 1 or 2)")
+    if version == 2:
+        return contract_v2.validate_contract_v2(
+            raw, path, error_cls=ContractError)
     unknown = set(raw) - set(CONTRACT_REQUIRED) - set(CONTRACT_OPTIONAL)
     if unknown:
         raise ContractError(f"{path}: unknown keys {sorted(unknown)}")
@@ -341,25 +354,347 @@ def load_contracts(root: str) -> dict[str, dict]:
     return load_contracts_reporting(root)[0]
 
 
+def is_draft_contract(contract: dict) -> bool:
+    """True when a contract is explicitly status: draft or has an unconfirmed
+    TODO/unknown grain (such as contracts seeded by `truequery init`)."""
+    if contract.get("status") == "draft":
+        return True
+    return contract_v2.is_unconfirmed_grain(contract.get("grain"))
+
+
 def load_contracts_reporting(root: str) -> tuple[dict[str, dict], list[str]]:
-    """({lower(table): contract}, [problem, ...]). A contract that fails
-    strict load is left out and named in the problems, which the
-    receipt prints under "not checked"."""
+    """({lower(table): contract}, [problem, ...]). The first valid contract
+    for a table (sorted by file name) is the contract; any invalid file or
+    later duplicate for the same table is left out and named in problems,
+    which the receipt prints under "not checked"."""
     out: dict[str, dict] = {}
+    seen_files: dict[str, str] = {}
     problems: list[str] = []
     cdir = os.path.join(root, "contracts")
     if not os.path.isdir(cdir):
         return out, problems
-    for name in sorted(os.listdir(cdir)):
+    try:
+        config = load_config(root)
+        bases = (config or {}).get("bases") or {}
+    except ConfigError:
+        bases = {}
+    try:
+        names = sorted(os.listdir(cdir))
+    except OSError as exc:
+        problems.append(f"contracts/: cannot read directory: {exc}")
+        return out, problems
+    for name in names:
         if not name.endswith((".yaml", ".yml")):
             continue
+        rel_path = f"contracts/{name}"
         try:
             contract = load_contract(os.path.join(cdir, name))
         except (OSError, ValueError) as exc:
             problems.append(str(exc).replace(cdir + os.sep, "contracts/"))
             continue
-        out[contract["table"].lower()] = contract
+        base_problems = contract_v2.check_contract_bases(
+            contract, bases, rel_path)
+        if base_problems:
+            problems.extend(base_problems)
+            continue
+        t_key = contract["table"].lower()
+        if t_key in seen_files:
+            prev = seen_files[t_key]
+            problems.append(
+                f"{rel_path}: duplicate contract for dataset "
+                f"{contract['table']!r} (already defined in {prev})")
+            continue
+        seen_files[t_key] = rel_path
+        out[t_key] = contract
     return out, problems
+
+
+def load_metrics(root: str) -> dict[str, dict]:
+    """{lower(metric): metric} for every metric in metrics/*.yaml that loads."""
+    return load_metrics_reporting(root)[0]
+
+
+def load_metrics_reporting(
+    root: str,
+    contracts: dict[str, dict] | None = None,
+) -> tuple[dict[str, dict], list[str]]:
+    """({lower(metric): metric}, [problem, ...]) for metrics/*.yaml."""
+    if contracts is None:
+        contracts, _ = load_contracts_reporting(root)
+    return contract_v2.load_metrics_reporting(
+        root, contracts=contracts, match_fn=match_contract)
+
+
+def metrics_for_tables(tables: list[str], contracts: dict[str, dict],
+                       metrics: dict[str, dict]) -> dict[str, dict]:
+    """Return {metric_name: metric} for every metric whose dataset matches
+    one of `tables` (via `match_contract` or direct case-insensitive name)."""
+    matched_keys = {match_contract(t, contracts) for t in tables} - {None}
+    table_lows = {t.lower() for t in tables} | {
+        t.split(".")[-1].lower() for t in tables}
+    out: dict[str, dict] = {}
+    for _, metric in sorted(metrics.items()):
+        ds = metric["dataset"]
+        m_key = match_contract(ds, contracts)
+        if ((m_key is not None and m_key in matched_keys)
+                or ds.lower() in table_lows):
+            out[metric["metric"]] = metric
+    return out
+
+
+def _find_project_root(start_path: str, fallback: str) -> str:
+    """Nearest ancestor directory containing DATA.md or contracts/."""
+    cur = (os.path.abspath(start_path)
+           if os.path.isdir(start_path)
+           else os.path.dirname(os.path.abspath(start_path)))
+    while True:
+        if (os.path.isfile(os.path.join(cur, "DATA.md"))
+                or os.path.isdir(os.path.join(cur, "contracts"))
+                or os.path.isdir(os.path.join(cur, "metrics"))):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return fallback
+        cur = parent
+
+
+def validate_contracts_and_metrics(
+    root: str,
+    paths: list[str] | None = None,
+) -> dict:
+    """Validate contracts/*.yaml, metrics/*.yaml, and DATA.md bases.
+
+    When `paths` is empty/None, validates `contracts/` and `metrics/` under
+    `root`. When `paths` is given, validates those files or folders (plus
+    cross-file references against the project's `DATA.md` and `contracts/`).
+    Raises ContextError if an explicit path does not exist.
+    """
+    eff_root = root
+    if paths:
+        first_abs = os.path.abspath(paths[0])
+        if os.path.exists(first_abs):
+            eff_root = _find_project_root(first_abs, root)
+    config = load_config(eff_root)  # raises ConfigError on malformed DATA.md
+    bases = (config or {}).get("bases") or {}
+
+    if not paths:
+        target_files: list[tuple[str, str]] = []
+        for kind_dir, kind in (("contracts", "contract"),
+                               ("metrics", "metric")):
+            dpath = os.path.join(eff_root, kind_dir)
+            if not os.path.isdir(dpath):
+                continue
+            for name in sorted(os.listdir(dpath)):
+                if name.endswith((".yaml", ".yml")):
+                    target_files.append((os.path.join(dpath, name), kind))
+    else:
+        target_files = []
+        for raw_p in paths:
+            abs_p = os.path.abspath(raw_p)
+            if os.path.isdir(abs_p):
+                base_name = os.path.basename(abs_p.rstrip("/\\"))
+                if base_name in ("contracts", "metrics"):
+                    k = "contract" if base_name == "contracts" else "metric"
+                    for name in sorted(os.listdir(abs_p)):
+                        if name.endswith((".yaml", ".yml")):
+                            target_files.append(
+                                (os.path.join(abs_p, name), k))
+                else:
+                    found_sub = False
+                    for sub_dir, k in (("contracts", "contract"),
+                                       ("metrics", "metric")):
+                        sd = os.path.join(abs_p, sub_dir)
+                        if os.path.isdir(sd):
+                            found_sub = True
+                            for name in sorted(os.listdir(sd)):
+                                if name.endswith((".yaml", ".yml")):
+                                    target_files.append(
+                                        (os.path.join(sd, name), k))
+                    is_proj_root = any(
+                        os.path.exists(os.path.join(abs_p, m))
+                        for m in ("DATA.md", "dbt_project.yml", ".git"))
+                    if not found_sub and not is_proj_root:
+                        for name in sorted(os.listdir(abs_p)):
+                            full = os.path.join(abs_p, name)
+                            if os.path.isfile(full) and name.endswith(
+                                    (".yaml", ".yml")):
+                                target_files.append((full, "auto"))
+            elif os.path.isfile(abs_p):
+                parent = os.path.basename(os.path.dirname(abs_p))
+                if parent == "metrics":
+                    target_files.append((abs_p, "metric"))
+                elif parent == "contracts":
+                    target_files.append((abs_p, "contract"))
+                else:
+                    target_files.append((abs_p, "auto"))
+            else:
+                raise ContextError(
+                    f"no such file or directory: {raw_p}")
+
+    # Sort within each directory by file name so the first contract/metric
+    # for a name (sorted by file name) always wins, matching load_contracts.
+    seen: set[str] = set()
+    resolved_targets: list[tuple[str, str]] = []
+    for full_p, kind in sorted(
+            target_files,
+            key=lambda x: (os.path.dirname(x[0]), os.path.basename(x[0]))):
+        if full_p in seen:
+            continue
+        seen.add(full_p)
+        actual_kind = kind
+        if actual_kind == "auto":
+            raw_doc = _read_yaml_file(full_p)
+            if isinstance(raw_doc, dict) and "metric" in raw_doc:
+                actual_kind = "metric"
+            else:
+                actual_kind = "contract"
+        resolved_targets.append((full_p, actual_kind))
+
+    ordered_targets = (
+        [t for t in resolved_targets if t[1] == "contract"]
+        + [t for t in resolved_targets if t[1] == "metric"]
+    )
+
+    # Scan contracts/ and metrics/ in sorted filename order so the first valid
+    # file for a table/metric is always canonical, even when validating one
+    # file on the CLI.
+    project_contracts: dict[str, dict] = {}
+    first_in_cdir: dict[str, str] = {}
+    cdir_eff = os.path.abspath(os.path.join(eff_root, "contracts"))
+    if os.path.isdir(cdir_eff):
+        for cname in sorted(os.listdir(cdir_eff)):
+            if not cname.endswith((".yaml", ".yml")):
+                continue
+            cfull = os.path.abspath(os.path.join(cdir_eff, cname))
+            crel = _rel(cfull, root)
+            try:
+                cdoc = load_contract(cfull)
+            except (OSError, ValueError):
+                continue
+            if contract_v2.check_contract_bases(cdoc, bases, crel):
+                continue
+            t_key = cdoc["table"].lower()
+            if t_key not in first_in_cdir:
+                first_in_cdir[t_key] = cfull
+                project_contracts[t_key] = cdoc
+
+    first_in_mdir: dict[str, str] = {}
+    mdir_eff = os.path.abspath(os.path.join(eff_root, "metrics"))
+    if os.path.isdir(mdir_eff):
+        for mname in sorted(os.listdir(mdir_eff)):
+            if not mname.endswith((".yaml", ".yml")):
+                continue
+            mfull = os.path.abspath(os.path.join(mdir_eff, mname))
+            try:
+                mdoc = contract_v2.load_metric(mfull)
+            except (OSError, ValueError):
+                continue
+            m_key = mdoc["metric"].lower()
+            if m_key not in first_in_mdir:
+                first_in_mdir[m_key] = mfull
+
+    contracts_checked: list[str] = []
+    metrics_checked: list[str] = []
+    problems: list[dict] = []
+    seen_standalone_datasets: dict[str, str] = {}
+    seen_standalone_metrics: dict[str, str] = {}
+
+    for full_p, actual_kind in ordered_targets:
+        rel_p = _rel(full_p, root)
+        if actual_kind == "contract":
+            contracts_checked.append(rel_p)
+            try:
+                contract = load_contract(full_p)
+            except (OSError, ValueError) as exc:
+                msg = str(exc)
+                if msg.startswith(full_p + ": "):
+                    msg = msg[len(full_p) + 2:]
+                problems.append({"file": rel_p, "kind": "contract",
+                                 "message": msg})
+                continue
+            base_probs = contract_v2.check_contract_bases(
+                contract, bases, rel_p)
+            if base_probs:
+                for b_prob in base_probs:
+                    msg = (b_prob[len(rel_p) + 2:]
+                           if b_prob.startswith(rel_p + ": ") else b_prob)
+                    problems.append({"file": rel_p, "kind": "contract",
+                                     "message": msg})
+                continue
+            ds_key = contract["table"].lower()
+            if os.path.dirname(full_p) == cdir_eff:
+                first_full = first_in_cdir.get(ds_key)
+                if first_full is not None and first_full != full_p:
+                    prev = _rel(first_full, root)
+                    problems.append({
+                        "file": rel_p,
+                        "kind": "contract",
+                        "message": (f"duplicate contract for dataset "
+                                    f"{contract['table']!r} (already defined "
+                                    f"in {prev})"),
+                    })
+                    continue
+            else:
+                if ds_key in seen_standalone_datasets:
+                    prev = seen_standalone_datasets[ds_key]
+                    problems.append({
+                        "file": rel_p,
+                        "kind": "contract",
+                        "message": (f"duplicate contract for dataset "
+                                    f"{contract['table']!r} (already defined "
+                                    f"in {prev})"),
+                    })
+                    continue
+                seen_standalone_datasets[ds_key] = rel_p
+                project_contracts[ds_key] = contract
+        else:
+            metrics_checked.append(rel_p)
+            try:
+                metric = contract_v2.load_metric(full_p)
+            except (OSError, ValueError) as exc:
+                msg = str(exc)
+                if msg.startswith(full_p + ": "):
+                    msg = msg[len(full_p) + 2:]
+                problems.append({"file": rel_p, "kind": "metric",
+                                 "message": msg})
+                continue
+            m_key = metric["metric"].lower()
+            if os.path.dirname(full_p) == mdir_eff:
+                first_mfull = first_in_mdir.get(m_key)
+                if first_mfull is not None and first_mfull != full_p:
+                    prev = _rel(first_mfull, root)
+                    problems.append({
+                        "file": rel_p,
+                        "kind": "metric",
+                        "message": (f"duplicate metric {metric['metric']!r} "
+                                    f"(already defined in {prev})"),
+                    })
+            else:
+                if m_key in seen_standalone_metrics:
+                    prev = seen_standalone_metrics[m_key]
+                    problems.append({
+                        "file": rel_p,
+                        "kind": "metric",
+                        "message": (f"duplicate metric {metric['metric']!r} "
+                                    f"(already defined in {prev})"),
+                    })
+                else:
+                    seen_standalone_metrics[m_key] = rel_p
+            for m_prob in contract_v2.check_metric_against_contracts(
+                    metric, project_contracts, rel_p, match_fn=match_contract):
+                msg = (m_prob[len(rel_p) + 2:]
+                       if m_prob.startswith(rel_p + ": ") else m_prob)
+                problems.append({"file": rel_p, "kind": "metric",
+                                 "message": msg})
+
+    problems.sort(key=lambda p: (p["file"], p["message"]))
+    return {
+        "valid": len(problems) == 0,
+        "contracts_checked": contracts_checked,
+        "metrics_checked": metrics_checked,
+        "bases": sorted(bases.keys()),
+        "problems": problems,
+    }
 
 
 def _dbt_built_refs(text: str) -> set[str]:

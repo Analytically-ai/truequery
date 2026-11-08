@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Analytically-ai/truequery/main/plugin/engine/src/truequery/schemas/contract-v2.schema.json",
+  "title": "TrueQuery Dataset Contract v2",
+  "description": "TrueQuery version 2 dataset contract schema for tables and file collections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "grain", "keys"],
+  "anyOf": [
+    {"required": ["dataset"]},
+    {"required": ["table"]}
+  ],
+  "properties": {
+    "version": {
+      "const": 2,
+      "description": "Contract schema version (must be 2)."
+    },
+    "dataset": {
+      "$ref": "#/$defs/dottedIdentifier",
+      "description": "Dataset or relation name."
+    },
+    "table": {
+      "$ref": "#/$defs/dottedIdentifier",
+      "description": "Alias for dataset (preserved for v1 compatibility)."
+    },
+    "meaning": {
+      "type": ["string", "null"],
+      "description": "Plain-English description of what the dataset represents."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["table", "files"],
+      "default": "table",
+      "description": "Dataset storage kind: warehouse/local DB table or file collection."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["confirmed", "draft"],
+      "default": "confirmed",
+      "description": "Whether the contract is confirmed by the team or an inferred draft."
+    },
+    "inferred_from": {
+      "type": ["string", "null"],
+      "pattern": "\\S",
+      "description": "Required when status is 'draft'; describes the sample or source."
+    },
+    "location": {
+      "type": ["object", "null"]
+    },
+    "grain": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "Plain-English grain declaration (e.g. 'one row per fetch attempt')."
+    },
+    "keys": {
+      "type": "array",
+      "description": "Candidate keys: string elements are single-column keys; nested string arrays are composite keys.",
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/identifier"},
+          {
+            "type": "array",
+            "minItems": 1,
+            "items": {"$ref": "#/$defs/identifier"}
+          }
+        ]
+      }
+    },
+    "partition_key": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/identifier"},
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/identifier"}
+        }
+      ]
+    },
+    "freshness_sla": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["column", "max_age"],
+          "properties": {
+            "column": {"$ref": "#/$defs/identifier"},
+            "max_age": {
+              "type": "string",
+              "pattern": "^[1-9]\\d*(?:ms|s|min|h|d)$"
+            }
+          }
+        }
+      ]
+    },
+    "deprecated": {
+      "type": "boolean",
+      "default": false
+    },
+    "quirks": {
+      "type": ["string", "null"]
+    },
+    "write_mode": {
+      "type": ["string", "null"],
+      "enum": ["append", "overwrite_partition", "merge_on_key", null]
+    },
+    "columns": {
+      "type": ["object", "null"],
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/columnSpec"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "draft"}},
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["inferred_from"],
+        "properties": {
+          "inferred_from": {"type": "string", "pattern": "\\S"}
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": {"status": {"const": "draft"}},
+          "required": ["status"]
+        }
+      },
+      "then": {
+        "properties": {
+          "grain": {
+            "type": "string",
+            "not": {
+              "pattern": "(?:^\\s*[Uu][Nn][Kk][Nn][Oo][Ww][Nn]\\s*(?!\\n)$|(?:^|[^A-Za-z0-9_\\u00c0-\\u024f])TODO(?:$|[^A-Za-z0-9_\\u00c0-\\u024f]))"
+            }
+          },
+          "columns": {
+            "type": ["object", "null"],
+            "additionalProperties": {
+              "$ref": "#/$defs/confirmedColumnValues"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"kind": {"const": "files"}},
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["location"],
+        "properties": {
+          "location": {"$ref": "#/$defs/filesLocation"}
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": {"kind": {"const": "files"}},
+          "required": ["kind"]
+        }
+      },
+      "then": {
+        "properties": {
+          "location": {"$ref": "#/$defs/tableLocation"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_$\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-](?:[A-Za-z0-9_ $\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-]*[A-Za-z0-9_$\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-])?(?!\\n)$"
+    },
+    "dottedIdentifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_$\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-](?:[A-Za-z0-9_ $\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-]*[A-Za-z0-9_$\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-])?(?:\\.[A-Za-z0-9_$\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-](?:[A-Za-z0-9_ $\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-]*[A-Za-z0-9_$\\u0300-\\u036f\\u00aa\\u00b5\\u00ba\\u00c0-\\u00d6\\u00d8-\\u00f6\\u00f8-\\u02c1\\u0370-\\u037d\\u037f-\\u167f\\u1681-\\u1fff\\u2c00-\\u2fef\\u3040-\\ud7ff\\uf900-\\ufdcf\\ufdf0-\\ufefe\\uff10-\\uff19\\uff21-\\uff3a\\uff41-\\uff5a\\uff66-\\uffdc-])?)*(?!\\n)$"
+    },
+    "safeRelPath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!~)(?![A-Za-z]:)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?!.*(?:^|[\\\\/])~(?:[\\\\/]|$)).*\\S.*$"
+    },
+    "filesLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "format"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/safeRelPath"
+        },
+        "base": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
+        },
+        "format": {
+          "type": "string",
+          "enum": ["csv", "jsonl", "json", "parquet"]
+        }
+      }
+    },
+    "tableLocation": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "database": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/safeRelPath"}
+          ]
+        },
+        "relation": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/dottedIdentifier"}
+          ]
+        },
+        "base": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
+        }
+      }
+    },
+    "sizeUnitEnum": {
+      "type": "string",
+      "enum": ["bytes", "KB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB"]
+    },
+    "unitEnum": {
+      "type": "string",
+      "enum": [
+        "bytes", "KB", "KiB", "MB", "MiB", "GB", "GiB", "TB", "TiB",
+        "ms", "s", "min", "h", "d",
+        "ratio", "percent", "bps",
+        "minor", "major"
+      ]
+    },
+    "confirmedColumnValues": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "array"},
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": ["object", "null"],
+                "properties": {
+                  "means": {
+                    "type": ["string", "null"],
+                    "enum": ["present", "absent_expected", "absent_unexpected", null]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "columnSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": ["string", "null"],
+          "enum": ["string", "integer", "number", "boolean", "date", "timestamp", "path", null]
+        },
+        "nullable": {
+          "type": ["boolean", "null"]
+        },
+        "meaning": {
+          "type": ["string", "null"]
+        },
+        "description": {
+          "type": ["string", "null"]
+        },
+        "unit": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/unitEnum"}
+          ]
+        },
+        "currency": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Z]{3}$"
+        },
+        "currency_column": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
+        },
+        "size_of": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
+        },
+        "time_zone": {
+          "type": ["string", "null"],
+          "pattern": "^(?:UTC|naive|local:[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)+)$"
+        },
+        "relative_to": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
+        },
+        "status_column": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identifier"}
+          ]
+        },
+        "values": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": ["string", "integer", "number"]}
+            },
+            {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                  "means": {
+                    "type": ["string", "null"],
+                    "enum": ["present", "absent_expected", "absent_unexpected", "TODO", null]
+                  },
+                  "meaning": {
+                    "type": ["string", "null"]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "pii": {
+          "type": ["boolean", "null"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"unit": {"enum": ["minor", "major"]}},
+            "required": ["unit"]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": ["currency"],
+                "properties": {"currency": {"type": "string"}}
+              },
+              {
+                "required": ["currency_column"],
+                "properties": {"currency_column": {"type": "string"}}
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": ["currency"],
+                "properties": {"currency": {"type": "string"}}
+              },
+              {
+                "required": ["currency_column"],
+                "properties": {"currency_column": {"type": "string"}}
+              }
+            ]
+          },
+          "then": {
+            "required": ["unit"],
+            "properties": {"unit": {"enum": ["minor", "major"]}}
+          }
+        },
+        {
+          "not": {
+            "required": ["currency", "currency_column"],
+            "properties": {
+              "currency": {"type": "string"},
+              "currency_column": {"type": "string"}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["unit"],
+            "properties": {"unit": {"type": "string"}}
+          },
+          "then": {
+            "properties": {
+              "type": {"enum": ["integer", "number", null]}
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["time_zone"],
+            "properties": {"time_zone": {"type": "string"}}
+          },
+          "then": {
+            "required": ["type"],
+            "properties": {"type": {"const": "timestamp"}}
+          }
+        },
+        {
+          "if": {
+            "required": ["relative_to"],
+            "properties": {"relative_to": {"type": "string"}}
+          },
+          "then": {
+            "required": ["type"],
+            "properties": {"type": {"const": "path"}}
+          }
+        },
+        {
+          "if": {
+            "required": ["status_column"],
+            "properties": {"status_column": {"type": "string"}}
+          },
+          "then": {
+            "required": ["type"],
+            "properties": {"type": {"const": "path"}}
+          }
+        },
+        {
+          "if": {
+            "required": ["size_of"],
+            "properties": {"size_of": {"type": "string"}}
+          },
+          "then": {
+            "required": ["unit"],
+            "properties": {
+              "unit": {"$ref": "#/$defs/sizeUnitEnum"},
+              "type": {"enum": ["integer", "number", null]}
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -235,7 +235,8 @@ def build_receipt(results, modes: list[str], contracts: dict,
                   tables_referenced: list[str],
                   tier_overrides: dict | None = None,
                   rule_settings: str | None = None,
-                  invalid_contracts: list[str] | None = None) -> dict:
+                  invalid_contracts: list[str] | None = None,
+                  invalid_metrics: list[str] | None = None) -> dict:
     findings = all_findings(results)
     counts = {"error": 0, "warning": 0, "advisory": 0, "info": 0}
     attributed: dict[str, dict[str, int]] = {}
@@ -266,9 +267,14 @@ def build_receipt(results, modes: list[str], contracts: dict,
                if P.match_contract(t, contracts) is None]
     present = [t for t in tables_referenced
                if P.match_contract(t, contracts) is not None]
+    drafts = [t for t in present
+              if P.is_draft_contract(contracts[P.match_contract(t, contracts)])]
     consumers = sorted({k for r in results for k in r.key_lookups})
     narrow = sum(1 for r in results for s in r.suppressed if not s["broad"])
     broad = sum(1 for r in results for s in r.suppressed if s["broad"])
+    contract_ev = f"{len(present)}/{len(tables_referenced)} tables"
+    if drafts:
+        contract_ev += f" ({len(drafts)} draft)"
     return {
         "modes": sorted(set(modes)),
         "standard": STANDARD_VERSION,
@@ -289,7 +295,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
                         if project else "no project files in scope"),
             "pandas": (f"pandas in {len(pandas)} Python file(s)"
                        if pandas else "no pandas code checked"),
-            "contract": f"{len(present)}/{len(tables_referenced)} tables",
+            "contract": contract_ev,
             "contract_consumers": consumers,
             "metadata": "no adapter",
             "data": "no adapter",
@@ -307,6 +313,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
                 r.rel: E.unchecked_reasons(r) or ["not checked"]
                 for r in results if E.is_embedded(r)},
             "invalid_contracts": list(invalid_contracts or []),
+            "invalid_metrics": list(invalid_metrics or []),
             "metadata": "no adapter",
             "data": "no adapter",
             "recall_limits": recall_limits(results),
@@ -314,6 +321,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
         "findings": counts,
         "contracts_referenced": tables_referenced,
         "contracts_missing": missing,
+        "contracts_draft": drafts,
         "judgment_in_scope": judgment_in_scope(modes),
         "ignores": {"narrow": narrow, "broad": broad},
         "attribution": attributed,
@@ -352,7 +360,10 @@ def render_receipt(receipt: dict) -> str:
     total = len(receipt["contracts_referenced"])
     if total:
         have = total - len(receipt["contracts_missing"])
+        drafts = len(receipt.get("contracts_draft", []))
         contract = f"contracts for {have} of {_plural(total, 'table')}"
+        if drafts:
+            contract += f" ({drafts} draft)"
         if ev["contract_consumers"] and have:
             contract += f" (keys used by {', '.join(ev['contract_consumers'])})"
         checked.append(contract)
@@ -404,6 +415,8 @@ def render_receipt(receipt: dict) -> str:
                      f"{_plural(len(other), 'Python file')}: {_listed(other)}")
     for problem in nc.get("invalid_contracts", []):
         lines.append(f"{'Not checked':<13}invalid contract: {problem}")
+    for problem in nc.get("invalid_metrics", []):
+        lines.append(f"{'Not checked':<13}invalid metric: {problem}")
     lines.append(f"{'Not checked':<13}{DATA_LIMIT}")
     for limit in nc["recall_limits"]:
         lines.append(f"{'Not checked':<13}{limit}")

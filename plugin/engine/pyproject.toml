@@ -36,7 +36,7 @@ Issues = "https://github.com/Analytically-ai/truequery/issues"
 [project.optional-dependencies]
 # pandas and numpy run the pandas proofs in the tests (pinned: the
 # versions the proofs were checked against). Never a runtime dependency.
-test = ["duckdb", "pytest", "pandas==3.1.0", "numpy==2.4.6"]
+test = ["duckdb", "pytest", "pandas==3.1.0", "numpy==2.4.6", "jsonschema"]
 
 [project.scripts]
 truequery = "truequery.cli:main"

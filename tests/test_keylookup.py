@@ -208,15 +208,48 @@ def test_invalid_contract_next_to_a_valid_one_only_loses_its_own_keys(tmp_path):
     assert _rules(res) == []
 
 
-def test_two_valid_contracts_for_one_table_both_count(tmp_path):
-    """Key lookup has always merged them. `load_contracts_reporting` keeps
-    only the last per table, so it can't be what supplies the keys."""
+def test_duplicate_contract_adds_no_keys(tmp_path):
+    """The first contract for a table (sorted by file name) is the contract;
+    a later one is a duplicate and adds no keys anywhere."""
+    from truequery import keylookup
+
+    keylookup._CACHE.clear()
     path = _contract_project(
         tmp_path,
-        a_orders=VALID_ORDERS,
-        b_orders="table: orders\ngrain: guess\nkeys: [order_id]\n")
+        a="table: orders\ngrain: guess\nkeys: [order_id]\n",
+        b=VALID_ORDERS)
     res = check_text(INVALID_KEYS_Q, path=path)
-    assert _rules(res) == []
+    assert _errors(res) == ["sql/count-star-after-left-join"]
+
+    # Conversely, the first contract (sorted by file name) keeps its keys.
+    first_dir = tmp_path / "first_wins"
+    first_dir.mkdir()
+    keylookup._CACHE.clear()
+    path_first = _contract_project(
+        first_dir,
+        a=VALID_ORDERS,
+        b="table: orders\ngrain: guess\nkeys: [order_id]\n")
+    res_first = check_text(INVALID_KEYS_Q, path=path_first)
+    assert _rules(res_first) == []
+
+
+def test_duplicate_contract_end_to_end(tmp_path):
+    path = _contract_project(
+        tmp_path,
+        a="table: orders\ngrain: one row per order\nkeys: [order_id]\n",
+        b="table: orders\ngrain: one row per order\nkeys: [customer_id]\n")
+    proc = subprocess.run(
+        [sys.executable, "-m", "truequery.cli", "review", path],
+        cwd=tmp_path, capture_output=True, encoding="utf-8",
+        env={**os.environ, "PYTHONPATH": SRC, "PYTHONUTF8": "1"}, timeout=60)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "sql/count-star-after-left-join" in proc.stdout
+    assert "Found        1 error" in proc.stdout
+    assert "contracts for 1 of 2 tables" in proc.stdout
+    assert (
+        "invalid contract: contracts/b.yaml: duplicate contract for dataset "
+        "'orders' (already defined in contracts/a.yaml)"
+    ) in proc.stdout
 
 
 def test_invalid_contract_is_found_and_named_end_to_end(tmp_path):
