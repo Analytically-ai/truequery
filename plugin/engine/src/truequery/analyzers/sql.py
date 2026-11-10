@@ -1118,7 +1118,13 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
     # is verified. Anything else must parse: a typo or prose is "not
     # checked", never "clean".
     active = _active_checks(registry, settings, tiers, include_disabled)
-    proj_ctx = keylookup.declared_context_for(path, root=root)
+    # Contracts and metric files are read only when a check that reads them
+    # is on: a project pays nothing for checks it hasn't switched on.
+    reads_contracts = any(record.get("evidence") == "contract"
+                          for _, _, record, _ in active)
+    proj_ctx = (keylookup.declared_context_for(path, root=root)
+                if reads_contracts
+                else {"contracts": {}, "metrics": {}, "bases": {}})
     ctx = checks.CheckContext(
         dialect=dialect, path=path, mode=mode,
         keys=keylookup.declared_keys_for(path, root=root),

@@ -9,9 +9,9 @@
   currencies combined without a conversion, time zones or path bases compared
   without one, and a metric computed differently from `metrics/`. They're off
   by default until they're measured on real projects.
-- If a contract or metric file changes during an agent session, the hook says
-  so once and the receipt names the file, so the agent confirms the change
-  with you.
+- If a contract or metric file changes during an agent session (from the
+  session's first check on), the hook says so once per change, and the
+  receipt names the file. The agent is told to confirm the change with you.
 - The standard has 231 practices (was 225) and the checker 38 checks (was 32).
 
 ## 0.1.7 (2026-11-07)

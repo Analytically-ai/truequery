@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from truequery import __version__
+from truequery import keylookup
 from truequery import project as P
 from truequery import settings as S
 from truequery import std_registry
@@ -615,6 +616,7 @@ def run(paths: list[str], root: str, dialect: str | None = None,
     land on FileResult.suppressed (with a broad/narrow flag) so
     reporters can say what an ignore hid.
     """
+    keylookup.clear_cache()  # read contracts and dbt YAML once per run
     sql_files = P.discover(paths)
     if config is None:
         config = P.load_config(root)

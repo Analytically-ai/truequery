@@ -320,3 +320,118 @@ def test_no_notice_without_a_contract_change(tmp_path, monkeypatch):
         _, out = _run(_event(str(root / "q.sql")), Args(), monkeypatch)
         assert "contracts/metrics changed" not in out
     assert os.path.isdir(root / ".truequery")
+
+
+# -- review findings (independent review of C1) ---------------------------
+
+def test_advice_never_says_edit_the_contract(tmp_path):
+    findings = _rules(tmp_path,
+                      "SELECT COUNT(*) FROM fetch_log WHERE status = 'x'",
+                      {"contracts/fetch_log.yaml": FETCH_LOG})
+    [finding] = [f for f in findings
+                 if f.rule == "dq/undeclared-status-value"]
+    assert "update the contract" not in finding.fix
+    assert "ask the user whether the contract should list 'x'" in finding.fix
+
+
+def test_a_seeded_contract_is_named_as_a_draft(tmp_path):
+    seeded = ("table: orders\ngrain: unknown  # TODO: one row per <what>\n"
+              "keys: []\nallowed_values:\n  status: [placed, shipped]\n")
+    findings = _rules(tmp_path,
+                      "SELECT COUNT(*) FROM orders WHERE status = 'returned'",
+                      {"contracts/orders.yaml": seeded})
+    [finding] = findings
+    assert "from draft contract orders: its grain is unconfirmed" \
+        in finding.why
+
+
+def test_a_metrics_folder_doesnt_move_the_project_root(tmp_path):
+    # No contracts anywhere; a dbt metrics/ folder next to the model must not
+    # hide the schema YAML that declares the join key (review finding 2).
+    root = tmp_path / "proj"
+    files = {
+        "dbt_project.yml": "name: demo\n",
+        "models/staging/schema.yml":
+            "models:\n  - name: fx_rates\n    tests:\n"
+            "      - dbt_utils.unique_combination_of_columns:\n"
+            "          combination_of_columns: [currency, rate_date]\n",
+        "models/marts/metrics/revenue.yml": "metrics: []\n",
+        "models/marts/q.sql":
+            "select o.day_utc, count(*) as n\nfrom orders o\n"
+            "left join {{ ref('fx_rates') }} fx on fx.currency = o.currency "
+            "and fx.rate_date = o.day_utc\ngroup by 1\n",
+    }
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    findings = [f for r in E.run([str(root / "models/marts/q.sql")],
+                                 str(root), config={}) for f in r.findings]
+    assert not findings
+
+
+def test_contract_checks_off_read_no_contract(tmp_path, monkeypatch):
+    from truequery import keylookup
+    calls = []
+    monkeypatch.setattr(keylookup, "declared_context_for",
+                        lambda *a, **k: calls.append(a) or
+                        {"contracts": {}, "metrics": {}, "bases": {}})
+    _rules(tmp_path, "SELECT 1 FROM fetch_log",
+           {"contracts/fetch_log.yaml": FETCH_LOG},
+           rules=("sql/not-in-nullable-subquery",))
+    assert calls == []
+
+
+def _session(tmp_path, monkeypatch, files):
+    from test_hook import Args, _event, _run
+    root = _project(tmp_path, files)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "nope"))
+    monkeypatch.chdir(root)
+
+    def edit(rel, text=None):
+        if text is not None:
+            (root / rel).write_text(text, encoding="utf-8")
+        return _run(_event(str(root / rel)), Args(), monkeypatch)[1]
+    return root, edit
+
+
+def test_notice_once_per_change(tmp_path, monkeypatch):
+    root, edit = _session(tmp_path, monkeypatch, {
+        "q.sql": "SELECT 1\n", "contracts/fetch_log.yaml": FETCH_LOG})
+    edit("q.sql")
+    changed = FETCH_LOG.replace("failed:", "lost:")
+    assert "contracts/metrics changed" in edit("contracts/fetch_log.yaml",
+                                                changed)
+    # Written again with the same content: nothing new to say.
+    assert "contracts/metrics changed" not in edit("contracts/fetch_log.yaml",
+                                                    changed)
+
+
+def test_notice_watches_a_nested_contracts_folder(tmp_path, monkeypatch):
+    root, edit = _session(tmp_path, monkeypatch, {
+        "shop/q.sql": "SELECT 1\n",
+        "shop/contracts/fetch_log.yaml": FETCH_LOG})
+    edit("shop/q.sql")
+    out = edit("shop/contracts/fetch_log.yaml",
+               FETCH_LOG.replace("failed:", "lost:"))
+    assert "shop/contracts/fetch_log.yaml" in out
+
+
+def test_shell_change_caught_at_the_next_event(tmp_path, monkeypatch):
+    root, edit = _session(tmp_path, monkeypatch, {
+        "q.sql": "SELECT 1\n", "contracts/fetch_log.yaml": FETCH_LOG})
+    edit("q.sql")
+    # Changed without an edit event (a shell write the hook didn't see).
+    (root / "contracts/fetch_log.yaml").write_text(
+        FETCH_LOG.replace("failed:", "lost:"), encoding="utf-8")
+    assert "contracts/fetch_log.yaml" in edit("q.sql")
+
+
+def test_later_hand_edits_arent_credited_to_the_session(tmp_path,
+                                                        monkeypatch):
+    from truequery import hook
+    root, edit = _session(tmp_path, monkeypatch, {
+        "q.sql": "SELECT 1\n", "contracts/fetch_log.yaml": FETCH_LOG})
+    edit("q.sql")
+    (root / "contracts/fetch_log.yaml").write_text(
+        FETCH_LOG.replace("failed:", "lost:"), encoding="utf-8")
+    assert hook.session_contracts_changed(str(root)) == []

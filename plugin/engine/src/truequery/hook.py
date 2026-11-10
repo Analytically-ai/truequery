@@ -259,6 +259,7 @@ SESSION_FIELDS = {"session_id": (str, type(None)), "touched": list,
                   "config_error": (str, type(None)),
                   "version_noted": (str, type(None)),
                   "contracts_fp": (dict, type(None)),
+                  "contracts_watch": list,
                   "contracts_changed": list}
 
 
@@ -266,7 +267,8 @@ def _fresh_session(session_id=None) -> dict:
     return {"session_id": session_id, "touched": [], "reported": [],
             "blocked": [], "clean_acked": [], "chain": 0,
             "config_fp": None, "config_error": None, "version_noted": None,
-            "contracts_fp": None, "contracts_changed": []}
+            "contracts_fp": None, "contracts_watch": [],
+            "contracts_changed": []}
 
 
 def load_session(root: str, session_id: str | None = None) -> dict:
@@ -305,7 +307,8 @@ def load_session(root: str, session_id: str | None = None) -> dict:
 
 
 def session_contracts_changed(root: str) -> list[str]:
-    """Contract/metric files modified during the current session, if any."""
+    """Contract/metric files the hook saw change during the last agent
+    session (never later hand edits: nothing is re-compared here)."""
     try:
         with open(_session_path(root), encoding="utf-8") as handle:
             data = json.load(handle)
@@ -313,15 +316,8 @@ def session_contracts_changed(root: str) -> list[str]:
         return []
     if not isinstance(data, dict):
         return []
-    changed = [p for p in (data.get("contracts_changed") or [])
-               if isinstance(p, str)]
-    prev_fp = data.get("contracts_fp")
-    if isinstance(prev_fp, dict):
-        cur_fp = P.contracts_fingerprint(root)
-        for rel in sorted(set(prev_fp) | set(cur_fp)):
-            if prev_fp.get(rel) != cur_fp.get(rel) and rel not in changed:
-                changed.append(rel)
-    return sorted(set(changed))
+    return sorted({p for p in (data.get("contracts_changed") or [])
+                   if isinstance(p, str)})
 
 
 def save_session(root: str, session: dict) -> None:
@@ -923,12 +919,13 @@ def main(args) -> int:
     contract_edits = []
     if event != "stop":
         raw_paths = extract_paths(payload)
-        contract_edits = [
-            P._rel(p if os.path.isabs(p) else os.path.join(root, p), root)
-            for p in raw_paths
-            if P.is_contract_or_metric_path(p, root)
-            and (os.path.isfile(os.path.join(root, p)) or os.path.isfile(p))
-        ]
+        real_root = os.path.realpath(root)
+        for p in raw_paths:
+            full = os.path.realpath(p if os.path.isabs(p)
+                                    else os.path.join(root, p))
+            if os.path.isfile(full) and P.is_contract_or_metric_path(full, root):
+                contract_edits.append(
+                    os.path.relpath(full, real_root).replace(os.sep, "/"))
         paths = [p for p in raw_paths
                  if is_sql_path(p) or p.lower().endswith(".py")]
         paths = [p for p in paths
@@ -969,14 +966,25 @@ def main(args) -> int:
         if session.get("config_fp") is not None and session["config_fp"] != fp:
             notice = S.NOTICE
         session["config_fp"] = fp
-        cur_cfp = P.contracts_fingerprint(root)
+        # Watch the folders the checks read for the files this session
+        # touches. Say a change once, when the content changes; the first
+        # event of a session has nothing to compare, so an edit then counts.
+        here = [P._rel(p if os.path.isabs(p) else os.path.join(root, p),
+                       root) for p in paths]
+        watch = P.contract_dirs(
+            root, list(session.get("touched") or []) + here + contract_edits)
+        cur_cfp = P.contracts_fingerprint(root, watch)
         prev_cfp = session.get("contracts_fp")
-        newly_changed = list(contract_edits)
+        prev_watch = set(session.get("contracts_watch") or [])
         if isinstance(prev_cfp, dict):
-            for rel in sorted(set(prev_cfp) | set(cur_cfp)):
-                if prev_cfp.get(rel) != cur_cfp.get(rel) and rel not in newly_changed:
-                    newly_changed.append(rel)
+            newly_changed = [
+                rel for rel in sorted(set(prev_cfp) | set(cur_cfp))
+                if prev_cfp.get(rel) != cur_cfp.get(rel)
+                and (rel in prev_cfp or os.path.dirname(rel) in prev_watch)]
+        else:
+            newly_changed = sorted(set(contract_edits))
         session["contracts_fp"] = cur_cfp
+        session["contracts_watch"] = watch
         if newly_changed:
             recorded = session.setdefault("contracts_changed", [])
             for rel in newly_changed:

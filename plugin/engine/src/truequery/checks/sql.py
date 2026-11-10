@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
+from truequery import contract_v2
+
 
 @dataclass(frozen=True)
 class CheckContext:
@@ -1368,14 +1370,21 @@ def case_without_else_in_aggregate(stmt, loc, ctx):
 
 # -- contract-aware SQL checks (dq/*, sem/*) ---------------------------------
 def _draft_note(*contracts) -> str:
-    """Provenance suffix when any relied-upon contract has status: draft."""
+    """Provenance suffix when a relied-upon contract is a draft: `status:
+    draft`, or a grain nobody has confirmed (as `truequery init` seeds)."""
     seen = []
     for contract in contracts:
-        if not isinstance(contract, dict) or contract.get("status") != "draft":
+        if not isinstance(contract, dict):
             continue
         name = contract.get("dataset") or contract.get("table") or "unknown"
-        src = contract.get("inferred_from") or "sample"
-        tag = f"from draft contract {name}, inferred from {src}"
+        if contract.get("status") == "draft":
+            src = contract.get("inferred_from") or "sample"
+            tag = f"from draft contract {name}, inferred from {src}"
+        elif contract_v2.is_unconfirmed_grain(contract.get("grain")):
+            tag = (f"from draft contract {name}: its grain is unconfirmed, "
+                   "as seeded by truequery init")
+        else:
+            continue
         if tag not in seen:
             seen.append(tag)
     return f" ({'; '.join(seen)})" if seen else ""
@@ -1584,7 +1593,8 @@ def undeclared_status_value(stmt, loc, ctx):
                 f"the contract's declared values ({allowed_str})"
                 f"{_draft_note(contract)}",
                 f"use one of the declared values for {ds}.{cname} "
-                f"({allowed_str}), or update the contract if the domain changed",
+                f"({allowed_str}), or ask the user whether the contract should "
+                f"list {lit_val!r}",
             ))
         for in_node in sel.find_all(exp.In):
             if not _same_select(in_node, sel):

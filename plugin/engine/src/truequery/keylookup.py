@@ -34,6 +34,13 @@ _CACHE: dict[tuple, dict[str, list[frozenset]]] = {}
 _CONTEXT_CACHE: dict[tuple, dict] = {}
 
 
+def clear_cache() -> None:
+    """Forget what was read: each run reads contracts, metrics and dbt YAML
+    once, and a later run in the same process sees later edits."""
+    _CACHE.clear()
+    _CONTEXT_CACHE.clear()
+
+
 def _read_yaml(path):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -108,37 +115,9 @@ def _project_root(path):
     don't walk the disk looking for keys (they'd belong to someone else)."""
     if not path or path == "<input>":
         return None
-    markers = ("contracts", "metrics", "dbt_project.yml", "DATA.md")
+    markers = ("contracts", "dbt_project.yml", "DATA.md")
     return _nearest(path, lambda d: any(
         os.path.exists(os.path.join(d, m)) for m in markers))
-
-
-def _dir_stamp(root: str | None) -> tuple:
-    """Fast stat fingerprint of DATA.md, contracts/, and metrics/ under root."""
-    if not root:
-        return ()
-    items = []
-    data_md = os.path.join(root, "DATA.md")
-    try:
-        st = os.stat(data_md)
-        items.append(("DATA.md", st.st_mtime_ns, st.st_size))
-    except OSError:
-        pass
-    for sub in ("contracts", "metrics"):
-        folder = os.path.join(root, sub)
-        try:
-            entries = sorted(os.scandir(folder), key=lambda e: e.name)
-        except OSError:
-            continue
-        for entry in entries:
-            if not entry.name.endswith((".yaml", ".yml")):
-                continue
-            try:
-                st = entry.stat()
-                items.append((f"{sub}/{entry.name}", st.st_mtime_ns, st.st_size))
-            except OSError:
-                continue
-    return tuple(items)
 
 
 def _models_ymls(root):
@@ -170,7 +149,7 @@ def declared_keys_for(path, root=None):
                         lambda d: os.path.isdir(os.path.join(d, "contracts")))
     if proj_root is None and root:
         proj_root = _project_root(os.path.join(os.path.abspath(root), "_"))
-    cache_key = (proj_root, cdir, _dir_stamp(cdir))
+    cache_key = (proj_root, cdir)
     if cache_key not in _CACHE:
         index: dict[str, list[frozenset]] = {}
         if cdir is not None:
@@ -204,8 +183,7 @@ def declared_context_for(path, root=None) -> dict:
             if path and path != "<input>" else None) or ctx_dir
     ddir = (_nearest(path, lambda d: os.path.isfile(os.path.join(d, "DATA.md")))
             if path and path != "<input>" else None) or ctx_dir
-    cache_key = (cdir, mdir, ddir, _dir_stamp(cdir), _dir_stamp(mdir),
-                 _dir_stamp(ddir))
+    cache_key = (cdir, mdir, ddir)
     if cache_key not in _CONTEXT_CACHE:
         try:
             cfg = load_config(ddir)

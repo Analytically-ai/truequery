@@ -432,8 +432,8 @@ def render_receipt(receipt: dict) -> str:
                      + ", ".join(receipt["contracts_missing"]))
     if receipt.get("contracts_changed"):
         changed = ", ".join(receipt["contracts_changed"])
-        lines.append(f"{'Session':<13}Contracts changed this session: "
-                     f"{changed} (confirm with the user)")
+        lines.append(f"{'Session':<13}Contracts changed in the last agent "
+                     f"session: {changed} (confirm with the user)")
     scoped = receipt["judgment_in_scope"]
     if scoped:
         lines.append("Judgment calls (no check can decide these):")

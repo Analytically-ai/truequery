@@ -78,9 +78,9 @@ Full procedures live in `commands/<name>.md` (drafts are intent, not process).
 ## Evidence levels
 
 `file`: SQL checks · `project`: preview checks (dbt YAML, incremental
-models, Airflow) · `contract`: declared keys, values, units, time zones,
-paths and metrics feed checks that read them · `metadata`, `data`: never
-checked (what you learn by querying is your evidence, not the checker's).
+models, Airflow) · `contract`: declared keys feed checks; values, units,
+time zones, paths and metrics do only when those checks are switched on ·
+`metadata`, `data`: never checked (querying is your evidence, not ours).
 Name the level of every claim you make.
 
 ## If the engine isn't available
