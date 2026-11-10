@@ -1192,15 +1192,384 @@ class TestSecurityAndSafety:
         with pytest.raises(V.VerificationError, match="exceeds max_bytes limit"):
             V.verify_contract(c, project_root=str(tmp_path), max_bytes=5)
 
-        # Setting max_rows=4 marks sampled=True and checks 4 rows
+        # Setting max_rows=4 marks sampled=True, checks 4 rows ordered by key,
+        # and reports `unique` as `not_verified` for the whole dataset
         rep_sampled = V.verify_contract(c, project_root=str(tmp_path), max_rows=4)
         assert rep_sampled["valid"] is True
         assert rep_sampled["source"]["rows"] == 10
         assert rep_sampled["source"]["sampled"] is True
-        assert _find_assertion(rep_sampled, "unique", "id")["rows_checked"] == 4
+        nn_sampled = _find_assertion(rep_sampled, "not_null", "id")
+        assert nn_sampled["rows_checked"] == 4
+        assert "in the first 4 rows by id" in nn_sampled["message"]
+        uniq_sampled = _find_assertion(rep_sampled, "unique", "id")
+        assert uniq_sampled["rows_checked"] == 4
+        assert uniq_sampled["status"] == "not_verified"
+        assert (
+            uniq_sampled["message"]
+            == "key id not verified for the whole dataset (no duplicates in the first 4 rows by id)"
+        )
 
         # `verify_project` verifies all local contracts in `tmp_path`
         proj_rep = V.verify_project(str(tmp_path), now="2026-10-01T00:00:00Z")
         assert proj_rep["valid"] is True
         assert len(proj_rep["datasets"]) == 1
         assert proj_rep["datasets"][0]["dataset"] == "rows"
+
+
+# ---------------------------------------------------------------------------
+# 4. PR #31 Review Fixes (PROMPT-0.2-PR-B-REVIEW.md)
+# ---------------------------------------------------------------------------
+
+
+class TestPRBReviewFixes:
+    """Regression tests for every review item in PROMPT-0.2-PR-B-REVIEW.md."""
+
+    def test_review_1_freshness_parsed_timestamps_both_orders_and_local_zone(
+        self, tmp_path: Path
+    ):
+        """Review §1:
+        - `2026-10-01T22:00:00Z` and `2026-10-02T01:00:00+05:00` (which is 20:00Z)
+          at `now = 22:30Z`, `max_age: 1h`: newest is 22:00Z (fresh) in BOTH row orders.
+        - Stale values with different offsets fail in BOTH row orders.
+        - Mixed `Z`/offset/naive file on `local:Europe/Prague`: naive value is
+          converted with `zoneinfo` (never read as UTC).
+        - Unparseable values or unavailable `zoneinfo` zones report `not_verified`
+          (never dropped silently)."""
+        base_contract = {
+            "version": 2,
+            "dataset": "events",
+            "kind": "files",
+            "location": {"path": "events.csv", "format": "csv"},
+            "grain": "one row per event",
+            "keys": ["id"],
+            "freshness_sla": {"column": "ts", "max_age": "1h"},
+            "columns": {
+                "id": {"type": "string", "nullable": False},
+                "ts": {"type": "timestamp", "time_zone": "UTC"},
+            },
+        }
+        csv_file = tmp_path / "events.csv"
+
+        # 1a. Fresh case in both row orders (`2026-10-02T01:00:00+05:00` is 20:00Z; `22:00Z` is newer)
+        for rows_text in [
+            "id,ts\n1,2026-10-01T22:00:00Z\n2,2026-10-02T01:00:00+05:00\n",
+            "id,ts\n1,2026-10-02T01:00:00+05:00\n2,2026-10-01T22:00:00Z\n",
+        ]:
+            csv_file.write_text(rows_text, encoding="utf-8")
+            c = contract_v2.validate_contract_v2(base_contract, "contracts/events.yaml")
+            rep = V.verify_contract(
+                c, project_root=str(tmp_path), now="2026-10-01T22:30:00Z"
+            )
+            fresh = _find_assertion(rep, "freshness", "ts")
+            assert fresh["status"] == "passed"
+            assert fresh["details"]["max_timestamp"] == "2026-10-01T22:00:00+00:00"
+
+        # 1b. Stale case in both row orders (`2026-10-01T21:00:00Z` and `2026-10-02T00:00:00+03:00` = 21:00Z)
+        for rows_text in [
+            "id,ts\n1,2026-10-01T21:00:00Z\n2,2026-10-02T00:00:00+03:00\n",
+            "id,ts\n1,2026-10-02T00:00:00+03:00\n2,2026-10-01T21:00:00Z\n",
+        ]:
+            csv_file.write_text(rows_text, encoding="utf-8")
+            c = contract_v2.validate_contract_v2(base_contract, "contracts/events.yaml")
+            rep = V.verify_contract(
+                c, project_root=str(tmp_path), now="2026-10-01T22:30:00Z"
+            )
+            fresh = _find_assertion(rep, "freshness", "ts")
+            assert fresh["status"] == "failed"
+            assert fresh["details"]["max_timestamp"] == "2026-10-01T21:00:00+00:00"
+
+        # 1c. Mixed Z / offset / naive file on `local:Europe/Prague` (UTC+2 on 2026-10-01):
+        # Naive `2026-10-01 23:00:00` in Prague is `2026-10-01T21:00:00+00:00` (NOT 23:00Z!).
+        for mixed_rows in [
+            "id,ts\n1,2026-10-01T20:30:00Z\n2,2026-10-02T01:00:00+05:00\n3,2026-10-01 23:00:00\n",
+            "id,ts\n1,2026-10-01 23:00:00\n2,2026-10-02T01:00:00+05:00\n3,2026-10-01T20:30:00Z\n",
+        ]:
+            csv_file.write_text(mixed_rows, encoding="utf-8")
+            local_contract = contract_v2.validate_contract_v2(
+                {
+                    **base_contract,
+                    "columns": {
+                        "id": {"type": "string", "nullable": False},
+                        "ts": {"type": "timestamp", "time_zone": "local:Europe/Prague"},
+                    },
+                },
+                "contracts/events.yaml",
+            )
+            rep_local = V.verify_contract(
+                local_contract, project_root=str(tmp_path), now="2026-10-01T22:30:00Z"
+            )
+            fresh_local = _find_assertion(rep_local, "freshness", "ts")
+            assert fresh_local["status"] == "failed"
+            assert fresh_local["details"]["max_timestamp"] == "2026-10-01T21:00:00+00:00"
+
+        # 1d. Unparseable timestamp row is reported as `not_verified` (never silently dropped)
+        csv_file.write_text(
+            "id,ts\n1,2026-10-01T22:00:00Z\n2,not-a-timestamp\n",
+            encoding="utf-8",
+        )
+        c_unparseable = contract_v2.validate_contract_v2(
+            base_contract, "contracts/events.yaml"
+        )
+        rep_unp = V.verify_contract(
+            c_unparseable, project_root=str(tmp_path), now="2026-10-01T22:30:00Z"
+        )
+        fresh_unp = _find_assertion(rep_unp, "freshness", "ts")
+        assert fresh_unp["status"] == "not_verified"
+        assert fresh_unp["failed_count"] == 0
+        assert "1 value(s) could not be parsed" in fresh_unp["message"]
+
+        # 1e. Unknown zoneinfo zone on naive local timestamp -> `not_verified`
+        csv_file.write_text("id,ts\n1,2026-10-01 23:00:00\n", encoding="utf-8")
+        unknown_zone_contract = {
+            **local_contract,
+            "columns": {
+                "id": {"type": "string", "nullable": False},
+                "ts": {"type": "timestamp", "time_zone": "local:Mars/Olympus_Mons"},
+            },
+        }
+        rep_unk_tz = V.verify_contract(
+            unknown_zone_contract,
+            project_root=str(tmp_path),
+            now="2026-10-01T22:30:00Z",
+        )
+        fresh_unk_tz = _find_assertion(rep_unk_tz, "freshness", "ts")
+        assert fresh_unk_tz["status"] == "not_verified"
+        assert "not available in zoneinfo" in fresh_unk_tz["message"]
+
+    def test_review_2_tz_marker_on_sqlite_checks_values_and_duckdb_names_source(
+        self, tmp_path: Path
+    ):
+        """Review §2:
+        - SQLite column declared `TIMESTAMP` or `DATETIME` with values
+          `2026-10-01T09:00:00Z`, `2026-10-01T10:00:00+02:00` must check values:
+          - `time_zone: naive` -> `failed` (failed_count == 2)
+          - `time_zone: UTC` -> `failed` (failed_count == 1)
+        - DuckDB table with native naive `TIMESTAMP` column under `time_zone: UTC`
+          says `"DuckDB table column 'ts' has naive TIMESTAMP type; cannot verify UTC marker"`."""
+        sqlite_db = tmp_path / "events.sqlite"
+        scon = sqlite3.connect(str(sqlite_db))
+        scon.execute('CREATE TABLE "events" ("id" TEXT, "ts" TIMESTAMP);')
+        scon.executemany(
+            'INSERT INTO "events" VALUES (?, ?);',
+            [
+                ("1", "2026-10-01T09:00:00Z"),
+                ("2", "2026-10-01T10:00:00+02:00"),
+            ],
+        )
+        scon.commit()
+        scon.close()
+
+        for tz, expected_failed, expected_keys in [
+            ("naive", 2, ["1", "2"]),
+            ("UTC", 1, ["2"]),
+        ]:
+            c_sqlite = contract_v2.validate_contract_v2(
+                {
+                    "version": 2,
+                    "dataset": "events",
+                    "kind": "table",
+                    "location": {"database": "events.sqlite", "relation": "events"},
+                    "grain": "one row per event",
+                    "keys": ["id"],
+                    "columns": {
+                        "id": {"type": "string", "nullable": False},
+                        "ts": {"type": "timestamp", "time_zone": tz},
+                    },
+                },
+                "contracts/events.yaml",
+            )
+            rep = V.verify_contract(c_sqlite, project_root=str(tmp_path))
+            assert rep["valid"] is False
+            tz_res = _find_assertion(rep, "tz_marker", "ts")
+            assert tz_res["status"] == "failed"
+            assert tz_res["failed_count"] == expected_failed
+            assert tz_res["sample_keys"] == expected_keys
+            assert "Parquet" not in tz_res["message"]
+
+        # DuckDB table with native `TIMESTAMP` column under `time_zone: UTC`
+        duck_db = tmp_path / "events.duckdb"
+        dcon = duckdb.connect(str(duck_db))
+        dcon.execute(
+            "CREATE TABLE events (id VARCHAR, ts TIMESTAMP);"
+            "INSERT INTO events VALUES ('1', TIMESTAMP '2026-10-01 09:00:00');"
+        )
+        dcon.close()
+        c_duck = contract_v2.validate_contract_v2(
+            {
+                "version": 2,
+                "dataset": "events",
+                "kind": "table",
+                "location": {"database": "events.duckdb", "relation": "events"},
+                "grain": "one row per event",
+                "keys": ["id"],
+                "columns": {
+                    "id": {"type": "string", "nullable": False},
+                    "ts": {"type": "timestamp", "time_zone": "UTC"},
+                },
+            },
+            "contracts/events.yaml",
+        )
+        rep_duck = V.verify_contract(c_duck, project_root=str(tmp_path))
+        tz_duck = _find_assertion(rep_duck, "tz_marker", "ts")
+        assert tz_duck["status"] == "not_verified"
+        assert (
+            tz_duck["message"]
+            == "DuckDB table column 'ts' has naive TIMESTAMP type; cannot verify UTC marker"
+        )
+
+    def test_review_3_deterministic_sampling_and_byte_identical_evidence(
+        self, tmp_path: Path
+    ):
+        """Review §3:
+        - Every sample (`max_rows` and `LIMIT 5` sample keys) is ordered by key
+          columns (or all selected columns when there is no key).
+        - When sampled, every message states `"in the first N rows by <key>"`,
+          and `unique` is reported as `not_verified` for the whole dataset.
+        - Two runs on the same data produce byte-identical evidence records."""
+        csv_path = tmp_path / "unsorted.csv"
+        # Rows written in reverse/shuffled key order with >5 failures
+        csv_path.write_text(
+            "k,status,val\n"
+            "k09,bad,\n"
+            "k03,bad,\n"
+            "k07,bad,\n"
+            "k01,bad,\n"
+            "k05,bad,\n"
+            "k02,bad,\n"
+            "k08,bad,\n"
+            "k04,bad,\n"
+            "k06,bad,\n",
+            encoding="utf-8",
+        )
+        contract = contract_v2.validate_contract_v2(
+            {
+                "version": 2,
+                "dataset": "unsorted",
+                "kind": "files",
+                "location": {"path": "unsorted.csv", "format": "csv"},
+                "grain": "one row per k",
+                "keys": ["k"],
+                "columns": {
+                    "k": {"type": "string", "nullable": False},
+                    "status": {"type": "string", "values": ["ok"]},
+                    "val": {"type": "string", "nullable": False},
+                },
+            },
+            "contracts/unsorted.yaml",
+        )
+
+        # Full run: sample_keys must be the first 5 sorted by `k`
+        rep1 = V.verify_contract(
+            contract, project_root=str(tmp_path), now="2026-10-01T12:00:00Z"
+        )
+        rep2 = V.verify_contract(
+            contract, project_root=str(tmp_path), now="2026-10-01T12:00:00Z"
+        )
+        assert _find_assertion(rep1, "not_null", "val")["sample_keys"] == [
+            "k01", "k02", "k03", "k04", "k05",
+        ]
+        assert _find_assertion(rep1, "accepted_values", "status")["sample_keys"] == [
+            "k01", "k02", "k03", "k04", "k05",
+        ]
+        assert json.dumps(rep1["evidence_records"], sort_keys=True) == json.dumps(
+            rep2["evidence_records"], sort_keys=True
+        )
+
+        # Sampled run (`max_rows=4`): scans k01..k04 deterministically, reports
+        # `in the first 4 rows by k` in every message, and `unique` is `not_verified`
+        s1 = V.verify_contract(
+            contract,
+            project_root=str(tmp_path),
+            now="2026-10-01T12:00:00Z",
+            max_rows=4,
+        )
+        s2 = V.verify_contract(
+            contract,
+            project_root=str(tmp_path),
+            now="2026-10-01T12:00:00Z",
+            max_rows=4,
+        )
+        assert json.dumps(s1["evidence_records"], sort_keys=True) == json.dumps(
+            s2["evidence_records"], sort_keys=True
+        )
+        for item in s1["assertions"]:
+            assert "in the first 4 rows by k" in item["message"]
+        uniq_s1 = _find_assertion(s1, "unique", "k")
+        assert uniq_s1["status"] == "not_verified"
+        assert _find_assertion(s1, "not_null", "val")["sample_keys"] == [
+            "k01", "k02", "k03", "k04",
+        ]
+
+        # Contract with no keys (`keys: []`): orders by all columns deterministically
+        nokey_contract = contract_v2.validate_contract_v2(
+            {**contract, "keys": []},
+            "contracts/unsorted.yaml",
+        )
+        nk1 = V.verify_contract(
+            nokey_contract,
+            project_root=str(tmp_path),
+            now="2026-10-01T12:00:00Z",
+            max_rows=4,
+        )
+        nk2 = V.verify_contract(
+            nokey_contract,
+            project_root=str(tmp_path),
+            now="2026-10-01T12:00:00Z",
+            max_rows=4,
+        )
+        assert json.dumps(nk1["evidence_records"], sort_keys=True) == json.dumps(
+            nk2["evidence_records"], sort_keys=True
+        )
+        for item in nk1["assertions"]:
+            assert "in the first 4 rows by (k, status, val)" in item["message"]
+
+    def test_review_4_escaping_path_without_relative_to_caught_and_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Review §4:
+        When a `type: path` column has `status_column` but no `relative_to`,
+        a row with `../../etc/hosts` is never dropped silently: both
+        `path_resolves` (compiled with `project_root` as base) and
+        `exists_per_status` report the escaping row, and `exists_per_status`
+        counts both `../../etc/hosts` and `missing.bin` (`failed_count == 2`)."""
+        csv_file = tmp_path / "files.csv"
+        csv_file.write_text(
+            "id,status,local_path\n"
+            "r1,fetched,../../etc/hosts\n"
+            "r2,fetched,missing.bin\n",
+            encoding="utf-8",
+        )
+        contract = contract_v2.validate_contract_v2(
+            {
+                "version": 2,
+                "dataset": "files",
+                "kind": "files",
+                "location": {"path": "files.csv", "format": "csv"},
+                "grain": "one row per file",
+                "keys": ["id"],
+                "columns": {
+                    "id": {"type": "string", "nullable": False},
+                    "status": {
+                        "type": "string",
+                        "values": {"fetched": {"means": "present"}},
+                    },
+                    "local_path": {"type": "path", "status_column": "status"},
+                },
+            },
+            "contracts/files.yaml",
+        )
+        rep = V.verify_contract(contract, project_root=str(tmp_path))
+        assert rep["valid"] is False
+
+        pr = _find_assertion(rep, "path_resolves", "local_path")
+        assert pr["status"] == "failed"
+        assert pr["failed_count"] == 1
+        assert pr["details"]["escaped_count"] == 1
+        assert pr["sample_keys"] == ["r1"]
+
+        ex = _find_assertion(rep, "exists_per_status", "local_path")
+        assert ex["status"] == "failed"
+        assert ex["failed_count"] == 2
+        assert ex["details"]["present_missing"] == 1
+        assert ex["details"]["escaped_count"] == 1
+        assert ex["sample_keys"] == ["r1", "r2"]

@@ -218,11 +218,16 @@ def _tz_failing_condition(col_expr: exp.Column, tz: str) -> exp.Expression:
     raise ValueError(f"unsupported time_zone {tz!r}")
 
 
+def _order_exprs_for_cols(cols: tuple[str, ...] | list[str]) -> list[exp.Ordered]:
+    return [_quote_col(c).asc() for c in cols]
+
+
 def compile_contract_assertions(
     contract: dict,
     dialect: str = "duckdb",
     relation: str | None = None,
     sample_limit: int | None = None,
+    all_columns: tuple[str, ...] | list[str] | None = None,
 ) -> list[CompiledAssertion]:
     """Compile a validated contract into dialect-specific assertions."""
     if dialect not in SUPPORTED_DIALECTS:
@@ -240,21 +245,49 @@ def compile_contract_assertions(
             rel_name = str(loc["relation"])
         else:
             rel_name = dataset
+    pii_cols = _pii_columns(contract)
+    pk_cols = _primary_key_columns(contract)
+    prov = _provenance_params(contract)
+    columns = contract.get("columns") if isinstance(contract.get("columns"), dict) else {}
+
+    # Determine deterministic ordering columns for sampling and sample keys
+    declared_cols = tuple(str(c) for c in (all_columns or tuple(columns.keys())))
+    if pk_cols:
+        extra_tie_cols = tuple(
+            c for c in declared_cols
+            if c.lower() not in {k.lower() for k in pk_cols}
+        )
+        sample_order_cols: tuple[str, ...] = pk_cols + extra_tie_cols
+        sample_order_label = (
+            pk_cols[0] if len(pk_cols) == 1 else "(" + ", ".join(pk_cols) + ")"
+        )
+    else:
+        sample_order_cols = declared_cols
+        sample_order_label = (
+            declared_cols[0]
+            if len(declared_cols) == 1
+            else ("(" + ", ".join(declared_cols) + ")" if declared_cols else "row")
+        )
+
     base_table = _quote_table(rel_name)
     if sample_limit is not None:
         alias_str = _clean_ident_part(rel_name.split(".")[-1]) or "src"
+        sub_select = exp.select(exp.Star()).from_(base_table)
+        if sample_order_cols:
+            sub_select = sub_select.order_by(*_order_exprs_for_cols(sample_order_cols))
         table_expr: exp.Expression = (
-            exp.select(exp.Star())
-            .from_(base_table)
+            sub_select
             .limit(int(sample_limit))
             .subquery(alias=exp.to_identifier(alias_str, quoted=True))
         )
     else:
         table_expr = base_table
-    pii_cols = _pii_columns(contract)
-    pk_cols = _primary_key_columns(contract)
-    prov = _provenance_params(contract)
-    columns = contract.get("columns") if isinstance(contract.get("columns"), dict) else {}
+
+    sample_meta = {
+        "sampled": sample_limit is not None,
+        "sample_limit": int(sample_limit) if sample_limit is not None else None,
+        "sample_order_by": sample_order_label,
+    }
 
     compiled: list[CompiledAssertion] = []
 
@@ -292,6 +325,7 @@ def compile_contract_assertions(
             exp.select(*select_cols)
             .from_(table_expr)
             .where(is_null_cond)
+            .order_by(*(c.asc() for c in select_cols))
             .limit(5)
         )
         compiled.append(CompiledAssertion(
@@ -309,6 +343,7 @@ def compile_contract_assertions(
                     col_name.lower() in pii_cols
                     or any(k.lower() in pii_cols for k in pk_cols)
                 ),
+                **sample_meta,
                 **prov,
             },
         ))
@@ -351,6 +386,7 @@ def compile_contract_assertions(
             params={
                 "key_columns": key_cols,
                 "pii_redacted": any(k.lower() in pii_cols for k in key_cols),
+                **sample_meta,
                 **prov,
             },
         ))
@@ -391,13 +427,19 @@ def compile_contract_assertions(
             .from_(table_expr)
             .where(bad_cond)
         )
-        select_cols = [_quote_col(k) for k in pk_cols] if pk_cols else [
-            exp.Literal.number(1).as_(exp.to_identifier("__failed_row", quoted=True))
-        ]
+        if pk_cols:
+            select_cols = [_quote_col(k) for k in pk_cols]
+            order_cols = [c.asc() for c in select_cols]
+        else:
+            select_cols = [
+                col_txt.as_(exp.to_identifier("__failed_row", quoted=True))
+            ]
+            order_cols = [col_txt.asc()]
         sample_select = (
             exp.select(*select_cols)
             .from_(table_expr)
             .where(bad_cond)
+            .order_by(*order_cols)
             .limit(5)
         )
         compiled.append(CompiledAssertion(
@@ -417,6 +459,7 @@ def compile_contract_assertions(
                     cname.lower() in pii_cols
                     or any(k.lower() in pii_cols for k in pk_cols)
                 ),
+                **sample_meta,
                 **prov,
             },
         ))
@@ -429,10 +472,10 @@ def compile_contract_assertions(
         if not tz or spec.get("type") != "timestamp":
             continue
         col_expr = _quote_col(cname)
+        col_txt = exp.cast(col_expr, exp.DataType.build("VARCHAR"))
         fail_cond = exp.and_(
             col_expr.is_(exp.null()).not_(),
-            exp.func("TRIM", exp.cast(col_expr, exp.DataType.build("VARCHAR"))).neq(
-                exp.Literal.string("")),
+            exp.func("TRIM", col_txt).neq(exp.Literal.string("")),
             _tz_failing_condition(col_expr, str(tz)),
         )
         cnt_select = (
@@ -441,13 +484,19 @@ def compile_contract_assertions(
             .from_(table_expr)
             .where(fail_cond)
         )
-        select_cols = [_quote_col(k) for k in pk_cols] if pk_cols else [
-            exp.Literal.number(1).as_(exp.to_identifier("__failed_row", quoted=True))
-        ]
+        if pk_cols:
+            select_cols = [_quote_col(k) for k in pk_cols]
+            order_cols = [c.asc() for c in select_cols]
+        else:
+            select_cols = [
+                col_txt.as_(exp.to_identifier("__failed_row", quoted=True))
+            ]
+            order_cols = [col_txt.asc()]
         sample_select = (
             exp.select(*select_cols)
             .from_(table_expr)
             .where(fail_cond)
+            .order_by(*order_cols)
             .limit(5)
         )
         compiled.append(CompiledAssertion(
@@ -466,17 +515,16 @@ def compile_contract_assertions(
                     cname.lower() in pii_cols
                     or any(k.lower() in pii_cols for k in pk_cols)
                 ),
+                **sample_meta,
                 **prov,
             },
         ))
 
-    # 5. `path_resolves` on `type: path` columns with `relative_to`
+    # 5. `path_resolves` on `type: path` columns (uses `relative_to` or project root)
     for cname, spec in columns.items():
         if not isinstance(spec, dict) or spec.get("type") != "path":
             continue
         rel_to = spec.get("relative_to")
-        if not rel_to:
-            continue
         status_col = spec.get("status_column")
         status_means: dict[str, str] = {}
         if status_col and isinstance(columns.get(status_col), dict):
@@ -485,16 +533,22 @@ def compile_contract_assertions(
                 for sval, s_meta in svals.items():
                     if isinstance(s_meta, dict) and s_meta.get("means"):
                         status_means[str(sval)] = str(s_meta["means"])
+        path_txt = exp.cast(_quote_col(cname), exp.DataType.build("VARCHAR"))
         select_cols = [_quote_col(k) for k in pk_cols] + [
-            exp.cast(_quote_col(cname), exp.DataType.build("VARCHAR")).as_(
-                exp.to_identifier("__path_val", quoted=True))
+            path_txt.as_(exp.to_identifier("__path_val", quoted=True))
         ]
+        order_cols = [_quote_col(k).asc() for k in pk_cols] + [path_txt.asc()]
         if status_col:
+            status_txt = exp.cast(_quote_col(status_col), exp.DataType.build("VARCHAR"))
             select_cols.append(
-                exp.cast(_quote_col(status_col), exp.DataType.build("VARCHAR")).as_(
-                    exp.to_identifier("__status_val", quoted=True))
+                status_txt.as_(exp.to_identifier("__status_val", quoted=True))
             )
-        row_select = exp.select(*select_cols).from_(table_expr)
+            order_cols.append(status_txt.asc())
+        row_select = (
+            exp.select(*select_cols)
+            .from_(table_expr)
+            .order_by(*order_cols)
+        )
         compiled.append(CompiledAssertion(
             assertion="path_resolves",
             dataset=dataset,
@@ -504,7 +558,7 @@ def compile_contract_assertions(
             sql=_render_select(row_select, dialect),
             params={
                 "column": cname,
-                "relative_to": str(rel_to),
+                "relative_to": str(rel_to) if rel_to else None,
                 "status_column": status_col,
                 "status_means": status_means,
                 "key_columns": pk_cols,
@@ -512,6 +566,7 @@ def compile_contract_assertions(
                     cname.lower() in pii_cols
                     or any(k.lower() in pii_cols for k in pk_cols)
                 ),
+                **sample_meta,
                 **prov,
             },
         ))
@@ -532,13 +587,21 @@ def compile_contract_assertions(
                     status_means[str(sval)] = str(s_meta["means"])
         if not status_means:
             continue
+        path_txt = exp.cast(_quote_col(cname), exp.DataType.build("VARCHAR"))
+        status_txt = exp.cast(_quote_col(status_col), exp.DataType.build("VARCHAR"))
         select_cols = [_quote_col(k) for k in pk_cols] + [
-            exp.cast(_quote_col(cname), exp.DataType.build("VARCHAR")).as_(
-                exp.to_identifier("__path_val", quoted=True)),
-            exp.cast(_quote_col(status_col), exp.DataType.build("VARCHAR")).as_(
-                exp.to_identifier("__status_val", quoted=True)),
+            path_txt.as_(exp.to_identifier("__path_val", quoted=True)),
+            status_txt.as_(exp.to_identifier("__status_val", quoted=True)),
         ]
-        row_select = exp.select(*select_cols).from_(table_expr)
+        order_cols = (
+            [_quote_col(k).asc() for k in pk_cols]
+            + [path_txt.asc(), status_txt.asc()]
+        )
+        row_select = (
+            exp.select(*select_cols)
+            .from_(table_expr)
+            .order_by(*order_cols)
+        )
         compiled.append(CompiledAssertion(
             assertion="exists_per_status",
             dataset=dataset,
@@ -558,6 +621,7 @@ def compile_contract_assertions(
                     or str(status_col).lower() in pii_cols
                     or any(k.lower() in pii_cols for k in pk_cols)
                 ),
+                **sample_meta,
                 **prov,
             },
         ))
@@ -579,18 +643,27 @@ def compile_contract_assertions(
                 for sval, s_meta in svals.items():
                     if isinstance(s_meta, dict) and s_meta.get("means"):
                         status_means[str(sval)] = str(s_meta["means"])
+        path_txt = exp.cast(_quote_col(size_of), exp.DataType.build("VARCHAR"))
+        size_txt = exp.cast(_quote_col(cname), exp.DataType.build("VARCHAR"))
         select_cols = [_quote_col(k) for k in pk_cols] + [
-            exp.cast(_quote_col(size_of), exp.DataType.build("VARCHAR")).as_(
-                exp.to_identifier("__path_val", quoted=True)),
-            exp.cast(_quote_col(cname), exp.DataType.build("VARCHAR")).as_(
-                exp.to_identifier("__size_val", quoted=True)),
+            path_txt.as_(exp.to_identifier("__path_val", quoted=True)),
+            size_txt.as_(exp.to_identifier("__size_val", quoted=True)),
         ]
+        order_cols = (
+            [_quote_col(k).asc() for k in pk_cols]
+            + [path_txt.asc(), size_txt.asc()]
+        )
         if status_col:
+            status_txt = exp.cast(_quote_col(status_col), exp.DataType.build("VARCHAR"))
             select_cols.append(
-                exp.cast(_quote_col(status_col), exp.DataType.build("VARCHAR")).as_(
-                    exp.to_identifier("__status_val", quoted=True))
+                status_txt.as_(exp.to_identifier("__status_val", quoted=True))
             )
-        row_select = exp.select(*select_cols).from_(table_expr)
+            order_cols.append(status_txt.asc())
+        row_select = (
+            exp.select(*select_cols)
+            .from_(table_expr)
+            .order_by(*order_cols)
+        )
         compiled.append(CompiledAssertion(
             assertion="size_matches_disk",
             dataset=dataset,
@@ -614,6 +687,7 @@ def compile_contract_assertions(
                     or str(size_of).lower() in pii_cols
                     or any(k.lower() in pii_cols for k in pk_cols)
                 ),
+                **sample_meta,
                 **prov,
             },
         ))
@@ -623,24 +697,19 @@ def compile_contract_assertions(
     if isinstance(sla, dict) and sla.get("column") and sla.get("max_age"):
         fcol = str(sla["column"])
         max_age = str(sla["max_age"])
+        fcol_spec = columns.get(fcol) if isinstance(columns.get(fcol), dict) else {}
+        fcol_tz = fcol_spec.get("time_zone")
         col_expr = _quote_col(fcol)
-        max_select = (
+        col_txt = exp.cast(col_expr, exp.DataType.build("VARCHAR"))
+        ts_select = (
             exp.select(
-                exp.func(
-                    "MAX",
-                    exp.cast(col_expr, exp.DataType.build("VARCHAR")),
-                ).as_(exp.to_identifier("max_ts", quoted=True)),
-                exp.func("COUNT", col_expr).as_(
-                    exp.to_identifier("non_null_rows", quoted=True)),
+                col_txt.as_(exp.to_identifier("__ts_val", quoted=True)),
             )
             .from_(table_expr)
             .where(
                 exp.and_(
                     col_expr.is_(exp.null()).not_(),
-                    exp.func(
-                        "TRIM",
-                        exp.cast(col_expr, exp.DataType.build("VARCHAR")),
-                    ).neq(exp.Literal.string("")),
+                    exp.func("TRIM", col_txt).neq(exp.Literal.string("")),
                 )
             )
         )
@@ -650,12 +719,14 @@ def compile_contract_assertions(
             dialect=dialect,
             kind="sql",
             target=fcol,
-            sql=_render_select(max_select, dialect),
+            sql=_render_select(ts_select, dialect),
             params={
                 "column": fcol,
                 "max_age": max_age,
+                "time_zone": str(fcol_tz) if fcol_tz else None,
                 "key_columns": pk_cols,
                 "pii_redacted": True,
+                **sample_meta,
                 **prov,
             },
         ))

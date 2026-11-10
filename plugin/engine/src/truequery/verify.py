@@ -334,7 +334,20 @@ def _parse_now(now: datetime | str | None) -> datetime:
     raise TypeError(f"unsupported `now` value: {now!r}")
 
 
-def _parse_timestamp_utc(raw: str) -> datetime | None:
+def _parse_timestamp_utc(
+    raw: str,
+    declared_tz: str | None = None,
+) -> datetime | None:
+    """Parse an ISO timestamp or date string into a UTC-aware `datetime`.
+
+    - Explicit offsets (`Z`, `+HH:MM`, `+HHMM`, `+HH`) are converted to UTC.
+    - Naive values on a `local:<zone>` column are localized with
+      `zoneinfo.ZoneInfo(<zone>)` and converted to UTC; if `<zone>` is not
+      available in `zoneinfo`, returns `None` (never reads a local naive value
+      as UTC).
+    - Naive values on `UTC`, `naive`, or undeclared `time_zone` are treated as
+      UTC instants.
+    """
     s = str(raw).strip()
     if not s:
         return None
@@ -349,8 +362,27 @@ def _parse_timestamp_utc(raw: str) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
+        if isinstance(declared_tz, str) and declared_tz.startswith("local:"):
+            zone_name = declared_tz.split(":", 1)[1].strip()
+            if not zone_name:
+                return None
+            try:
+                from zoneinfo import ZoneInfo
+                tz_obj = ZoneInfo(zone_name)
+            except Exception:
+                return None
+            return dt.replace(tzinfo=tz_obj).astimezone(timezone.utc)
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _zoneinfo_available(zone_name: str) -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(zone_name)
+        return True
+    except Exception:
+        return False
 
 
 def _parse_duration(duration_str: str) -> timedelta:
@@ -436,15 +468,35 @@ def _setup_duckdb_files_view(
     return {str(r[0]).lower(): str(r[1]).upper() for r in desc_rows}
 
 
-def _describe_relation_types(con, dialect: str, relation: str) -> dict[str, str]:
+def _describe_relation_columns_and_types(
+    con,
+    dialect: str,
+    relation: str,
+) -> tuple[tuple[str, ...], dict[str, str]]:
     quoted_rel = A._quote_table(relation).sql(dialect=dialect)
     if dialect == "duckdb":
         rows = con.execute(f"DESCRIBE {quoted_rel};").fetchall()
-        return {str(r[0]).lower(): str(r[1]).upper() for r in rows}
+        col_order = tuple(str(r[0]) for r in rows)
+        type_map = {str(r[0]).lower(): str(r[1]).upper() for r in rows}
+        return col_order, type_map
     # SQLite: PRAGMA table_info
     table_only = A._clean_ident_part(relation.split(".")[-1]).replace('"', '""')
     rows = con.execute(f'PRAGMA table_info("{table_only}");').fetchall()
-    return {str(r[1]).lower(): str(r[2]).upper() for r in rows}
+    col_order = tuple(str(r[1]) for r in rows)
+    type_map = {str(r[1]).lower(): str(r[2]).upper() for r in rows}
+    return col_order, type_map
+
+
+def _describe_relation_types(con, dialect: str, relation: str) -> dict[str, str]:
+    _, type_map = _describe_relation_columns_and_types(con, dialect, relation)
+    return type_map
+
+
+def _sample_phrase(params: dict[str, Any], rows_checked: int) -> str:
+    if not params.get("sampled"):
+        return ""
+    order_by = params.get("sample_order_by") or "row"
+    return f"in the first {rows_checked:,} rows by {order_by}"
 
 
 def _execute_single_select(con, sql_text: str, dialect: str) -> list[tuple]:
@@ -465,12 +517,21 @@ def _run_sql_assertion(
     prov_note = params.get("provenance_note")
     pii_redacted = bool(params.get("pii_redacted"))
     pk_len = len(params.get("key_columns") or ())
+    sampled = bool(params.get("sampled"))
+    s_phrase = _sample_phrase(params, total_rows)
+    s_suffix = f" {s_phrase}" if s_phrase else ""
 
-    # Special case: `tz_marker` on native Parquet / DuckDB TIMESTAMP columns
-    if comp.assertion == "tz_marker":
+    # Special case: `tz_marker` on real native TIMESTAMP columns (Parquet and
+    # DuckDB tables only; SQLite and text columns always check values).
+    if comp.assertion == "tz_marker" and source_format in ("parquet", "duckdb"):
         col_name = str(comp.target)
         tz = str(params["time_zone"])
         phys = physical_types.get(col_name.lower(), "VARCHAR")
+        src_col_label = (
+            f"Parquet column {col_name!r}"
+            if source_format == "parquet"
+            else f"DuckDB table column {col_name!r}"
+        )
         if phys in _NATIVE_TZ_TS_TYPES:
             if tz == "UTC":
                 return {
@@ -482,7 +543,7 @@ def _run_sql_assertion(
                     "sample_keys": [],
                     "pii_redacted": pii_redacted,
                     "message": (
-                        f"timestamps in {col_name!r} have physical type {phys} (UTC)"
+                        f"{src_col_label} has physical type {phys} (UTC){s_suffix}"
                     ),
                     "details": {"physical_type": phys, "time_zone": tz},
                     "provenance_note": prov_note,
@@ -497,8 +558,8 @@ def _run_sql_assertion(
                     "sample_keys": [],
                     "pii_redacted": pii_redacted,
                     "message": (
-                        f"Parquet column {col_name!r} has {phys} type; "
-                        f"cannot verify local time zone {tz!r}"
+                        f"{src_col_label} has {phys} type; "
+                        f"cannot verify local time zone {tz!r}{s_suffix}"
                     ),
                     "details": {"physical_type": phys, "time_zone": tz},
                     "provenance_note": prov_note,
@@ -513,8 +574,8 @@ def _run_sql_assertion(
                 "sample_keys": [],
                 "pii_redacted": pii_redacted,
                 "message": (
-                    f"column {col_name!r} has physical type {phys}, "
-                    "contract says naive"
+                    f"{src_col_label} has physical type {phys}, "
+                    f"contract says naive{s_suffix}"
                 ),
                 "details": {"physical_type": phys, "time_zone": tz},
                 "provenance_note": prov_note,
@@ -530,8 +591,8 @@ def _run_sql_assertion(
                     "sample_keys": [],
                     "pii_redacted": pii_redacted,
                     "message": (
-                        f"Parquet column {col_name!r} has naive TIMESTAMP type; "
-                        "cannot verify UTC marker"
+                        f"{src_col_label} has naive {phys} type; "
+                        f"cannot verify UTC marker{s_suffix}"
                     ),
                     "details": {"physical_type": phys, "time_zone": tz},
                     "provenance_note": prov_note,
@@ -545,21 +606,22 @@ def _run_sql_assertion(
                 "sample_keys": [],
                 "pii_redacted": pii_redacted,
                 "message": (
-                    f"timestamps in {col_name!r} have naive {phys} type "
-                    f"(matches {tz})"
+                    f"{src_col_label} has naive {phys} type "
+                    f"(matches {tz}){s_suffix}"
                 ),
                 "details": {"physical_type": phys, "time_zone": tz},
                 "provenance_note": prov_note,
             }
 
-    # Special case: `freshness`
+    # Special case: `freshness` — parse every non-null value in Python and take
+    # the maximum of the parsed UTC instants.
     if comp.assertion == "freshness":
         col_name = str(comp.target)
         max_age_str = str(params["max_age"])
+        declared_tz = params.get("time_zone")
         max_delta = _parse_duration(max_age_str)
         rows = _execute_single_select(con, comp.sql, comp.dialect)
-        max_raw, non_null_rows = rows[0] if rows else (None, 0)
-        if not non_null_rows or max_raw is None:
+        if not rows:
             return {
                 "assertion": "freshness",
                 "target": col_name,
@@ -570,28 +632,54 @@ def _run_sql_assertion(
                 "pii_redacted": True,
                 "message": (
                     f"no non-null timestamps in {col_name!r} to verify "
-                    f"freshness SLA <= {max_age_str}"
+                    f"freshness SLA <= {max_age_str}{s_suffix}"
                 ),
                 "details": {"max_timestamp": None, "max_age": max_age_str},
                 "provenance_note": prov_note,
             }
-        max_dt = _parse_timestamp_utc(str(max_raw))
-        if max_dt is None:
+
+        parsed_dts: list[datetime] = []
+        unparseable_count = 0
+        for (raw_val,) in rows:
+            dt = _parse_timestamp_utc(str(raw_val), declared_tz=declared_tz)
+            if dt is None:
+                unparseable_count += 1
+            else:
+                parsed_dts.append(dt)
+
+        if unparseable_count > 0:
+            if (isinstance(declared_tz, str)
+                    and declared_tz.startswith("local:")
+                    and not _zoneinfo_available(declared_tz.split(":", 1)[1].strip())):
+                zone_name = declared_tz.split(":", 1)[1].strip()
+                nv_msg = (
+                    f"cannot verify freshness on {col_name!r}: time zone "
+                    f"{zone_name!r} is not available in zoneinfo for naive "
+                    f"local timestamps{s_suffix}"
+                )
+            else:
+                nv_msg = (
+                    f"cannot verify freshness on {col_name!r}: "
+                    f"{unparseable_count} value(s) could not be parsed as a "
+                    f"timestamp or date{s_suffix}"
+                )
             return {
                 "assertion": "freshness",
                 "target": col_name,
-                "status": "failed",
+                "status": "not_verified",
                 "rows_checked": total_rows,
-                "failed_count": 1,
+                "failed_count": 0,
                 "sample_keys": [],
                 "pii_redacted": True,
-                "message": (
-                    f"newest value {max_raw!r} in {col_name!r} could not be "
-                    "parsed as a timestamp or date"
-                ),
-                "details": {"max_timestamp": str(max_raw), "max_age": max_age_str},
+                "message": nv_msg,
+                "details": {
+                    "unparseable_count": unparseable_count,
+                    "max_age": max_age_str,
+                },
                 "provenance_note": prov_note,
             }
+
+        max_dt = max(parsed_dts)
         age = now_dt - max_dt
         passed = age <= max_delta
         return {
@@ -604,10 +692,10 @@ def _run_sql_assertion(
             "pii_redacted": True,
             "message": (
                 f"newest {col_name} ({max_dt.isoformat()}) is within "
-                f"{max_age_str} of {now_dt.isoformat()}"
+                f"{max_age_str} of {now_dt.isoformat()}{s_suffix}"
                 if passed
                 else f"stale data: newest {col_name} is {max_dt.isoformat()}, "
-                     f"older than {max_age_str} at {now_dt.isoformat()}"
+                     f"older than {max_age_str} at {now_dt.isoformat()}{s_suffix}"
             ),
             "details": {
                 "max_timestamp": max_dt.isoformat(),
@@ -638,44 +726,62 @@ def _run_sql_assertion(
                 sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
 
     passed = failed_count == 0
+    status = "passed" if passed else "failed"
     target_label = (
         "(" + ", ".join(comp.target) + ")"
         if isinstance(comp.target, tuple)
         else str(comp.target)
     )
     if comp.assertion == "not_null":
-        msg = (
-            f"{target_label} is non-null across {total_rows} rows"
-            if passed
-            else f"{failed_count} null/empty value(s) in {target_label}"
-        )
+        if sampled:
+            msg = (
+                f"{target_label} is non-null {s_phrase}"
+                if passed
+                else f"{failed_count} null/empty value(s) in {target_label} {s_phrase}"
+            )
+        else:
+            msg = (
+                f"{target_label} is non-null across {total_rows} rows"
+                if passed
+                else f"{failed_count} null/empty value(s) in {target_label}"
+            )
     elif comp.assertion == "unique":
-        msg = (
-            f"key {target_label} unique across {total_rows} rows"
-            if passed
-            else f"{failed_count} duplicate key value(s) for {target_label}"
-        )
+        if sampled:
+            if passed:
+                status = "not_verified"
+                msg = (
+                    f"key {target_label} not verified for the whole dataset "
+                    f"(no duplicates {s_phrase})"
+                )
+            else:
+                msg = f"{failed_count} duplicate key value(s) for {target_label} {s_phrase}"
+        else:
+            msg = (
+                f"key {target_label} unique across {total_rows} rows"
+                if passed
+                else f"{failed_count} duplicate key value(s) for {target_label}"
+            )
     elif comp.assertion == "accepted_values":
         msg = (
-            f"all values in {target_label} are declared"
+            f"all values in {target_label} are declared{s_suffix}"
             if passed
-            else f"{failed_count} undeclared value(s) in {target_label}"
+            else f"{failed_count} undeclared value(s) in {target_label}{s_suffix}"
         )
     elif comp.assertion == "tz_marker":
         tz = str(params["time_zone"])
         msg = (
-            f"timestamps in {target_label} match {tz}"
+            f"timestamps in {target_label} match {tz}{s_suffix}"
             if passed
             else f"{failed_count} timestamp(s) in {target_label} violate "
-                 f"declared time_zone {tz!r}"
+                 f"declared time_zone {tz!r}{s_suffix}"
         )
     else:
-        msg = f"{comp.assertion} on {target_label}: {'passed' if passed else 'failed'}"
+        msg = f"{comp.assertion} on {target_label}: {'passed' if passed else 'failed'}{s_suffix}"
 
     return {
         "assertion": comp.assertion,
         "target": list(comp.target) if isinstance(comp.target, tuple) else comp.target,
-        "status": "passed" if passed else "failed",
+        "status": status,
         "rows_checked": total_rows,
         "failed_count": failed_count,
         "sample_keys": sample_keys,
@@ -698,8 +804,11 @@ def _run_filesystem_assertion(
     pii_redacted = bool(params.get("pii_redacted"))
     pk_len = len(params.get("key_columns") or ())
     rel_to = params.get("relative_to")
+    base_label = str(rel_to) if rel_to else "project_root"
     real_base = resolve_base_dir(rel_to, bases, project_root)
     rows = _execute_single_select(con, comp.sql, comp.dialect)
+    s_phrase = _sample_phrase(params, total_rows)
+    s_suffix = f" {s_phrase}" if s_phrase else ""
 
     if comp.assertion == "path_resolves":
         col_name = str(comp.target)
@@ -715,9 +824,9 @@ def _run_filesystem_assertion(
                 "sample_keys": [],
                 "pii_redacted": pii_redacted,
                 "message": (
-                    f"declared base {rel_to!r} ({real_base}) does not exist"
+                    f"declared base {base_label!r} ({real_base}) does not exist{s_suffix}"
                 ),
-                "details": {"base": rel_to, "real_base": real_base},
+                "details": {"base": base_label, "real_base": real_base},
                 "provenance_note": prov_note,
             }
         failed_count = 0
@@ -745,8 +854,7 @@ def _run_filesystem_assertion(
                 if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
                     sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
                 continue
-            # Step 2: for paths without a status lifecycle (or `present` rows whose
-            # parent folder doesn't exist under `real_base`, or when zero `present`
+            # Step 2: for paths without a status lifecycle (or when zero `present`
             # rows exist under `real_base`), flag wrong base resolution.
             if status_col is None:
                 if not os.path.exists(real_target):
@@ -763,9 +871,10 @@ def _run_filesystem_assertion(
                         _format_sample_key(tuple(row[:pk_len])) if pk_len else None
                     )
 
-        # If `present` rows were checked and NOT ONE resolved under `real_base`,
-        # the base directory itself does not match the data's paths.
-        if present_checked > 0 and present_existing == 0 and present_unflagged_keys:
+        # If `rel_to` was declared and `present` rows were checked and NOT ONE
+        # resolved under `real_base`, the base directory itself does not match
+        # the data's paths.
+        if rel_to and present_checked > 0 and present_existing == 0 and present_unflagged_keys:
             failed_count += len(present_unflagged_keys)
             wrong_base_count += len(present_unflagged_keys)
             if pk_len and not pii_redacted:
@@ -775,10 +884,10 @@ def _run_filesystem_assertion(
 
         passed = failed_count == 0
         msg = (
-            f"paths in {col_name!r} resolve under {rel_to}"
+            f"paths in {col_name!r} resolve under {base_label}{s_suffix}"
             if passed
             else f"{failed_count} path(s) in {col_name!r} escape or do not "
-                 f"resolve under base {rel_to!r}"
+                 f"resolve under base {base_label!r}{s_suffix}"
         )
         return {
             "assertion": "path_resolves",
@@ -790,7 +899,7 @@ def _run_filesystem_assertion(
             "pii_redacted": pii_redacted,
             "message": msg,
             "details": {
-                "base": rel_to,
+                "base": base_label,
                 "escaped_count": escaped_count,
                 "unresolved_base_count": wrong_base_count,
             },
@@ -803,6 +912,7 @@ def _run_filesystem_assertion(
         failed_count = 0
         present_missing = 0
         unexpected_absent = 0
+        escaped_count = 0
         absent_expected_count = 0
         absent_expected_statuses: set[str] = set()
         todo_statuses: set[str] = set()
@@ -826,9 +936,14 @@ def _run_filesystem_assertion(
             if not has_path:
                 exists = False
             else:
-                # Never touch the filesystem if the row path escapes `real_base`
+                # Never touch the filesystem if the row path escapes `real_base`;
+                # count the escaping path as a failure of `exists_per_status`.
                 real_target = resolve_path_within_base(str(raw_path), real_base)
                 if real_target is None:
+                    failed_count += 1
+                    escaped_count += 1
+                    if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
+                        sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
                     continue
                 exists = os.path.exists(real_target)
             if means == "present":
@@ -857,7 +972,7 @@ def _run_filesystem_assertion(
                 f"{statuses_str})"
             )
         if passed:
-            msg = f"file existence matches status in {col_name!r}{absent_note}"
+            msg = f"file existence matches status in {col_name!r}{absent_note}{s_suffix}"
         else:
             bits = []
             if present_missing:
@@ -866,7 +981,11 @@ def _run_filesystem_assertion(
                 bits.append(
                     f"{unexpected_absent} 'absent_unexpected' row(s) missing on disk"
                 )
-            msg = "; ".join(bits) + absent_note
+            if escaped_count:
+                bits.append(
+                    f"{escaped_count} path(s) escape base {base_label!r}"
+                )
+            msg = "; ".join(bits) + absent_note + s_suffix
 
         return {
             "assertion": "exists_per_status",
@@ -880,6 +999,7 @@ def _run_filesystem_assertion(
             "details": {
                 "present_missing": present_missing,
                 "absent_unexpected": unexpected_absent,
+                "escaped_count": escaped_count,
                 "absent_expected_count": absent_expected_count,
                 "absent_expected_statuses": sorted(absent_expected_statuses),
                 "unconfirmed_todo_statuses": sorted(todo_statuses),
@@ -926,7 +1046,10 @@ def _run_filesystem_assertion(
 
         passed = failed_count == 0
         if passed:
-            msg = f"sizes in {col_name!r} ({unit}) match disk across {files_compared} file(s)"
+            msg = (
+                f"sizes in {col_name!r} ({unit}) match disk across "
+                f"{files_compared} file(s){s_suffix}"
+            )
         elif twin_counts:
             top_twin, twin_n = max(twin_counts.items(), key=lambda kv: kv[1])
             noun = "size matches" if twin_n == 1 else "sizes match"
@@ -934,8 +1057,9 @@ def _run_filesystem_assertion(
             if failed_count > twin_n:
                 other_n = failed_count - twin_n
                 msg += f" ({other_n} other size mismatch(es))"
+            msg += s_suffix
         else:
-            msg = f"{failed_count} size(s) in {col_name!r} do not match disk ({unit})"
+            msg = f"{failed_count} size(s) in {col_name!r} do not match disk ({unit}){s_suffix}"
 
         return {
             "assertion": "size_matches_disk",
@@ -1001,8 +1125,11 @@ def verify_contract(
             source_files = [P._rel(f, os.path.realpath(project_root)) for f in resolved_files]
             relation = A._clean_ident_part(dataset.split(".")[-1]) or "dataset"
             con = open_duckdb_for_files(resolved_files)
-            physical_types = _setup_duckdb_files_view(
+            _setup_duckdb_files_view(
                 con, relation, source_format, resolved_files, contract
+            )
+            discovered_cols, physical_types = _describe_relation_columns_and_types(
+                con, dialect, relation
             )
         else:
             db_rel = loc.get("database")
@@ -1037,7 +1164,9 @@ def verify_contract(
                 dialect = "sqlite"
                 source_format = "sqlite"
                 con = open_sqlite_readonly(real_db)
-            physical_types = _describe_relation_types(con, dialect, relation)
+            discovered_cols, physical_types = _describe_relation_columns_and_types(
+                con, dialect, relation
+            )
 
         cnt_select = exp.select(
             exp.func("COUNT", exp.Star()).as_(
@@ -1053,6 +1182,7 @@ def verify_contract(
             dialect=dialect,
             relation=relation,
             sample_limit=max_rows if sampled else None,
+            all_columns=discovered_cols,
         )
         assertion_results: list[dict[str, Any]] = []
         findings: list[dict[str, Any]] = []
