@@ -99,15 +99,18 @@ states the fact it needs, so a project without contracts sees nothing new:
 
 - **A status compared to a value the contract doesn't declare,** such as
   `status = 'downloaded'` when the values are `fetched`, `released` and
-  `failed`. The filter quietly matches nothing.
+  `failed`. The filter quietly matches nothing, and in the `WHERE` of an
+  `UPDATE` or `DELETE` the statement quietly changes nothing.
 - **Expected absences counted as missing:** `status <> 'fetched'` also counts
   rows the contract marks as absent on purpose (`means: absent_expected`).
 - **Different units or currencies combined** without a conversion, such as
   cents minus dollars.
 - **Different time zones compared** without a conversion.
-- **Paths with different declared bases compared** directly.
+- **Paths with different declared bases compared** directly, or with a
+  literal put in front that isn't the declared base.
 - **A metric computed differently from its definition** in `metrics/`, when
-  the query names its column after the metric.
+  the query names its column after the metric. Filtering the whole query (to
+  a run, a date window or a region) isn't a difference.
 
 They're all off by default until they're measured on real projects. Switch
 them on with `truequery rules set <rule> --enabled on`. A finding that relies

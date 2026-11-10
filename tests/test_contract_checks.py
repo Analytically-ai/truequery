@@ -52,10 +52,10 @@ def _project(tmp_path, files):
     return root
 
 
-def _rules(tmp_path, sql, files, rules=CONTRACT_RULES):
+def _rules(tmp_path, sql, files, rules=CONTRACT_RULES, dialect=None):
     root = _project(tmp_path, {"q.sql": sql, **files})
     findings = []
-    for result in E.run([str(root / "q.sql")], str(root),
+    for result in E.run([str(root / "q.sql")], str(root), dialect=dialect,
                         settings=_on(*rules), config={}):
         findings += result.findings
     return findings
@@ -74,6 +74,12 @@ def _fired(findings):
     "SELECT COUNT(*) FROM fetch_log f WHERE f.status <> 'removed'",
     "WITH s AS (SELECT status FROM fetch_log) "
     "SELECT COUNT(*) FROM s WHERE status = 'downloaded'",
+    # A typo in the WHERE of an UPDATE or DELETE changes nothing.
+    "UPDATE fetch_log SET status = 'failed' WHERE status = 'downlaoded'",
+    "DELETE FROM fetch_log WHERE status = 'downlaoded'",
+    "DELETE FROM fetch_log WHERE id IN (1, 2) AND status IN ('gone')",
+    # A contract naming only the table matches it in any schema.
+    "SELECT COUNT(*) FROM legacy.fetch_log WHERE status = 'downloaded'",
 ])
 def test_undeclared_value_fires(tmp_path, sql):
     findings = _rules(tmp_path, sql, {"contracts/fetch_log.yaml": FETCH_LOG})
@@ -90,10 +96,30 @@ def test_undeclared_value_fires(tmp_path, sql):
     "WHERE status = 'downloaded'",
     # A transformed column isn't the declared column.
     "SELECT COUNT(*) FROM fetch_log WHERE UPPER(status) = 'FETCHED'",
+    # A CTE named like the table is the CTE, a UNION body too.
+    "WITH fetch_log AS (SELECT id, status FROM legacy_fetch UNION ALL "
+    "SELECT id, status FROM archive_fetch) "
+    "SELECT COUNT(*) FROM fetch_log WHERE status = 'queued'",
+    "WITH fetch_log AS (SELECT id, status FROM legacy_fetch) "
+    "SELECT COUNT(*) FROM fetch_log WHERE status = 'queued'",
+    # An UPDATE's SET writes a value; it doesn't compare one.
+    "UPDATE fetch_log SET status = 'fetched' WHERE id = 1",
 ])
 def test_undeclared_value_stays_quiet(tmp_path, sql):
     findings = _rules(tmp_path, sql, {"contracts/fetch_log.yaml": FETCH_LOG})
     assert "dq/undeclared-status-value" not in _fired(findings)
+
+
+def test_a_contract_naming_its_schema_skips_other_schemas(tmp_path):
+    contract = FETCH_LOG.replace("dataset: fetch_log",
+                                 "dataset: analytics.fetch_log")
+    files = {"contracts/fetch_log.yaml": contract}
+    quiet = _rules(tmp_path / "a", "SELECT COUNT(*) FROM legacy.fetch_log "
+                                   "WHERE status = 'downloaded'", files)
+    fires = _rules(tmp_path / "b", "SELECT COUNT(*) FROM analytics.fetch_log "
+                                   "WHERE status = 'downloaded'", files)
+    assert "dq/undeclared-status-value" not in _fired(quiet)
+    assert "dq/undeclared-status-value" in _fired(fires)
 
 
 def test_v1_allowed_values_feed_the_check(tmp_path):
@@ -145,11 +171,54 @@ def test_negating_present_sweeps_in_expected_absences(tmp_path):
     "SELECT COUNT(*) FROM fetch_log WHERE status <> 'fetched' "
     "AND status NOT IN ('released', 'removed_on_purpose')",
     "SELECT COUNT(*) FROM fetch_log WHERE status <> 'failed'",
+    # Excluded upstream, in a CTE or a subquery.
+    "WITH live AS (SELECT * FROM fetch_log WHERE status NOT IN "
+    "('released', 'removed_on_purpose')) "
+    "SELECT COUNT(*) FROM live WHERE status <> 'fetched'",
+    "SELECT COUNT(*) FROM (SELECT status FROM fetch_log WHERE status <> "
+    "'released' AND status <> 'removed_on_purpose') t "
+    "WHERE t.status <> 'fetched'",
+    # Excluded in an inner join's ON clause.
+    "SELECT COUNT(*) FROM runs r JOIN fetch_log f ON f.run_id = r.id "
+    "AND f.status NOT IN ('released', 'removed_on_purpose') "
+    "WHERE f.status <> 'fetched'",
+    # Excluded alongside OR ... IS NULL.
+    "SELECT COUNT(*) FROM fetch_log WHERE (status <> 'fetched' OR status "
+    "IS NULL) AND status NOT IN ('released', 'removed_on_purpose')",
+    # Restricted to the values that mean missing.
+    "SELECT COUNT(*) FROM fetch_log WHERE status <> 'fetched' "
+    "AND status IN ('failed')",
+    # Counts only what is present.
+    "SELECT COUNT(*) - COUNT(CASE WHEN status = 'failed' THEN 1 END) "
+    "FROM fetch_log",
 ])
 def test_explicit_absence_handling_is_quiet(tmp_path, sql):
     findings = _rules(tmp_path, sql,
                       {"contracts/fetch_log.yaml": FETCH_LOG})
     assert "dq/expected-absence-counted-as-missing" not in _fired(findings)
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT COUNT(*) FROM fetch_log WHERE NOT (status = 'fetched')",
+    "SELECT SUM(CASE WHEN status = 'fetched' THEN 0 ELSE 1 END) "
+    "FROM fetch_log",
+    "SELECT COUNT(CASE WHEN status = 'fetched' THEN NULL ELSE 1 END) "
+    "FROM fetch_log",
+    "SELECT COUNT(*) - COUNT(CASE WHEN status = 'fetched' THEN 1 END) "
+    "FROM fetch_log",
+    # Excluded only on a LEFT JOIN's ON: the rows are still there.
+    "SELECT COUNT(*) FROM fetch_log f LEFT JOIN runs r ON r.id = f.run_id "
+    "AND f.status NOT IN ('released', 'removed_on_purpose') "
+    "WHERE f.status <> 'fetched'",
+])
+def test_counting_expected_absences_fires(tmp_path, sql):
+    findings = _rules(tmp_path, sql,
+                      {"contracts/fetch_log.yaml": FETCH_LOG})
+    [finding] = [f for f in findings
+                 if f.rule == "dq/expected-absence-counted-as-missing"]
+    assert finding.why.startswith(
+        "released and removed_on_purpose in fetch_log.status are absent on "
+        "purpose")
 
 
 # -- sem/unit-mismatch ----------------------------------------------------
@@ -170,6 +239,10 @@ columns:
 @pytest.mark.parametrize("sql", [
     "SELECT SUM(amount_cents - discount_usd) FROM invoices",
     "SELECT * FROM invoices WHERE amount_cents > amount_eur_cents",
+    # Chains of three or more.
+    "SELECT fee_cents + amount_cents + discount_usd FROM invoices",
+    "SELECT (amount_cents + fee_cents) - discount_usd FROM invoices",
+    "SELECT discount_usd - fee_cents - amount_cents FROM invoices",
 ])
 def test_unit_mismatch_fires(tmp_path, sql):
     findings = _rules(tmp_path, sql, {"contracts/invoices.yaml": INVOICES})
@@ -179,6 +252,8 @@ def test_unit_mismatch_fires(tmp_path, sql):
 @pytest.mark.parametrize("sql", [
     "SELECT SUM(amount_cents - fee_cents) FROM invoices",
     "SELECT SUM(amount_cents / 100.0 - discount_usd) FROM invoices",
+    "SELECT amount_cents + fee_cents - discount_usd * 100 FROM invoices",
+    "SELECT amount_cents * 0.01 + discount_usd FROM invoices",
 ])
 def test_unit_match_or_conversion_is_quiet(tmp_path, sql):
     findings = _rules(tmp_path, sql, {"contracts/invoices.yaml": INVOICES})
@@ -215,6 +290,32 @@ def test_same_zone_or_converted_is_quiet(tmp_path, sql):
     assert not findings
 
 
+@pytest.mark.parametrize("dialect, sql", [
+    ("bigquery", "SELECT COUNT(*) FROM events e JOIN shifts s "
+                 "ON e.occurred_at >= TIMESTAMP(s.starts_at, 'Europe/Prague')"),
+    ("trino", "SELECT COUNT(*) FROM events e JOIN shifts s "
+              "ON e.occurred_at >= with_timezone(s.starts_at, 'Europe/Prague')"),
+    ("trino", "SELECT COUNT(*) FROM events e JOIN shifts s "
+              "ON at_timezone(e.occurred_at, 'Europe/Prague') >= s.starts_at"),
+    ("snowflake", "SELECT COUNT(*) FROM events e JOIN shifts s ON "
+                  "CONVERT_TIMEZONE('UTC', 'Europe/Prague', e.occurred_at) "
+                  ">= s.starts_at"),
+    ("bigquery", "SELECT COUNT(*) FROM events e JOIN shifts s "
+                 "ON DATETIME(e.occurred_at, 'Europe/Prague') >= s.starts_at"),
+    ("spark", "SELECT COUNT(*) FROM events e JOIN shifts s ON "
+              "from_utc_timestamp(e.occurred_at, 'Europe/Prague') >= s.starts_at"),
+    ("duckdb", "SELECT COUNT(*) FROM events e JOIN shifts s ON "
+               "timezone('Europe/Prague', e.occurred_at) >= s.starts_at"),
+    ("mysql", "SELECT COUNT(*) FROM events e JOIN shifts s ON "
+              "CONVERT_TZ(e.occurred_at, 'UTC', 'Europe/Prague') >= s.starts_at"),
+])
+def test_each_dialects_time_zone_conversion_is_quiet(tmp_path, dialect, sql):
+    findings = _rules(tmp_path, sql, {"contracts/events.yaml": EVENTS,
+                                      "contracts/shifts.yaml": SHIFTS},
+                      dialect=dialect)
+    assert "sem/timezone-mismatch" not in _fired(findings)
+
+
 # -- sem/relative-path-base-mismatch --------------------------------------
 
 DISK = ("version: 2\ndataset: disk_files\ngrain: one row per full_path\n"
@@ -229,11 +330,41 @@ def test_path_base_mismatch_fires(tmp_path):
     assert "sem/relative-path-base-mismatch" in _fired(findings)
 
 
-def test_normalized_path_is_quiet(tmp_path):
+@pytest.mark.parametrize("on", [
+    "('./data/' || f.path) = d.full_path",
+    "CONCAT('./data/', f.path) = d.full_path",
+    "'data' || f.path = d.full_path",
+    # Not a plain prefix: can't tell, so quiet.
+    "REPLACE(d.full_path, '/srv/data/', '') = f.path",
+])
+def test_path_with_the_declared_base_is_quiet(tmp_path, on):
+    findings = _rules(
+        tmp_path, f"SELECT COUNT(*) FROM fetch_log f JOIN disk_files d ON {on}",
+        {"contracts/fetch_log.yaml": FETCH_LOG, "contracts/disk.yaml": DISK})
+    assert "sem/relative-path-base-mismatch" not in _fired(findings)
+
+
+@pytest.mark.parametrize("prefix", ["/mnt/other/", "/srv/data/"])
+def test_path_with_another_literal_base_fires(tmp_path, prefix):
+    findings = _rules(
+        tmp_path, f"SELECT COUNT(*) FROM fetch_log f JOIN disk_files d "
+                  f"ON ('{prefix}' || f.path) = d.full_path",
+        {"contracts/fetch_log.yaml": FETCH_LOG, "contracts/disk.yaml": DISK})
+    [finding] = [f for f in findings
+                 if f.rule == "sem/relative-path-base-mismatch"]
+    assert finding.why.startswith(f"the query puts '{prefix}' in front of "
+                                  "fetch_log.path, but fetch_log.path is "
+                                  "relative to data_root (./data)")
+
+
+def test_a_base_read_from_the_environment_accepts_any_prefix(tmp_path):
+    # Its real value is only known when the query runs.
     findings = _rules(
         tmp_path, "SELECT COUNT(*) FROM fetch_log f JOIN disk_files d "
                   "ON ('/srv/data/' || f.path) = d.full_path",
-        {"contracts/fetch_log.yaml": FETCH_LOG, "contracts/disk.yaml": DISK})
+        {"DATA.md": "# Data\n\n```tq-config\nbases:\n  data_root: "
+                    "{env: DATA_ROOT, default: ./data}\n```\n",
+         "contracts/fetch_log.yaml": FETCH_LOG, "contracts/disk.yaml": DISK})
     assert "sem/relative-path-base-mismatch" not in _fired(findings)
 
 
@@ -243,6 +374,10 @@ RATE = ("metric: collection_rate\nkind: ratio\ndataset: fetch_log\n"
         "numerator: {agg: count, column: '*', where: \"status = 'fetched'\"}\n"
         "denominator: {agg: count, column: '*', "
         "where: \"status <> 'removed_on_purpose'\"}\n")
+
+
+_NUM = "COUNT(*) FILTER (WHERE status = 'fetched')"
+_DEN = "COUNT(*) FILTER (WHERE status <> 'removed_on_purpose')"
 
 
 def test_metric_drift_names_the_missing_filter(tmp_path):
@@ -266,6 +401,29 @@ def test_metric_drift_names_the_missing_filter(tmp_path):
     "AS collection_rate FROM fetch_log",
     # Another name: not a claim to compute the metric.
     "SELECT COUNT(*) AS n FROM fetch_log",
+    # A slice of the metric: a run, a date window, a joined dimension.
+    f"SELECT {_NUM} * 1.0 / {_DEN} AS collection_rate FROM fetch_log "
+    "WHERE run_id = 'r1'",
+    f"SELECT {_NUM} * 1.0 / {_DEN} AS collection_rate FROM fetch_log "
+    "WHERE fetched_at >= DATE '2026-01-01'",
+    f"SELECT {_NUM.replace('status', 'f.status')} * 1.0 / "
+    f"{_DEN.replace('status', 'f.status')} AS collection_rate "
+    "FROM fetch_log f JOIN runs r ON r.id = f.run_id WHERE r.env = 'prod'",
+    # The denominator's filter in the WHERE, applied to both parts.
+    "SELECT COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*) "
+    "AS collection_rate FROM fetch_log WHERE status <> 'removed_on_purpose'",
+    "SELECT AVG(CASE WHEN status = 'fetched' THEN 1.0 ELSE 0 END) "
+    "AS collection_rate FROM fetch_log WHERE status <> 'removed_on_purpose'",
+    # NOT IN for <>, NULLIF and ROUND around the parts.
+    "SELECT ROUND(COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / NULLIF("
+    "COUNT(*) FILTER (WHERE status NOT IN ('removed_on_purpose')), 0), 3) "
+    "AS collection_rate FROM fetch_log",
+    # The name reused for something that isn't a ratio.
+    "WITH x AS (SELECT run_id, COUNT(*) AS collection_rate FROM fetch_log "
+    "GROUP BY run_id) SELECT * FROM x",
+    # Parts built in a CTE: nothing to compare here.
+    f"WITH n AS (SELECT {_NUM} AS a, {_DEN} AS b FROM fetch_log) "
+    "SELECT a * 1.0 / b AS collection_rate FROM n",
 ])
 def test_metric_as_declared_is_quiet(tmp_path, sql):
     findings = _rules(tmp_path, sql,
@@ -273,6 +431,78 @@ def test_metric_as_declared_is_quiet(tmp_path, sql):
                        "metrics/collection_rate.yaml": RATE},
                       rules=("sem/metric-drift",))
     assert not findings
+
+
+@pytest.mark.parametrize("dialect, sql", [
+    ("bigquery", "SELECT COUNTIF(status = 'fetched') / COUNTIF(status <> "
+                 "'removed_on_purpose') AS collection_rate FROM fetch_log"),
+    ("bigquery", "SELECT SAFE_DIVIDE(COUNTIF(status = 'fetched'), COUNTIF("
+                 "status <> 'removed_on_purpose')) AS collection_rate "
+                 "FROM fetch_log"),
+    ("snowflake", "SELECT DIV0(COUNT_IF(status = 'fetched'), COUNT_IF(status "
+                  "<> 'removed_on_purpose')) AS collection_rate FROM fetch_log"),
+    ("snowflake", "SELECT COUNT_IF(STATUS = 'fetched') / COUNT(*) AS "
+                  "COLLECTION_RATE FROM FETCH_LOG "
+                  "WHERE STATUS <> 'removed_on_purpose'"),
+])
+def test_dialect_forms_of_the_metric(tmp_path, dialect, sql):
+    files = {"contracts/fetch_log.yaml": FETCH_LOG,
+             "metrics/collection_rate.yaml": RATE}
+    assert not _rules(tmp_path / "ok", sql, files,
+                      rules=("sem/metric-drift",), dialect=dialect)
+    # The same form with the denominator's filter dropped is drift.
+    drifted = (sql.replace("COUNTIF(status <> 'removed_on_purpose')",
+                           "COUNT(*)")
+               .replace("COUNT_IF(status <> 'removed_on_purpose')", "COUNT(*)")
+               .replace(" WHERE STATUS <> 'removed_on_purpose'", ""))
+    [finding] = _rules(tmp_path / "drift", drifted, files,
+                       rules=("sem/metric-drift",), dialect=dialect)
+    assert "the denominator omits declared filter" in finding.why
+
+
+RATE_IN = ("metric: collection_rate\nkind: ratio\ndataset: fetch_log\n"
+           "numerator: {agg: count, column: '*', "
+           "where: \"status IN ('fetched', 'released')\"}\n"
+           "denominator: {agg: count, column: '*'}\n")
+
+
+@pytest.mark.parametrize("numerator, drift", [
+    ("status = 'fetched' OR status = 'released'", False),
+    ("status IN ('released', 'fetched')", False),
+    ("NOT status NOT IN ('fetched', 'released')", False),
+    ("status = 'fetched'", True),
+])
+def test_equivalent_filters_compare_equal(tmp_path, numerator, drift):
+    findings = _rules(
+        tmp_path, f"SELECT COUNT(*) FILTER (WHERE {numerator}) * 1.0 / "
+                  "COUNT(*) AS collection_rate FROM fetch_log",
+        {"contracts/fetch_log.yaml": FETCH_LOG,
+         "metrics/collection_rate.yaml": RATE_IN},
+        rules=("sem/metric-drift",))
+    assert bool(findings) is drift
+
+
+def test_messages_use_plain_words_not_contract_keys(tmp_path):
+    sql = ("SELECT COUNT(*) FROM fetch_log WHERE status = 'downloaded';\n"
+           "SELECT COUNT(*) FROM fetch_log WHERE status <> 'fetched';\n"
+           "SELECT SUM(amount_cents - discount_usd) FROM invoices;\n"
+           "SELECT COUNT(*) FROM events e JOIN shifts s "
+           "ON e.occurred_at >= s.starts_at;\n"
+           "SELECT COUNT(*) FROM fetch_log f JOIN disk_files d "
+           "ON f.path = d.full_path;\n"
+           "SELECT COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*) "
+           "AS collection_rate FROM fetch_log;\n")
+    findings = _rules(tmp_path, sql, {
+        "contracts/fetch_log.yaml": FETCH_LOG,
+        "contracts/invoices.yaml": INVOICES, "contracts/events.yaml": EVENTS,
+        "contracts/shifts.yaml": SHIFTS, "contracts/disk.yaml": DISK,
+        "metrics/collection_rate.yaml": RATE})
+    assert _fired(findings) == sorted(CONTRACT_RULES)
+    for finding in findings:
+        text = finding.why + " " + finding.fix
+        for key in ("absent_expected", "relative_to", "unanchored",
+                    "time_zone:", "unit:", "currency:", "means:"):
+            assert key not in text, (finding.rule, key, text)
 
 
 def test_contract_rules_are_off_by_default():
@@ -414,6 +644,46 @@ def test_notice_watches_a_nested_contracts_folder(tmp_path, monkeypatch):
     out = edit("shop/contracts/fetch_log.yaml",
                FETCH_LOG.replace("failed:", "lost:"))
     assert "shop/contracts/fetch_log.yaml" in out
+
+
+def _stop(monkeypatch):
+    from test_hook import Args, _run
+    return _run(json.dumps({"hook_event_name": "Stop",
+                            "stop_hook_active": False}), Args(), monkeypatch)[1]
+
+
+def test_notice_names_a_first_contract_in_a_new_folder(tmp_path,
+                                                       monkeypatch):
+    root, edit = _session(tmp_path, monkeypatch, {"q.sql": "SELECT 1\n"})
+    edit("q.sql")
+    (root / "contracts").mkdir()
+    assert "contracts/fetch_log.yaml" in edit("contracts/fetch_log.yaml",
+                                              FETCH_LOG)
+    assert "contracts/metrics changed" not in _stop(monkeypatch)
+
+
+def test_notice_names_contracts_a_shell_command_created(tmp_path,
+                                                        monkeypatch):
+    # `truequery init` run from the shell: no edit event names the files.
+    root, edit = _session(tmp_path, monkeypatch, {"q.sql": "SELECT 1\n"})
+    edit("q.sql")
+    (root / "contracts").mkdir()
+    (root / "contracts/fetch_log.yaml").write_text(FETCH_LOG,
+                                                   encoding="utf-8")
+    assert "contracts/fetch_log.yaml" in edit("q.sql")
+
+
+def test_notice_names_a_nested_contract_edited_before_its_sql(
+        tmp_path, monkeypatch):
+    root, edit = _session(tmp_path, monkeypatch, {
+        "q.sql": "SELECT 1\n",
+        "shop/contracts/fetch_log.yaml": FETCH_LOG})
+    edit("q.sql")
+    out = edit("shop/contracts/fetch_log.yaml",
+               FETCH_LOG.replace("failed:", "lost:"))
+    assert "shop/contracts/fetch_log.yaml" in out
+    # Said once: the end of the turn doesn't take it for a deleted file.
+    assert "contracts/metrics changed" not in _stop(monkeypatch)
 
 
 def test_shell_change_caught_at_the_next_event(tmp_path, monkeypatch):

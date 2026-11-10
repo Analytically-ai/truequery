@@ -969,18 +969,24 @@ def main(args) -> int:
         # Watch the folders the checks read for the files this session
         # touches. Say a change once, when the content changes; the first
         # event of a session has nothing to compare, so an edit then counts.
+        # A folder once watched stays watched, so a file never looks deleted
+        # just because this event touched other files. The root contracts/
+        # and metrics/ count as watched before they exist, so a first
+        # contract written there (by an edit or a shell command) is a change.
         here = [P._rel(p if os.path.isabs(p) else os.path.join(root, p),
                        root) for p in paths]
-        watch = P.contract_dirs(
-            root, list(session.get("touched") or []) + here + contract_edits)
+        prev_watch = set(session.get("contracts_watch") or [])
+        watch = sorted(prev_watch | set(P.contract_dirs(
+            root, list(session.get("touched") or []) + here + contract_edits)))
         cur_cfp = P.contracts_fingerprint(root, watch)
         prev_cfp = session.get("contracts_fp")
-        prev_watch = set(session.get("contracts_watch") or [])
+        known = prev_watch | {"contracts", "metrics"}
         if isinstance(prev_cfp, dict):
             newly_changed = [
                 rel for rel in sorted(set(prev_cfp) | set(cur_cfp))
                 if prev_cfp.get(rel) != cur_cfp.get(rel)
-                and (rel in prev_cfp or os.path.dirname(rel) in prev_watch)]
+                and (rel in prev_cfp or rel in contract_edits
+                     or os.path.dirname(rel) in known)]
         else:
             newly_changed = sorted(set(contract_edits))
         session["contracts_fp"] = cur_cfp
