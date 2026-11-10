@@ -1,0 +1,66 @@
+id: sem/timezone-mismatch
+title: Convert timestamps with different declared time zones before comparing or joining them
+domain: sem
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  When contracts declare different time_zone values on two timestamp columns
+  (for example UTC vs local:Europe/Prague or UTC vs naive), queries convert
+  both columns to the same time zone before comparing them or bucketing them
+  into the same date grain.
+rationale: >
+  Comparing a UTC timestamp directly against a local-time window shifts every
+  boundary by the UTC offset (1 to 2 hours in Central Europe, 5 to 8 hours in
+  North America), silently dropping or misattributing rows near window edges.
+failure_example: >
+  Joining UTC event timestamps to local Europe/Prague shift windows without AT
+  TIME ZONE misses an event at 22:30 UTC (00:30 local) that belongs to the
+  night shift.
+enforcement: contract
+evidence: contract
+contract_required: false
+detection_sketch: >
+  Resolve timestamp column references in comparisons (=, <, <=, >, >=,
+  BETWEEN) and joins against v2 contracts. When both sides have declared
+  time_zone values that differ and neither side applies AT TIME ZONE /
+  timezone conversion, flag the comparison and name both declared time zones.
+severity_suggestion: error
+examples:
+  bad: |-
+    SELECT COUNT(*) FROM events e
+    JOIN shifts s ON e.occurred_at BETWEEN s.shift_start AND s.shift_end;
+  good: |-
+    SELECT COUNT(*) FROM events e
+    JOIN shifts s
+      ON (e.occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Prague')
+         BETWEEN s.shift_start AND s.shift_end;
+sources:
+- title: Date/Time Types and Time Zones (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/datatype-datetime.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Comparing timestamps without explicit zone conversion compares raw clock values across different zones.
+- title: Timestamp Functions and AT TIME ZONE (DuckDB)
+  url: https://duckdb.org/docs/current/sql/data_types/timestamp
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: AT TIME ZONE converts timestamps between UTC and named IANA time zones.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sem/time-dimension-standardized]
+proof:
+  setup: |
+    CREATE TABLE events(id INT, occurred_at TIMESTAMP);
+    INSERT INTO events VALUES (1, TIMESTAMP '2026-07-01 22:30:00');
+    CREATE TABLE shifts(shift_date DATE, shift_start TIMESTAMP, shift_end TIMESTAMP);
+    INSERT INTO shifts VALUES (DATE '2026-07-02', TIMESTAMP '2026-07-02 00:00:00', TIMESTAMP '2026-07-02 08:00:00');
+  bad: "SELECT COUNT(*) AS n FROM events e JOIN shifts s ON e.occurred_at BETWEEN s.shift_start AND s.shift_end"
+  bad_result: "[(0,)]"
+  good: "SELECT COUNT(*) AS n FROM events e JOIN shifts s ON (e.occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Prague') BETWEEN s.shift_start AND s.shift_end"
+  good_result: "[(1,)]"
+  note: >
+    events.occurred_at is stored in UTC (2026-07-01 22:30:00 UTC = 2026-07-02
+    00:30:00 Europe/Prague CEST), while shifts stores local Europe/Prague wall
+    times. Comparing the raw timestamps misses the shift and returns 0 instead
+    of 1.

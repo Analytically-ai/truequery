@@ -61,8 +61,9 @@ confirm otherwise, and records the decision.
 **3. It checks the SQL with plain code as it's written.** The time-zone trap
 was caught by the definitions. The checker catches a different kind of
 mistake: SQL that runs without errors and still returns the wrong answer. It
-looks for 32 kinds of it (21 in SQL, 4 in dbt and orchestration, 7 in pandas
-code), offline and with no AI involved, while the agent works:
+looks for 38 kinds of it (21 in SQL, 4 in dbt and orchestration, 7 in pandas
+code, 6 that read your contracts), offline and with no AI involved, while the
+agent works:
 
 ```sql
 -- Customers who never ordered
@@ -179,7 +180,7 @@ also run it on its own.
   error; 3 means some files couldn't be checked (`--allow-unverified` turns
   3 into 0).
 
-All 32 checks, with what each one catches: [the checker in
+All 38 checks, with what each one catches: [the checker in
 detail](docs/checker.md).
 
 ## You control the rules
@@ -344,7 +345,7 @@ you to change your stack. It sits alongside what you already use:
 
 ## The standard
 
-225 practices for data work, across 9 lifecycle domains (ingest, store,
+231 practices for data work, across 9 lifecycle domains (ingest, store,
 model, orchestrate, data quality, semantics and metrics, consumption,
 governance, operations) and 2 cross-cutting packs (SQL, Python). Each one
 is a record with its rationale, examples and sources. The skill teaches all
@@ -357,7 +358,7 @@ top through `/truequery init`, `DATA.md` and per-table contracts.
 **Why not just put these rules in CLAUDE.md or AGENTS.md?**
 Instructions are a good start, but nothing checks that the agent followed
 them, and an agent reviewing its own work is blind in the same places as its
-first draft. TrueQuery gives the agent a full procedure and 225 sourced
+first draft. TrueQuery gives the agent a full procedure and 231 sourced
 practices, then backs them with a deterministic checker and a receipt that
 says what wasn't verified. Your team's definitions go in `DATA.md`.
 

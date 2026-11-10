@@ -1,0 +1,58 @@
+id: sem/unit-mismatch
+title: Convert columns with different declared units or currencies before combining or comparing them
+domain: sem
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  When a contract declares units or currencies on numeric columns (such as
+  minor vs major currency units, GiB vs GB, or ms vs s), SQL expressions
+  convert the columns to a common unit before adding, subtracting, comparing,
+  or joining them.
+rationale: >
+  Adding, subtracting, or comparing bare numbers across incompatible units (for
+  example cents minus dollars, or GiB compared against bytes) produces a
+  syntactically valid query whose result is off by orders of magnitude or 7.4%
+  (2^30 vs 10^9).
+failure_example: >
+  SELECT SUM(amount_cents - discount_usd) FROM order_invoices subtracts whole
+  dollars directly from cents, reporting 3,495 instead of $30.00.
+enforcement: contract
+evidence: contract
+contract_required: false
+detection_sketch: >
+  Resolve column references in binary arithmetic (+, -) and comparisons (=,
+  !=, <, <=, >, >=) against v2 contracts. When both sides reference columns
+  with declared units (or currencies) that differ and neither side applies a
+  scaling conversion (* or /), flag the expression and state both declared
+  units.
+severity_suggestion: error
+examples:
+  bad: SELECT SUM(amount_cents - discount_usd) AS net_usd FROM order_invoices;
+  good: SELECT SUM(amount_cents / 100.0 - discount_usd) AS net_usd FROM order_invoices;
+sources:
+- title: Getting started data modeling
+  url: https://docs.cube.dev/docs/data-modeling/overview
+  publisher: Cube
+  accessed: 2026-10-12
+  supports: Measures defined with explicit SQL conversions keep unit transformations visible and consistent.
+- title: Numeric Types and Mathematical Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-math.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: SQL arithmetic operators act on raw numeric values without unit metadata; callers must scale values explicitly.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sem/unit-consistency]
+proof:
+  setup: |
+    CREATE TABLE order_invoices(id INT, amount_cents INT, discount_usd DOUBLE);
+    INSERT INTO order_invoices VALUES (1, 2500, 5.0), (2, 1000, 0.0);
+  bad: "SELECT SUM(amount_cents - discount_usd) AS net_usd FROM order_invoices"
+  bad_result: "[(3495.0,)]"
+  good: "SELECT SUM(amount_cents / 100.0 - discount_usd) AS net_usd FROM order_invoices"
+  good_result: "[(30.0,)]"
+  note: >
+    Invoice 1 is 2500 cents ($25) minus a $5 discount ($20 net), and invoice 2
+    is 1000 cents ($10 net), for $30.00 total. Subtracting discount_usd from
+    amount_cents without dividing cents by 100.0 yields 3495.0.

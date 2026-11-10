@@ -1,0 +1,58 @@
+id: dq/expected-absence-counted-as-missing
+title: Missing-data and failure counts exclude status values that mean expected absence
+domain: dq
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  When a status column declares values with means: absent_expected (such as
+  released, refetchable, or removed_on_purpose) alongside means: present and
+  means: absent_unexpected, queries that count missing or failed items filter
+  for absent_unexpected (or explicitly exclude absent_expected), never
+  status != '<present>'.
+rationale: >
+  Treating every row where status != 'fetched' as missing or failed sweeps in
+  items that were intentionally released from disk or removed on purpose,
+  inflating missing-file and failure counts.
+failure_example: >
+  A pipeline audit runs SELECT COUNT(*) AS missing_count FROM fetch_log WHERE
+  status != 'fetched' and reports 1,400 missing files, 1,380 of which have
+  status = 'released' or 'removed_on_purpose'.
+enforcement: contract
+evidence: contract
+contract_required: false
+detection_sketch: >
+  When a contract column declares values with means annotations including both
+  present and absent_expected, flag predicates of the form col != '<present>'
+  or col NOT IN ('<present>') when the query or alias counts missing/failed/
+  uncollected items (or does not also exclude the absent_expected values).
+severity_suggestion: error
+examples:
+  bad: SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status != 'fetched';
+  good: SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status = 'failed';
+sources:
+- title: Add data tests to your DAG
+  url: https://docs.getdbt.com/docs/build/data-tests
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Domain value sets distinguish valid lifecycle states from unexpected failures.
+- title: Conditional Expressions (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-conditional.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Negated equality (status != 'fetched') matches every other non-null status value in the table unless explicitly filtered.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [dq/undeclared-status-value, dq/completeness-declare-missing-sentinels]
+proof:
+  setup: |
+    CREATE TABLE fetch_log(id INT, status VARCHAR);
+    INSERT INTO fetch_log VALUES (1, 'fetched'), (2, 'removed_on_purpose'), (3, 'failed');
+  bad: "SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status != 'fetched'"
+  bad_result: "[(2,)]"
+  good: "SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status = 'failed'"
+  good_result: "[(1,)]"
+  note: >
+    Row 2 was removed on purpose (expected absence) and row 3 failed
+    (unexpected absence). Filtering with status != 'fetched' counts both rows
+    and reports 2 missing items instead of 1.

@@ -78,10 +78,10 @@ Full procedures live in `commands/<name>.md` (drafts are intent, not process).
 ## Evidence levels
 
 `file`: SQL checks · `project`: preview checks (dbt YAML, incremental
-models, Airflow) · `contract`: read for context; declared keys feed
-`sql/count-star-after-left-join` · `metadata`, `data`: never checked (no
-warehouse adapter yet; what you learn by querying is your evidence, not
-the checker's). Name the level of every claim you make.
+models, Airflow) · `contract`: declared keys feed checks; values, units,
+time zones, paths and metrics do only when those checks are switched on ·
+`metadata`, `data`: never checked (querying is your evidence, not ours).
+Name the level of every claim you make.
 
 ## If the engine isn't available
 
@@ -107,9 +107,9 @@ once: a repeat means something new changed.
 Never change how you are checked. Human-only: `truequery rules set`;
 the `rules:`, `interrupt_edits` and `tier_overrides` keys in `DATA.md`;
 the user config; hand edits to `.truequery/ignores.json`; turning hooks
-off. If rules misfire, ignore one line or ask — don't retune the checker.
-When you see "rule settings changed this session", stop and confirm
-with the user before relying on new settings.
+off. Never edit a contract or metric to silence a finding. When you
+see "rule settings changed this session" or "contracts/metrics changed
+this session", stop and confirm with the user before relying on it.
 
 ## Reference
 

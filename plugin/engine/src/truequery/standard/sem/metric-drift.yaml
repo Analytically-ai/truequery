@@ -1,0 +1,70 @@
+id: sem/metric-drift
+title: SQL expressions aliased to a declared metric name match the metric's aggregation and filters
+domain: sem
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  When a query over a metric's dataset projects an expression aliased to a
+  declared metric name in metrics/*.yaml, the expression's aggregation,
+  numerator/denominator structure, and filter predicates match the governed
+  metric definition.
+rationale: >
+  Re-implementing a governed metric inline while omitting its denominator
+  filter or changing its numerator predicate produces a column with the exact
+  metric name that quietly disagrees with every other report.
+failure_example: >
+  metrics/collection_rate.yaml defines collection_rate with denominator where:
+  "status <> 'removed_on_purpose'", but a dashboard query computes COUNT(*)
+  FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*) AS collection_rate and
+  reports 60% instead of 75%.
+enforcement: contract
+evidence: contract
+contract_required: false
+detection_sketch: >
+  Load metrics/*.yaml and match each SELECT projection whose alias equals a
+  declared metric name on a query reading that metric's dataset. Normalize the
+  projection's aggregation and filter predicates (FILTER (WHERE ...), CASE
+  WHEN ..., or query WHERE) with sqlglot and compare against the metric's
+  declared agg, column, and where clauses.
+severity_suggestion: error
+examples:
+  bad: |-
+    SELECT ROUND(
+      COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*), 2
+    ) AS collection_rate
+    FROM fetch_log;
+  good: |-
+    SELECT ROUND(
+      COUNT(*) FILTER (WHERE status = 'fetched') * 1.0
+      / COUNT(*) FILTER (WHERE status <> 'removed_on_purpose'), 2
+    ) AS collection_rate
+    FROM fetch_log;
+sources:
+- title: MetricFlow overview and governed metrics
+  url: https://docs.getdbt.com/docs/build/metrics-overview
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: Governed metric definitions bind numerator, denominator, and filter predicates in one place so downstream queries do not drift.
+- title: Aggregate Expressions and FILTER (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-AGGREGATES
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: Omitting a FILTER (WHERE ...) clause on a denominator aggregate includes every row in the divisor.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sem/single-governed-metric-definition, sem/metric-filters-declared-not-hidden, sem/ratio-metrics-divide-after-aggregation]
+proof:
+  setup: |
+    CREATE TABLE fetch_log(id INT, status VARCHAR);
+    INSERT INTO fetch_log VALUES
+      (1, 'fetched'), (2, 'fetched'), (3, 'fetched'),
+      (4, 'failed'), (5, 'removed_on_purpose');
+  bad: "SELECT ROUND(COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*), 2) AS collection_rate FROM fetch_log"
+  bad_result: "[(0.6,)]"
+  good: "SELECT ROUND(COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*) FILTER (WHERE status <> 'removed_on_purpose'), 2) AS collection_rate FROM fetch_log"
+  good_result: "[(0.75,)]"
+  note: >
+    Of 5 rows, 3 are fetched, 1 failed, and 1 was removed on purpose. The
+    declared metric excludes removed_on_purpose from the denominator (3 / 4 =
+    0.75); omitting that denominator filter divides by 5 and reports 0.6.

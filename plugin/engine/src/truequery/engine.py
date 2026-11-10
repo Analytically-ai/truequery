@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from truequery import __version__
+from truequery import keylookup
 from truequery import project as P
 from truequery import settings as S
 from truequery import std_registry
@@ -382,7 +383,7 @@ def _original_offset(sql: str, cleaned: str, offset: int) -> int:
 @analyzer.quiet_sqlglot()
 def check_python_source(text: str, path: str, dialect: str | None = None,
                         mode: str = "build", tiers=None, settings=None,
-                        extraction=None):
+                        extraction=None, root: str | None = None):
     """(findings, fragments, spans) for the SQL inside one .py file.
 
     Each static/templated fragment goes through the same SQL checks as a
@@ -400,7 +401,8 @@ def check_python_source(text: str, path: str, dialect: str | None = None,
         if not frag.checked:
             continue
         res = analyzer.check_text(frag.sql, dialect=dialect, path=path,
-                                  mode=mode, tiers=tiers, settings=settings)
+                                  mode=mode, tiers=tiers, settings=settings,
+                                  root=root)
         prose = not res["diagnostics"] and _reads_as_prose(frag.sql, dialect)
         if prose:
             res["findings"] = []  # not SQL: nothing it says is a finding
@@ -477,14 +479,15 @@ def check_pandas_source(text: str, path: str, mode: str = "build",
 
 
 def check_python_file(text: str, path: str, dialect: str | None = None,
-                      mode: str = "build", tiers=None, settings=None):
+                      mode: str = "build", tiers=None, settings=None,
+                      root: str | None = None):
     """(findings, fragments, spans, pandas_ran) for one .py file: the SQL
     inside it and its pandas code. Spans are the SQL statements first,
     then the file's Python statements when it imports pandas; a pandas
     finding is keyed to the first span holding its line, the same lookup
     `ignore add` and git baselines use."""
     findings, fragments, spans = check_python_source(
-        text, path, dialect, mode, tiers, settings)
+        text, path, dialect, mode, tiers, settings, root=root)
     spans = spans + pandas_checks.statement_spans(text)
     ran, pandas = check_pandas_source(text, path, mode, tiers, settings)
     for finding in pandas:
@@ -507,7 +510,8 @@ def statement_spans(path: str, text: str, dialect: str | None) -> list:
 @analyzer.quiet_sqlglot()
 def check_file(path: str, dialect: str | None = None,
                mode: str = "build", tiers=None,
-               settings=None, text: str | None = None
+               settings=None, text: str | None = None,
+               root: str | None = None
                ) -> tuple[list[Finding], list[Diagnostic], list[str]]:
     """Check one file from disk. The CLI and hook use run()."""
     if text is None:
@@ -515,7 +519,7 @@ def check_file(path: str, dialect: str | None = None,
             text = handle.read()
     res = analyzer.check_text(text, dialect=dialect, path=path, mode=mode,
                               tiers=tiers,
-                              settings=settings)
+                              settings=settings, root=root)
     findings = [Finding(rule=f["rule"], severity=f["severity"],
                         mode=f["mode"], evidence=f["evidence"],
                         file=f["file"], line=f["line"], col=f["col"],
@@ -612,6 +616,7 @@ def run(paths: list[str], root: str, dialect: str | None = None,
     land on FileResult.suppressed (with a broad/narrow flag) so
     reporters can say what an ignore hid.
     """
+    keylookup.clear_cache()  # read contracts and dbt YAML once per run
     sql_files = P.discover(paths)
     if config is None:
         config = P.load_config(root)
@@ -640,7 +645,7 @@ def run(paths: list[str], root: str, dialect: str | None = None,
             continue
         findings, diagnostics, key_lookups = check_file(
             path, dialect=base_dialect, mode=file_mode, tiers=tiers,
-            settings=settings, text=text)
+            settings=settings, text=text, root=root)
         # Preview dbt-model check (incremental without unique_key).
         findings += _aux_findings(text, path, file_mode, tiers, settings)
         for diagnostic in diagnostics:
@@ -659,7 +664,8 @@ def run(paths: list[str], root: str, dialect: str | None = None,
         findings, fragments, spans, pandas = [], [], [], False
         if path.endswith(".py"):
             findings, fragments, spans, pandas = check_python_file(
-                text, path, base_dialect, file_mode, tiers, settings)
+                text, path, base_dialect, file_mode, tiers, settings,
+                root=root)
         unchecked = any(not f.checked for f in fragments)
         if project_checks.applies_to_file(path, text):
             # A DAG stays a project file (the project check really ran

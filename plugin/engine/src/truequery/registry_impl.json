@@ -1,4 +1,14 @@
 {
+ "dq/expected-absence-counted-as-missing": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "dq/undeclared-status-value": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
  "dq/uniqueness-key-no-duplicates": {
   "enabled": false,
   "implemented": true,
@@ -51,6 +61,26 @@
  },
  "py/pandas-to-sql-replace": {
   "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sem/metric-drift": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sem/relative-path-base-mismatch": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sem/timezone-mismatch": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "sem/unit-mismatch": {
+  "enabled": false,
   "implemented": true,
   "tier": "stop"
  },

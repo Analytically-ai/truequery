@@ -7,6 +7,7 @@ Offline and deterministic. DATA.md carries a machine-readable
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 import re
 
@@ -894,3 +895,69 @@ def seed_contracts(root: str) -> list[str]:
             handle.write(_contract_for_spec(spec, source))
         created.append(dest)
     return created
+
+
+def is_contract_or_metric_path(path: str, root: str) -> bool:
+    """True for a YAML file in a contracts/ or metrics/ folder under root
+    (at any depth: the checks read the nearest such folder)."""
+    if not path or not path.lower().endswith((".yaml", ".yml")):
+        return False
+    real_root = os.path.realpath(root)
+    full = os.path.realpath(path if os.path.isabs(path)
+                            else os.path.join(root, path))
+    rel = os.path.relpath(full, real_root)
+    if rel == ".." or rel.startswith(".." + os.sep):
+        return False
+    return os.path.basename(os.path.dirname(full)) in ("contracts", "metrics")
+
+
+def contract_dirs(root: str, rel_paths) -> list[str]:
+    """The contracts/ and metrics/ folders the checks read for these files:
+    <root>/contracts, <root>/metrics, and each file's nearest ones. Paths
+    relative to the real root."""
+    real_root = os.path.realpath(root)
+    found = set()
+    for sub in ("contracts", "metrics"):
+        if os.path.isdir(os.path.join(real_root, sub)):
+            found.add(sub)
+    for rel in rel_paths or []:
+        cur = os.path.dirname(os.path.realpath(os.path.join(real_root, rel)))
+        if not (cur == real_root or cur.startswith(real_root + os.sep)):
+            continue
+        if os.path.basename(cur) in ("contracts", "metrics"):
+            found.add(os.path.relpath(cur, real_root).replace(os.sep, "/"))
+        while True:
+            for sub in ("contracts", "metrics"):
+                cand = os.path.join(cur, sub)
+                if os.path.isdir(cand):
+                    found.add(os.path.relpath(cand, real_root)
+                              .replace(os.sep, "/"))
+            if cur == real_root:
+                break
+            cur = os.path.dirname(cur)
+    return sorted(found)
+
+
+def contracts_fingerprint(root: str, dirs=("contracts", "metrics")
+                          ) -> dict[str, str]:
+    """Map contract/metric YAML path (relative to the real root, `/`) ->
+    SHA-256 of its content, for the given folders."""
+    real_root = os.path.realpath(root)
+    fp: dict[str, str] = {}
+    for sub in dirs:
+        folder = os.path.join(real_root, sub)
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith((".yaml", ".yml")):
+                continue
+            full = os.path.join(folder, name)
+            try:
+                with open(full, "rb") as handle:
+                    digest = hashlib.sha256(handle.read()).hexdigest()
+            except OSError:
+                continue
+            fp[os.path.relpath(full, real_root).replace(os.sep, "/")] = digest
+    return fp

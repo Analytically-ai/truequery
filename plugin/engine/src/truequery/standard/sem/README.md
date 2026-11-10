@@ -56,7 +56,7 @@ See CONFLICTS_FRAG.md (3 entries).
 
 ## Files
 
-22 practices, all `status: draft`. `contract_required` applies only to `contract` records: `yes` means part of the small required set (grain, keys, PII classification); `no` means optional.
+26 practices, all `status: draft`. `contract_required` applies only to `contract` records: `yes` means part of the small required set (grain, keys, PII classification); `no` means optional.
 
 | slug | enforcement | severity | contract_required |
 |---|---|---|---|
@@ -69,6 +69,7 @@ See CONFLICTS_FRAG.md (3 entries).
 | dimension-naming-conventions | contract | warning | no |
 | entity-primary-key-declared | detector | warning |  |
 | join-paths-declared-via-entities | detector | warning |  |
+| metric-drift | contract | error | no |
 | metric-filters-declared-not-hidden | detector | warning |  |
 | metric-grain-declaration | detector | warning |  |
 | metric-smoke-test-on-change | judgment | warning |  |
@@ -77,21 +78,24 @@ See CONFLICTS_FRAG.md (3 entries).
 | null-handling-in-aggregations | contract | warning | no |
 | percentile-metrics-use-approximate | detector | warning |  |
 | ratio-metrics-divide-after-aggregation | detector | error |  |
+| relative-path-base-mismatch | contract | error | no |
 | saved-query-canonical-slices | contract | advisory | no |
 | semantic-model-validates | detector | warning |  |
 | single-governed-metric-definition | detector | warning |  |
 | time-dimension-standardized | detector | warning |  |
+| timezone-mismatch | contract | error | no |
 | unit-consistency | contract | error | no |
+| unit-mismatch | contract | error | no |
 
 ## Enforcement counts
 
 | enforcement | count |
 |---|---|
 | detector | 16 |
-| contract | 5 |
+| contract | 9 |
 | runtime | 0 |
 | judgment | 1 |
-| **total** | **22** |
+| **total** | **26** |
 
-Severity: 4 error, 16 warning, 2 advisory. `error` is reserved for proven data loss, wrong answers, or security exposure.
+Severity: 8 error, 16 warning, 2 advisory. `error` is reserved for proven data loss, wrong answers, or security exposure.
 

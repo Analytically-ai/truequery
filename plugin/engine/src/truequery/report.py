@@ -236,7 +236,8 @@ def build_receipt(results, modes: list[str], contracts: dict,
                   tier_overrides: dict | None = None,
                   rule_settings: str | None = None,
                   invalid_contracts: list[str] | None = None,
-                  invalid_metrics: list[str] | None = None) -> dict:
+                  invalid_metrics: list[str] | None = None,
+                  contracts_changed: list[str] | None = None) -> dict:
     findings = all_findings(results)
     counts = {"error": 0, "warning": 0, "advisory": 0, "info": 0}
     attributed: dict[str, dict[str, int]] = {}
@@ -322,6 +323,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
         "contracts_referenced": tables_referenced,
         "contracts_missing": missing,
         "contracts_draft": drafts,
+        "contracts_changed": list(contracts_changed or []),
         "judgment_in_scope": judgment_in_scope(modes),
         "ignores": {"narrow": narrow, "broad": broad},
         "attribution": attributed,
@@ -428,6 +430,10 @@ def render_receipt(receipt: dict) -> str:
     if receipt["contracts_missing"]:
         lines.append(f"{'No contract':<13}"
                      + ", ".join(receipt["contracts_missing"]))
+    if receipt.get("contracts_changed"):
+        changed = ", ".join(receipt["contracts_changed"])
+        lines.append(f"{'Session':<13}Contracts changed in the last agent "
+                     f"session: {changed} (confirm with the user)")
     scoped = receipt["judgment_in_scope"]
     if scoped:
         lines.append("Judgment calls (no check can decide these):")

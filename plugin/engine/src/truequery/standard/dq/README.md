@@ -80,7 +80,7 @@ timeliness) moved to `product-spec/dq-report.md`.
 
 ## Files
 
-18 practices, all `status: draft`. `contract_required` applies only to `contract` records: `yes` means part of the small required set (grain, keys, PII classification); `no` means optional.
+20 practices, all `status: draft`. `contract_required` applies only to `contract` records: `yes` means part of the small required set (grain, keys, PII classification); `no` means optional.
 
 | slug | enforcement | severity | contract_required |
 |---|---|---|---|
@@ -94,7 +94,9 @@ timeliness) moved to `product-spec/dq-report.md`.
 | consistency-cross-column-row-rules | contract | error | no |
 | consistency-no-orphan-keys | runtime | error |  |
 | consistency-paired-aggregate-reconciliation | runtime | error |  |
+| expected-absence-counted-as-missing | contract | error | no |
 | schema-conformance-checked-on-read | runtime | warning |  |
+| undeclared-status-value | contract | error | no |
 | unenforced-constraints-are-tested | contract | warning | no |
 | uniqueness-composite-grain | contract | warning | yes |
 | uniqueness-key-no-duplicates | runtime | error |  |
@@ -108,10 +110,10 @@ timeliness) moved to `product-spec/dq-report.md`.
 | enforcement | count |
 |---|---|
 | detector | 0 |
-| contract | 10 |
+| contract | 12 |
 | runtime | 7 |
 | judgment | 1 |
-| **total** | **18** |
+| **total** | **20** |
 
-Severity: 5 error, 11 warning, 2 advisory. `error` is reserved for proven data loss, wrong answers, or security exposure.
+Severity: 7 error, 11 warning, 2 advisory. `error` is reserved for proven data loss, wrong answers, or security exposure.
 

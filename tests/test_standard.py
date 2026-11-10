@@ -13,7 +13,7 @@ SRC = os.path.join(os.path.dirname(__file__), "..", "plugin", "engine", "src", "
 
 def test_all_records_load():
     records = schema.load_all()
-    assert len(records) == 225
+    assert len(records) == 231
 
 
 def test_ids_match_paths():
@@ -86,7 +86,7 @@ def test_backtick_receipt_guidance():
 
 
 def test_checker_doc_rule_table_matches_registry():
-    # The 25-check table lives in docs/checker.md (linked from the README).
+    # The check table lives in docs/checker.md (linked from the README).
     import os
     from truequery import std_registry
     root = os.path.join(os.path.dirname(__file__), "..")

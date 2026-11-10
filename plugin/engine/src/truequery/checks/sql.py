@@ -10,7 +10,10 @@ answer, loses data, or is non-deterministic.
 import re
 from dataclasses import dataclass, field
 
+import sqlglot
 from sqlglot import exp
+
+from truequery import contract_v2
 
 
 @dataclass(frozen=True)
@@ -19,7 +22,10 @@ class CheckContext:
     dialect: str | None = None
     path: str = "<input>"
     mode: str = "build"
-    keys: dict = field(default_factory=dict)  # relation -> candidate keys
+    keys: dict = field(default_factory=dict)       # relation -> candidate keys
+    contracts: dict = field(default_factory=dict)  # relation -> contract dict
+    metrics: dict = field(default_factory=dict)    # metric name -> metric dict
+    bases: dict = field(default_factory=dict)      # base name -> {default: ...}
 
 # Functions whose result is non-NULL whenever a fallback is non-NULL:
 # a nullable-side column wrapped in one is NULL-tolerant.
@@ -1362,6 +1368,1235 @@ def case_without_else_in_aggregate(stmt, loc, ctx):
     return out
 
 
+# -- contract-aware SQL checks (dq/*, sem/*) ---------------------------------
+def _draft_note(*contracts) -> str:
+    """Provenance suffix when a relied-upon contract is a draft: `status:
+    draft`, or a grain nobody has confirmed (as `truequery init` seeds)."""
+    seen = []
+    for contract in contracts:
+        if not isinstance(contract, dict):
+            continue
+        name = contract.get("dataset") or contract.get("table") or "unknown"
+        if contract.get("status") == "draft":
+            src = contract.get("inferred_from") or "sample"
+            tag = f"from draft contract {name}, inferred from {src}"
+        elif contract_v2.is_unconfirmed_grain(contract.get("grain")):
+            tag = (f"from draft contract {name}: its grain is unconfirmed, "
+                   "as seeded by truequery init")
+        else:
+            continue
+        if tag not in seen:
+            seen.append(tag)
+    return f" ({'; '.join(seen)})" if seen else ""
+
+
+def _same_select(node, sel) -> bool:
+    """True when node belongs to sel (not a nested subquery Select)."""
+    cur = getattr(node, "parent", None)
+    while cur is not None:
+        if cur is sel:
+            return True
+        if isinstance(cur, exp.Select):
+            return False
+        cur = getattr(cur, "parent", None)
+    return False
+
+
+def _contract_col_map(contract: dict) -> dict[str, tuple[dict, str, dict]]:
+    """Map lowercased column name -> (contract, declared_col_name, col_spec)."""
+    col_map: dict[str, tuple[dict, str, dict]] = {}
+    cols = contract.get("columns")
+    if isinstance(cols, dict):
+        for cname, spec in cols.items():
+            col_map[str(cname).lower()] = (
+                contract, str(cname), dict(spec) if isinstance(spec, dict) else {}
+            )
+    allowed = contract.get("allowed_values")
+    if isinstance(allowed, dict):
+        for cname, vals in allowed.items():
+            key = str(cname).lower()
+            if key not in col_map:
+                col_map[key] = (contract, str(cname), {})
+            if "values" not in col_map[key][2] and isinstance(vals, list):
+                col_map[key][2]["values"] = list(vals)
+    return col_map
+
+
+def _unparen(node):
+    while isinstance(node, exp.Paren):
+        node = node.this
+    return node
+
+
+def _conjuncts(node) -> list:
+    """The operands of a top-level AND (through parentheses)."""
+    node = _unparen(node)
+    if node is None:
+        return []
+    if isinstance(node, exp.And):
+        return _conjuncts(node.left) + _conjuncts(node.right)
+    return [node]
+
+
+def _find_cte(stmt, name_low: str):
+    """The body of the CTE named name_low, or None. A CTE named like a
+    contracted table is the CTE, whatever its body (a UNION too)."""
+    for cte in stmt.find_all(exp.CTE):
+        if _alias_key(cte).split(":", 1)[-1] == name_low:
+            return cte.this
+    return None
+
+
+def _declared_relations(contract: dict) -> list[str]:
+    names = [contract.get("dataset"), contract.get("table")]
+    loc = contract.get("location")
+    if isinstance(loc, dict):
+        names.append(loc.get("relation"))
+    return [str(n).lower() for n in names if isinstance(n, str) and n]
+
+
+def _contract_for_table(table, contracts: dict):
+    """The contract for a table reference. A contract that names only the
+    table matches it in any schema, as key lookup does; a contract that
+    names its schema doesn't match the same table in another schema."""
+    name = (table.name or "").lower()
+    full = ".".join(p for p in (table.db, table.name) if p).lower()
+    contract = contracts.get(full)
+    if contract is not None or not name:
+        return contract
+    contract = contracts.get(name)
+    if contract is None or not table.db:
+        return contract
+    schemas = {rel.split(".")[-2] for rel in _declared_relations(contract)
+               if "." in rel and rel.split(".")[-1] == name}
+    if schemas and table.db.lower() not in schemas:
+        return None
+    return contract
+
+
+def _from_items(node) -> list:
+    items = []
+    frm = node.args.get("from_")
+    if isinstance(frm, exp.From):
+        if frm.this is not None:
+            items.append(frm.this)
+        items.extend(frm.expressions or [])
+    for join in node.args.get("joins") or []:
+        if join.this is not None:
+            items.append(join.this)
+    using = node.args.get("using")
+    if isinstance(using, list):
+        items.extend(using)
+    return items
+
+
+def _item_sources(items, stmt, contracts: dict, _depth: int):
+    item_aliases: list[str] = []
+    sources: dict[str, tuple[bool, dict]] = {}
+    for item in items:
+        if isinstance(item, exp.Table) and item.name:
+            tname = item.name.lower()
+            alias = (item.alias or item.name).lower()
+            body = _find_cte(stmt, tname) if not item.db else None
+            if body is not None:
+                # Only a plain SELECT carries a contract's columns through;
+                # a UNION mixes rows from elsewhere.
+                src = (_subselect_source(body, stmt, contracts, _depth + 1)
+                       if isinstance(body, exp.Select) else (False, {}))
+            else:
+                contract = _contract_for_table(item, contracts)
+                src = ((True, _contract_col_map(contract))
+                       if contract is not None else (False, {}))
+            item_aliases.append(alias)
+            sources[alias] = src
+            sources.setdefault(tname, src)
+        elif isinstance(item, exp.Subquery) and isinstance(item.this, exp.Select):
+            alias = (item.alias or "").lower() or f"_sub_{len(item_aliases)}"
+            item_aliases.append(alias)
+            sources[alias] = _subselect_source(item.this, stmt, contracts,
+                                               _depth + 1)
+        else:
+            item_aliases.append(f"_other_{len(item_aliases)}")
+            sources[item_aliases[-1]] = (False, {})
+    return item_aliases, sources
+
+
+def _select_sources(sel, stmt, contracts: dict, _depth: int = 0):
+    """Return (item_aliases, sources_by_alias) for one Select block.
+
+    Each entry in sources_by_alias maps alias_lower -> (has_contract, col_map).
+    """
+    if _depth > 4 or not contracts:
+        return [], {}
+    return _item_sources(_from_items(sel), stmt, contracts, _depth)
+
+
+def _select_filters(sel) -> list:
+    """Conditions every row of a SELECT passes: the top-level conjuncts of
+    its WHERE and of its inner joins' ON clauses."""
+    out = []
+    where = sel.args.get("where")
+    if where is not None:
+        out += _conjuncts(where.this)
+    for join in sel.args.get("joins") or []:
+        on = join.args.get("on")
+        if on is not None and not join.side:
+            out += _conjuncts(on)
+    return out
+
+
+def _subselect_source(inner_sel, stmt, contracts: dict, _depth: int):
+    """Propagate raw (unconverted) column specs through a CTE or subquery.
+    A column also carries the declared values the inner SELECT's filters
+    already ruled out (under the internal key `__excluded`)."""
+    inner_aliases, inner_sources = _select_sources(
+        inner_sel, stmt, contracts, _depth)
+    if not inner_aliases:
+        return (False, {})
+    has_any = any(inner_sources.get(a, (False, {}))[0] for a in inner_aliases)
+    if not has_any:
+        return (False, {})
+    inner_scope = (inner_aliases, inner_sources)
+    col_map: dict[str, tuple[dict, str, dict]] = {}
+    for proj in inner_sel.expressions:
+        if isinstance(proj, exp.Star):
+            if len(inner_aliases) == 1:
+                col_map.update(inner_sources[inner_aliases[0]][1])
+            continue
+        if isinstance(proj, exp.Column) and isinstance(proj.this, exp.Star):
+            q = (proj.table or "").lower()
+            if q and q in inner_sources:
+                col_map.update(inner_sources[q][1])
+            continue
+        out_name = (proj.alias or (proj.name if isinstance(proj, exp.Column) else "")).lower()
+        raw = _unparen(proj.unalias() if hasattr(proj, "unalias") else proj)
+        if out_name and isinstance(raw, exp.Column):
+            resolved = _resolve_col(raw, inner_scope)
+            if resolved is not None:
+                col_map[out_name] = resolved
+    filters = _select_filters(inner_sel)
+    if filters:
+        for out_name, (contract, cname, spec) in list(col_map.items()):
+            before = set(spec.get("__excluded") or ())
+            excluded = before | _excluded_by(
+                filters, _same_col_fn(inner_scope, contract, cname),
+                _declared_values(spec))
+            if excluded != before:
+                spec = dict(spec, __excluded=frozenset(excluded))
+                col_map[out_name] = (contract, cname, spec)
+    all_contracted = all(inner_sources.get(a, (False, {}))[0] for a in inner_aliases)
+    return (all_contracted and bool(col_map), col_map)
+
+
+def _resolve_col(col: exp.Column, scope_info):
+    """Resolve an exp.Column to (contract, col_name, col_spec) or None."""
+    item_aliases, sources = scope_info
+    if not item_aliases:
+        return None
+    cname = (col.name or "").lower()
+    if not cname or "__tq_jinja" in cname:
+        return None
+    qual = (col.table or "").lower()
+    if qual:
+        src = sources.get(qual)
+        return src[1].get(cname) if src else None
+    if len(item_aliases) == 1:
+        src = sources.get(item_aliases[0])
+        return src[1].get(cname) if src else None
+    # Unqualified column in a multi-table query: resolve only when every
+    # FROM/JOIN source is contracted and exactly one source defines cname.
+    if not all(sources.get(a, (False, {}))[0] for a in item_aliases):
+        return None
+    matches = [sources[a][1][cname] for a in item_aliases
+               if cname in sources.get(a, (False, {}))[1]]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _same_col_fn(scope, contract, cname):
+    """A test: does a column node stand for this contract column? An
+    unqualified column that can't be resolved counts when its name matches."""
+    key = (id(contract), cname.lower())
+
+    def same(col):
+        resolved = _resolve_col(col, scope)
+        if resolved is not None:
+            return (id(resolved[0]), resolved[1].lower()) == key
+        return not col.table and (col.name or "").lower() == key[1]
+    return same
+
+
+def _declared_values(col_spec: dict) -> list[str] | None:
+    """Declared allowed values for a column (v2 values dict/list or v1 list)."""
+    vals = col_spec.get("values")
+    if isinstance(vals, dict) and vals:
+        return [str(k) for k in vals.keys()]
+    if isinstance(vals, list) and vals:
+        return [str(v) for v in vals]
+    return None
+
+
+def _literal_str(node) -> str | None:
+    if isinstance(node, exp.Literal):
+        val = str(node.this)
+        if "__tq_jinja" in val:
+            return None
+        return val
+    return None
+
+
+def _value_test(node):
+    """(column, values, negated) for a test of one column against
+    literals: col = 'v', col <> 'v', col IN (...), col NOT IN (...),
+    NOT (col = 'v'), or an OR of positive tests on one column."""
+    node = _unparen(node)
+    negated = False
+    while isinstance(node, exp.Not):
+        negated, node = not negated, _unparen(node.this)
+    if isinstance(node, (exp.EQ, exp.NEQ)):
+        col, lit = node.left, node.right
+        if isinstance(lit, exp.Column) and isinstance(col, exp.Literal):
+            col, lit = lit, col
+        val = _literal_str(lit)
+        if not isinstance(col, exp.Column) or val is None:
+            return None
+        return (col, (val,), negated != isinstance(node, exp.NEQ))
+    if isinstance(node, exp.In) and isinstance(node.this, exp.Column):
+        vals = [_literal_str(e) for e in node.expressions or []]
+        if not vals or any(v is None for v in vals):
+            return None
+        return (node.this, tuple(vals), negated)
+    if isinstance(node, exp.Or) and not negated:
+        parts = [_value_test(p) for p in _or_operands(node)]
+        if parts and all(p is not None and not p[2] for p in parts):
+            cols = {((p[0].table or "").lower(), (p[0].name or "").lower())
+                    for p in parts}
+            if len(cols) == 1:
+                return (parts[0][0], tuple(v for p in parts for v in p[1]),
+                        False)
+    return None
+
+
+def _excluded_by(conjuncts, same_col, declared) -> set[str]:
+    """Values of one column that ANDed conditions rule out: `<>` and
+    NOT IN rule out their values; `=` and IN rule out every other
+    declared value."""
+    out: set[str] = set()
+    for op in conjuncts:
+        test = _value_test(op)
+        if test is None or not same_col(test[0]):
+            continue
+        _, vals, negated = test
+        if negated:
+            out |= set(vals)
+        elif declared:
+            out |= set(declared) - set(vals)
+    return out
+
+
+def _and_list(values) -> str:
+    vals = list(values)
+    if len(vals) <= 1:
+        return "".join(vals)
+    return ", ".join(vals[:-1]) + " and " + vals[-1]
+
+
+# -- dq/undeclared-status-value ---------------------------------------------
+def _undeclared_findings(nodes, scope) -> list:
+    out = []
+    for node in nodes:
+        if isinstance(node, (exp.EQ, exp.NEQ)):
+            left, right = node.left, node.right
+            if isinstance(left, exp.Column) and isinstance(right, exp.Literal):
+                col_node, lit_node = left, right
+            elif isinstance(right, exp.Column) and isinstance(left, exp.Literal):
+                col_node, lit_node = right, left
+            else:
+                continue
+            bad_nodes = [(node, lit_node)]
+        elif isinstance(node, exp.In) and isinstance(node.this, exp.Column):
+            col_node = node.this
+            bad_nodes = [(node, item) for item in node.expressions or []]
+        elif isinstance(node, exp.Case) and isinstance(
+                node.args.get("this"), exp.Column):
+            col_node = node.args["this"]
+            bad_nodes = [(cond, cond.this)
+                         for cond in node.args.get("ifs") or []]
+        else:
+            continue
+        resolved = _resolve_col(col_node, scope)
+        if resolved is None:
+            continue
+        contract, cname, spec = resolved
+        allowed = _declared_values(spec)
+        if not allowed:
+            continue
+        bad = [(anchor, _literal_str(lit)) for anchor, lit in bad_nodes]
+        bad = [(anchor, v) for anchor, v in bad
+               if v is not None and v not in allowed]
+        if not bad:
+            continue
+        ds = contract.get("dataset") or contract.get("table")
+        listed = ", ".join(repr(v) for v in allowed)
+        draft = _draft_note(contract)
+        if isinstance(node, exp.Case):
+            for anchor, val in bad:
+                out.append((
+                    anchor,
+                    f"a CASE on {ds}.{cname} tests for {val!r}, which its "
+                    f"contract doesn't list ({listed}), so that branch "
+                    f"never runs{draft}",
+                    f"use one of the listed values for {ds}.{cname}, or ask "
+                    f"the user whether the contract should list {val!r}",
+                ))
+            continue
+        vals = ", ".join(repr(v) for _, v in bad)
+        out.append((
+            node,
+            f"{ds}.{cname} is compared to {vals}, which its contract doesn't "
+            f"list ({listed}), so the comparison matches no rows{draft}",
+            f"use one of the listed values for {ds}.{cname}, or ask the user "
+            f"whether the contract should list {vals}",
+        ))
+    return out
+
+
+_VALUE_NODES = (exp.EQ, exp.NEQ, exp.In, exp.Case)
+
+
+def undeclared_status_value(stmt, loc, ctx):
+    if not ctx.contracts:
+        return []
+    out = []
+    for sel in stmt.find_all(exp.Select):
+        scope = _select_sources(sel, stmt, ctx.contracts)
+        if not scope[0]:
+            continue
+        nodes = [n for n in sel.find_all(*_VALUE_NODES)
+                 if _same_select(n, sel)
+                 and not (isinstance(n, (exp.EQ, exp.NEQ))
+                          and _under_dml_write(n))]
+        out += _undeclared_findings(nodes, scope)
+    # The WHERE of an UPDATE or DELETE: a value typo there changes nothing.
+    for dml in stmt.find_all(exp.Update, exp.Delete):
+        where = dml.args.get("where")
+        if where is None or not isinstance(dml.this, exp.Table):
+            continue
+        scope = _item_sources([dml.this] + _from_items(dml), stmt,
+                              ctx.contracts, 0)
+        if not any(src[0] for src in scope[1].values()):
+            continue
+        nodes = [n for n in where.find_all(*_VALUE_NODES)
+                 if n.find_ancestor(exp.Select, exp.Update, exp.Delete)
+                 is dml]
+        out += _undeclared_findings(nodes, scope)
+    return out
+
+
+# -- dq/expected-absence-counted-as-missing ---------------------------------
+def _boolean_top(node):
+    """The whole condition node sits in: up through AND, OR and parentheses."""
+    cur = node
+    while isinstance(getattr(cur, "parent", None), (exp.And, exp.Or, exp.Paren)):
+        cur = cur.parent
+    return cur
+
+
+def _negated_by_parent(node) -> bool:
+    parent = node.parent
+    while isinstance(parent, exp.Paren):
+        parent = parent.parent
+    return isinstance(parent, exp.Not)
+
+
+def _is_number(node, value) -> bool:
+    if not isinstance(node, exp.Literal) or node.is_string:
+        return False
+    try:
+        return float(node.this) == value
+    except ValueError:
+        return False
+
+
+def _single_case(agg):
+    """(test, then, default) for AGG(CASE WHEN <test> THEN .. ELSE .. END)."""
+    arg = _unparen(agg.this)
+    if not isinstance(arg, exp.Case) or arg.args.get("this") is not None:
+        return None
+    ifs = arg.args.get("ifs") or []
+    if len(ifs) != 1:
+        return None
+    test = _value_test(ifs[0].this)
+    if test is None or test[2]:
+        return None
+    return test, ifs[0].args.get("true"), arg.args.get("default")
+
+
+def _is_null(node) -> bool:
+    return node is None or isinstance(node, exp.Null)
+
+
+def _counts_all_but(agg):
+    """(column, values) for an aggregate that counts every row except those
+    with the given values: SUM(CASE WHEN col = 'v' THEN 0 ELSE 1 END) or
+    COUNT(CASE WHEN col = 'v' THEN NULL ELSE 1 END)."""
+    case = _single_case(agg) if isinstance(agg, (exp.Sum, exp.Count)) else None
+    if case is None:
+        return None
+    (col, vals, _), then, default = case
+    if isinstance(agg, exp.Sum):
+        ok = _is_number(then, 0) and _is_number(default, 1)
+    else:
+        ok = _is_null(then) and not _is_null(default)
+    return (col, list(vals)) if ok else None
+
+
+def _counts_only(node):
+    """(column, values) for an aggregate that counts only the rows with the
+    given values: COUNT(CASE WHEN col = 'v' THEN 1 END), SUM(CASE WHEN ..
+    THEN 1 ELSE 0 END), COUNT(*) FILTER (WHERE col = 'v')."""
+    node = _unparen(node)
+    if isinstance(node, exp.Filter) and isinstance(_unparen(node.this), exp.Count):
+        where = node.expression
+        test = _value_test(where.this if isinstance(where, exp.Where) else where)
+        return (test[0], list(test[1])) if test and not test[2] else None
+    case = _single_case(node) if isinstance(node, (exp.Sum, exp.Count)) else None
+    if case is None:
+        return None
+    (col, vals, _), then, default = case
+    if isinstance(node, exp.Sum):
+        ok = _is_number(then, 1) and (_is_null(default) or _is_number(default, 0))
+    else:
+        ok = not _is_null(then) and _is_null(default)
+    return (col, list(vals)) if ok else None
+
+
+def _counts_rows(node) -> bool:
+    node = _unparen(node)
+    return (isinstance(node, exp.Count)
+            and (node.this is None
+                 or isinstance(node.this, (exp.Star, exp.Literal))))
+
+
+def expected_absence_counted_as_missing(stmt, loc, ctx):
+    if not ctx.contracts:
+        return []
+    out = []
+    for sel in stmt.find_all(exp.Select):
+        scope = _select_sources(sel, stmt, ctx.contracts)
+        if not scope[0]:
+            continue
+        filters = _select_filters(sel)
+        # (anchor, column, the present values it leaves out, its own condition)
+        candidates = []
+        for node in sel.find_all(exp.NEQ, exp.Not):
+            if not _same_select(node, sel) or _under_dml_write(node):
+                continue
+            if _negated_by_parent(node):
+                continue  # NOT (status <> 'x') is a positive test
+            test = _value_test(node)
+            if test is None or not test[2]:
+                continue
+            candidates.append((node, test[0], list(test[1]),
+                               _conjuncts(_boolean_top(node))))
+        for agg in sel.find_all(exp.Sum, exp.Count):
+            if _same_select(agg, sel):
+                hit = _counts_all_but(agg)
+                if hit is not None:
+                    candidates.append((agg, hit[0], hit[1], []))
+        for sub in sel.find_all(exp.Sub):
+            if _same_select(sub, sel) and _counts_rows(sub.left):
+                hit = _counts_only(sub.right)
+                if hit is not None:
+                    candidates.append((sub, hit[0], hit[1], []))
+        for anchor, col_node, neg_vals, own in candidates:
+            resolved = _resolve_col(col_node, scope)
+            if resolved is None:
+                continue
+            contract, cname, spec = resolved
+            if contract.get("version") != 2:
+                continue
+            values_map = spec.get("values")
+            if not isinstance(values_map, dict):
+                continue
+            means = {str(k): v.get("means") for k, v in values_map.items()
+                     if isinstance(v, dict)}
+            present = [k for k, m in means.items() if m == "present"]
+            absent_exp = [k for k, m in means.items() if m == "absent_expected"]
+            absent_unexp = [k for k, m in means.items()
+                            if m == "absent_unexpected"]
+            if not present or not absent_exp:
+                continue
+            # Leaving out only `present` values sweeps in everything else.
+            if not set(neg_vals) <= set(present):
+                continue
+            excluded = set(spec.get("__excluded") or ())
+            excluded |= _excluded_by(own + filters,
+                                     _same_col_fn(scope, contract, cname),
+                                     list(means))
+            if set(absent_exp) <= excluded:
+                continue
+            ds = contract.get("dataset") or contract.get("table")
+            gone = _and_list(absent_exp)
+            shown = " ".join(anchor.sql(dialect=ctx.dialect).split())
+            if len(shown) > 80:
+                shown = shown[:77] + "..."
+            if absent_unexp:
+                missing = (f"{cname} = {absent_unexp[0]!r}"
+                           if len(absent_unexp) == 1 else
+                           f"{cname} IN ({', '.join(repr(v) for v in absent_unexp)})")
+                fix = (f"count only the values that mean missing ({missing}), "
+                       f"or leave out {gone} explicitly")
+            else:
+                fix = f"leave out {gone} explicitly"
+            out.append((
+                anchor,
+                f"{gone} in {ds}.{cname} are absent on purpose; `{shown}` "
+                f"counts them as missing or failed{_draft_note(contract)}",
+                fix,
+            ))
+    return out
+
+
+# -- sem/unit-mismatch ---------------------------------------------------------
+_VALUE_PASSTHROUGH = (exp.Paren, exp.Cast, exp.TryCast, exp.Coalesce,
+                      exp.Sum, exp.Avg, exp.Min, exp.Max)
+
+
+def _unscaled_col(expr, scope):
+    """Return (col_node, contract, cname, spec) when expr is an unscaled
+    column (or SUM/AVG/MIN/MAX of one) with no *, / or conversion function."""
+    cur = expr
+    while isinstance(cur, _VALUE_PASSTHROUGH):
+        cur = cur.this
+    if isinstance(cur, exp.Column):
+        resolved = _resolve_col(cur, scope)
+        if resolved is not None:
+            return (cur, *resolved)
+    return None
+
+
+def _unit_words(spec: dict) -> str:
+    unit, currency = spec.get("unit"), spec.get("currency")
+    if currency:
+        kind = {"minor": "minor units, such as cents",
+                "major": "whole units"}.get(unit, unit or "")
+        return f"{currency} ({kind})" if kind else str(currency)
+    return str(unit or "")
+
+
+def _units_differ(spec_a: dict, spec_b: dict) -> bool:
+    u_a, u_b = spec_a.get("unit"), spec_b.get("unit")
+    c_a, c_b = spec_a.get("currency"), spec_b.get("currency")
+    return bool((u_a and u_b and u_a != u_b) or (c_a and c_b and c_a != c_b))
+
+
+def _arith_leaves(node) -> list:
+    node = _unparen(node)
+    if isinstance(node, (exp.Add, exp.Sub)):
+        return _arith_leaves(node.left) + _arith_leaves(node.right)
+    return [node]
+
+
+def unit_mismatch(stmt, loc, ctx):
+    if not ctx.contracts:
+        return []
+    out = []
+    op_types = (exp.Add, exp.Sub, exp.EQ, exp.NEQ, exp.LT, exp.LTE, exp.GT, exp.GTE)
+    for sel in stmt.find_all(exp.Select):
+        scope = _select_sources(sel, stmt, ctx.contracts)
+        if not scope[0]:
+            continue
+        for node in sel.find_all(*op_types):
+            if not _same_select(node, sel) or _under_dml_write(node):
+                continue
+            if isinstance(node, (exp.Add, exp.Sub)):
+                parent = node.parent
+                while isinstance(parent, exp.Paren):
+                    parent = parent.parent
+                if isinstance(parent, (exp.Add, exp.Sub)):
+                    continue  # the whole chain is checked once, at its top
+                operands, verb = _arith_leaves(node), "added or subtracted"
+            else:
+                operands, verb = [node.left, node.right], "compared"
+            infos = []
+            for operand in operands:
+                info = _unscaled_col(operand, scope)
+                if (info is not None and info[1].get("version") == 2
+                        and (info[3].get("unit") or info[3].get("currency"))):
+                    infos.append(info)
+            pair = next(((a, b) for i, a in enumerate(infos)
+                         for b in infos[i + 1:] if _units_differ(a[3], b[3])),
+                        None)
+            if pair is None:
+                continue
+            (_, c_a, name_a, spec_a), (_, c_b, name_b, spec_b) = pair
+            ds_a = c_a.get("dataset") or c_a.get("table")
+            ds_b = c_b.get("dataset") or c_b.get("table")
+            ref_a = f"{ds_a}.{name_a}" if ds_a != ds_b else name_a
+            ref_b = f"{ds_b}.{name_b}" if ds_a != ds_b else name_b
+            out.append((
+                node,
+                f"{ref_a} is in {_unit_words(spec_a)} and {ref_b} is in "
+                f"{_unit_words(spec_b)}; they're {verb} without converting "
+                f"one to the other{_draft_note(c_a, c_b)}",
+                f"convert {ref_a} or {ref_b} so both are in the same unit "
+                f"first",
+            ))
+    return out
+
+
+# -- sem/timezone-mismatch -----------------------------------------------------
+_TZ_CONV_FNS = frozenset({
+    "at_time_zone", "attimezone", "convert_timezone", "timezone",
+    "from_utc_timestamp", "to_utc_timestamp", "datetime",
+    "with_timezone", "at_timezone", "convert_tz",
+})
+
+
+def _has_tz_conversion(expr) -> bool:
+    for sub in [expr] + list(expr.walk()):
+        sub = sub[0] if isinstance(sub, tuple) else sub
+        if isinstance(sub, exp.AtTimeZone):
+            return True
+        # BigQuery TIMESTAMP(datetime, 'Europe/Prague')
+        if isinstance(sub, exp.Timestamp) and sub.args.get("zone") is not None:
+            return True
+        if isinstance(sub, exp.Func) and sub.sql_name().lower() in _TZ_CONV_FNS:
+            return True
+        if isinstance(sub, exp.Anonymous) and (sub.name or "").lower() in _TZ_CONV_FNS:
+            return True
+    return False
+
+
+def _unconverted_tz_col(expr, scope):
+    if expr is None or _has_tz_conversion(expr):
+        return None
+    cols = list(expr.find_all(exp.Column))
+    if len(cols) != 1:
+        return None
+    resolved = _resolve_col(cols[0], scope)
+    if resolved is None:
+        return None
+    contract, cname, spec = resolved
+    if contract.get("version") != 2:
+        return None
+    tz = spec.get("time_zone")
+    if not tz:
+        return None
+    return (cols[0], contract, cname, str(tz))
+
+
+def _tz_words(tz: str) -> str:
+    if tz.startswith("local:"):
+        return f"local time ({tz.split(':', 1)[1]})"
+    if tz == "naive":
+        return "a time with no time zone recorded"
+    return tz
+
+
+def timezone_mismatch(stmt, loc, ctx):
+    if not ctx.contracts:
+        return []
+    out = []
+    cmp_types = (exp.EQ, exp.NEQ, exp.LT, exp.LTE, exp.GT, exp.GTE)
+    for sel in stmt.find_all(exp.Select):
+        scope = _select_sources(sel, stmt, ctx.contracts)
+        if not scope[0]:
+            continue
+        pairs = []
+        for node in sel.find_all(*cmp_types):
+            if not _same_select(node, sel) or _under_dml_write(node):
+                continue
+            pairs.append((node, node.left, node.right))
+        for btw in sel.find_all(exp.Between):
+            if not _same_select(btw, sel):
+                continue
+            pairs.append((btw, btw.this, btw.args.get("low")))
+        for anchor, left_e, right_e in pairs:
+            info_a = _unconverted_tz_col(left_e, scope)
+            info_b = _unconverted_tz_col(right_e, scope)
+            if info_a is None or info_b is None:
+                continue
+            _, c_a, name_a, tz_a = info_a
+            _, c_b, name_b, tz_b = info_b
+            if tz_a == tz_b:
+                continue
+            ref_a = f"{c_a.get('dataset') or c_a.get('table')}.{name_a}"
+            ref_b = f"{c_b.get('dataset') or c_b.get('table')}.{name_b}"
+            out.append((
+                anchor,
+                f"{ref_a} is in {_tz_words(tz_a)} and {ref_b} is in "
+                f"{_tz_words(tz_b)}; comparing them without a conversion "
+                f"shifts every boundary by the difference"
+                f"{_draft_note(c_a, c_b)}",
+                f"convert {ref_a} and {ref_b} to the same time zone "
+                f"(for example with AT TIME ZONE) before comparing them",
+            ))
+    return out
+
+
+# -- sem/relative-path-base-mismatch -------------------------------------------
+_PATH_NORM_FNS = frozenset({
+    "concat", "concat_ws", "replace", "regexp_replace", "substr",
+    "substring", "ltrim", "trim", "right",
+})
+
+
+def _concat_parts(node) -> list:
+    node = _unparen(node)
+    if isinstance(node, exp.DPipe):
+        return _concat_parts(node.left) + _concat_parts(node.right)
+    if isinstance(node, exp.Concat):
+        parts = []
+        for part in node.expressions or []:
+            parts += _concat_parts(part)
+        return parts
+    return [node]
+
+
+def _same_dir(a: str, b: str) -> bool:
+    def norm(p):
+        p = p.strip().rstrip("/")
+        while p.startswith("./"):
+            p = p[2:]
+        return p or "."
+    return norm(a) == norm(b)
+
+
+def _path_side(expr, scope, bases: dict):
+    """How one side of a comparison anchors a declared path column:
+    (col, contract, name, anchor). anchor is the declared base name, None
+    for a full path, or ("prefix", literal, base) when the query puts a literal
+    in front that isn't the declared base. None when it can't tell."""
+    if expr is None:
+        return None
+    parts = _concat_parts(expr)
+    prefix = None
+    if len(parts) > 1:
+        if (len(parts) != 2 or _literal_str(parts[0]) is None
+                or not isinstance(parts[1], exp.Column)):
+            return None
+        prefix, target = _literal_str(parts[0]), parts[1]
+    else:
+        for sub in [expr] + list(expr.walk()):
+            sub = sub[0] if isinstance(sub, tuple) else sub
+            if isinstance(sub, exp.Func) and sub.sql_name().lower() in _PATH_NORM_FNS:
+                return None
+            if isinstance(sub, exp.Anonymous) and (sub.name or "").lower() in _PATH_NORM_FNS:
+                return None
+        cols = list(expr.find_all(exp.Column))
+        if len(cols) != 1:
+            return None
+        target = cols[0]
+    resolved = _resolve_col(target, scope)
+    if resolved is None:
+        return None
+    contract, cname, spec = resolved
+    if contract.get("version") != 2 or spec.get("type") != "path":
+        return None
+    base = spec.get("relative_to")
+    if prefix is None:
+        return (target, contract, cname, base)
+    declared = bases.get(base) if base else None
+    if not isinstance(declared, dict) or declared.get("env") \
+            or not declared.get("default"):
+        # A full path with something in front, or a base whose value is
+        # only known at run time (an environment variable): can't tell.
+        return None
+    if _same_dir(prefix, str(declared["default"])):
+        return (target, contract, cname, None)
+    return (target, contract, cname, ("prefix", prefix, base))
+
+
+def relative_path_base_mismatch(stmt, loc, ctx):
+    if not ctx.contracts:
+        return []
+    out = []
+
+    def describe(base):
+        if not base:
+            return "a full path"
+        default = (ctx.bases.get(base) or {}).get("default")
+        return f"relative to {base} ({default})" if default else f"relative to {base}"
+
+    for sel in stmt.find_all(exp.Select):
+        scope = _select_sources(sel, stmt, ctx.contracts)
+        if not scope[0]:
+            continue
+        for node in sel.find_all(exp.EQ, exp.NEQ):
+            if not _same_select(node, sel) or _under_dml_write(node):
+                continue
+            info_a = _path_side(node.left, scope, ctx.bases)
+            info_b = _path_side(node.right, scope, ctx.bases)
+            if info_a is None or info_b is None or info_a[3] == info_b[3]:
+                continue
+            _, c_a, name_a, base_a = info_a
+            _, c_b, name_b, base_b = info_b
+            ref_a = f"{c_a.get('dataset') or c_a.get('table')}.{name_a}"
+            ref_b = f"{c_b.get('dataset') or c_b.get('table')}.{name_b}"
+            draft = _draft_note(c_a, c_b)
+            wrong = next(((ref, anchor) for ref, anchor in
+                          ((ref_a, base_a), (ref_b, base_b))
+                          if isinstance(anchor, tuple)), None)
+            if wrong is not None:
+                ref, (_, lit, base) = wrong
+                out.append((
+                    node,
+                    f"the query puts {lit!r} in front of {ref}, but {ref} is "
+                    f"{describe(base)}, so the paths it builds don't match"
+                    f"{draft}",
+                    f"put the declared base in front of {ref}, or ask the user "
+                    f"whether the contract's base is right",
+                ))
+                continue
+            default = next((ctx.bases[b]["default"].rstrip("/") + "/"
+                            for b in (base_a, base_b)
+                            if b and (ctx.bases.get(b) or {}).get("default")),
+                           None)
+            example = (f" (for example '{default}' || <relative path>)"
+                       if default else "")
+            out.append((
+                node,
+                f"{ref_a} is {describe(base_a)} and {ref_b} is "
+                f"{describe(base_b)}; compared directly, they don't match"
+                f"{draft}",
+                f"add or strip the declared base{example} before comparing "
+                f"{ref_a} and {ref_b}",
+            ))
+    return out
+
+
+# -- sem/metric-drift ---------------------------------------------------------
+def _norm_cond_ast(node) -> str:
+    """Canonical string for a condition AST so equivalent SQL predicates match."""
+    if node is None:
+        return ""
+    while isinstance(node, exp.Paren):
+        node = node.this
+    if isinstance(node, exp.And):
+        parts = sorted(_norm_cond_ast(op) for op in _and_operands(node))
+        return " AND ".join(p for p in parts if p)
+    if isinstance(node, exp.Or):
+        parts = sorted(_norm_cond_ast(op) for op in _or_operands(node))
+        return "(" + " OR ".join(p for p in parts if p) + ")"
+    if isinstance(node, exp.Not):
+        return f"NOT ({_norm_cond_ast(node.this)})"
+    if isinstance(node, (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.EQ, exp.NEQ)):
+        op_map = {exp.GT: ">", exp.GTE: ">=", exp.LT: "<", exp.LTE: "<=",
+                  exp.EQ: "=", exp.NEQ: "<>"}
+        left, right = node.left, node.right
+        l_str = left.name.lower() if isinstance(left, exp.Column) else left.sql()
+        r_str = right.name.lower() if isinstance(right, exp.Column) else right.sql()
+        return f"{l_str} {op_map[type(node)]} {r_str}"
+    if isinstance(node, exp.Is) and isinstance(node.this, exp.Column):
+        return f"{node.this.name.lower()} IS {node.expression.sql().upper()}"
+    copy = node.copy()
+    for col in copy.find_all(exp.Column):
+        col.set("table", None)
+    return copy.sql()
+
+
+def _filter_canon(conjuncts):
+    """Canonical form of ANDed conditions, so equivalent filters compare
+    equal: the tests of one column against literals become the set of
+    values they allow (or rule out), whatever their form (=, IN, OR, <>,
+    NOT IN); anything else compares as normalized text."""
+    tests: dict[str, tuple] = {}
+    other = set()
+    for op in conjuncts:
+        test = _value_test(op)
+        if test is None:
+            other.add(_norm_cond_ast(op))
+            continue
+        col, vals, negated = test
+        name = (col.name or "").lower()
+        allow, rule_out = tests.get(name, (None, frozenset()))
+        if negated:
+            rule_out = rule_out | set(vals)
+        else:
+            allow = set(vals) if allow is None else allow & set(vals)
+        tests[name] = (allow, rule_out)
+    canon = set()
+    for name, (allow, rule_out) in tests.items():
+        if allow is not None:
+            canon.add((name, "in", frozenset(set(allow) - set(rule_out))))
+        else:
+            canon.add((name, "not in", frozenset(rule_out)))
+    return (frozenset(canon), frozenset(other))
+
+
+def _declared_conjuncts(where_str):
+    """The declared filter as conjuncts; None when it doesn't parse."""
+    if not where_str or not str(where_str).strip():
+        return []
+    try:
+        parsed = sqlglot.parse_one(str(where_str), into=exp.Condition)
+    except Exception:
+        return None
+    return _conjuncts(parsed)
+
+
+def _unwrap_scalar_wrappers(expr):
+    """Strip outer ROUND, CAST, COALESCE, NULLIF, Paren, and * 1.0 scaling."""
+    cur = expr
+    while cur is not None:
+        if isinstance(cur, (exp.Paren, exp.Cast, exp.TryCast)):
+            cur = cur.this
+            continue
+        if isinstance(cur, (exp.Round, exp.Coalesce, exp.Nullif)):
+            cur = cur.this
+            continue
+        if isinstance(cur, exp.Mul):
+            if isinstance(cur.left, exp.Literal):
+                cur = cur.right
+                continue
+            if isinstance(cur.right, exp.Literal):
+                cur = cur.left
+                continue
+        if isinstance(cur, exp.Div) and isinstance(cur.right, exp.Literal):
+            try:
+                if float(cur.right.name) == 1.0:
+                    cur = cur.left
+                    continue
+            except ValueError:
+                pass
+        break
+    return cur
+
+
+def _extract_agg_spec(expr):
+    """(agg, column, inline filter conjuncts) for one aggregate, or None.
+    Inline filters come from FILTER (WHERE ..), COUNTIF/COUNT_IF and a
+    CASE inside the aggregate; the query's WHERE is added by the caller."""
+    cur = _unwrap_scalar_wrappers(expr)
+    if cur is None:
+        return None
+    inline = []
+    if isinstance(cur, exp.Filter):
+        w = cur.expression
+        inline += _conjuncts(w.this if isinstance(w, exp.Where) else w)
+        cur = _unwrap_scalar_wrappers(cur.this)
+    if isinstance(cur, exp.CountIf):
+        return ("count", "*", inline + _conjuncts(cur.this))
+    if not isinstance(cur, (exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max)):
+        return None
+    arg = _unparen(cur.this)
+    # Conditional aggregation: COUNT/SUM/AVG(CASE WHEN <cond> THEN <val> ... END)
+    if isinstance(arg, exp.Case) and not arg.args.get("this"):
+        ifs = arg.args.get("ifs") or []
+        if len(ifs) == 1:
+            when_cond = ifs[0].this
+            then_val = ifs[0].args.get("true")
+            else_val = arg.args.get("default")
+            if isinstance(cur, exp.Sum):
+                if _is_null(else_val) or _is_number(else_val, 0):
+                    inline += _conjuncts(when_cond)
+                    if _is_number(then_val, 1):
+                        return ("count", "*", inline)
+                    arg = then_val
+            elif _is_null(else_val):
+                inline += _conjuncts(when_cond)
+                arg = then_val
+    if isinstance(cur, exp.Count):
+        if isinstance(arg, exp.Distinct) or cur.args.get("distinct"):
+            d_arg = (arg.expressions[0]
+                     if isinstance(arg, exp.Distinct) and arg.expressions
+                     else arg)
+            col_name = d_arg.name.lower() if isinstance(d_arg, exp.Column) else "*"
+            return ("count_distinct", col_name, inline)
+        if arg is None or isinstance(arg, (exp.Star, exp.Literal)):
+            return ("count", "*", inline)
+        if isinstance(arg, exp.Column):
+            return ("count", arg.name.lower(), inline)
+        return ("count", arg.sql().lower(), inline)
+    agg_map = {exp.Sum: "sum", exp.Avg: "avg", exp.Min: "min", exp.Max: "max"}
+    col_name = (arg.name.lower() if isinstance(arg, exp.Column)
+                else (arg.sql().lower() if arg is not None else ""))
+    return (agg_map[type(cur)], col_name, inline)
+
+
+def _ratio_parts(expr, sel):
+    """(numerator, denominator) aggregates of a ratio expression, as
+    _extract_agg_spec results; None when the expression isn't a ratio."""
+    inner = _unwrap_scalar_wrappers(expr)
+    if isinstance(inner, exp.If):
+        # Snowflake DIV0/DIV0NULL: IF(<zero or NULL denominator>, 0, a / b)
+        false = _unwrap_scalar_wrappers(inner.args.get("false"))
+        if isinstance(false, exp.Div):
+            inner = false
+    if isinstance(inner, exp.SafeDivide):
+        return (_extract_agg_spec(inner.this),
+                _extract_agg_spec(inner.expression))
+    if isinstance(inner, exp.Avg):
+        # AVG(CASE WHEN c THEN 1 ELSE 0 END) = COUNT(c) / COUNT(*)
+        case = _unparen(inner.this)
+        if isinstance(case, exp.Case) and not case.args.get("this"):
+            ifs = case.args.get("ifs") or []
+            if (len(ifs) == 1 and _is_number(ifs[0].args.get("true"), 1)
+                    and _is_number(case.args.get("default"), 0)):
+                return (("count", "*", _conjuncts(ifs[0].this)),
+                        ("count", "*", []))
+    if not isinstance(inner, exp.Div):
+        divs = [d for d in expr.find_all(exp.Div) if _same_select(d, sel)]
+        inner = divs[0] if len(divs) == 1 else None
+    if inner is None:
+        return None
+    return (_extract_agg_spec(inner.left), _extract_agg_spec(inner.right))
+
+
+def _compare_metric_part(label: str, got, spec: dict, slice_kept) -> str | None:
+    agg_name, col_name, inline = got
+    exp_agg = str(spec["agg"]).lower()
+    exp_col = str(spec["column"]).lower()
+    if agg_name != exp_agg:
+        return f"the {label} uses {agg_name.upper()}, the metric {exp_agg.upper()}"
+    if exp_col != "*" and col_name != exp_col:
+        return f"the {label} aggregates {col_name}, the metric {spec['column']}"
+    mine = inline + list(slice_kept)
+    declared = _declared_conjuncts(spec.get("where"))
+    if declared is None:
+        same = " AND ".join(sorted(_norm_cond_ast(c) for c in mine)) == \
+            str(spec.get("where")).strip().lower()
+    else:
+        same = _filter_canon(mine) == _filter_canon(declared)
+    if same:
+        return None
+    mine_sql = " AND ".join(c.sql() for c in mine)
+    if spec.get("where") and not mine:
+        return f"the {label} omits declared filter {spec['where']!r}"
+    if mine and not spec.get("where"):
+        return f"the {label} adds filter {mine_sql!r}, which the metric doesn't have"
+    return (f"the {label} filters on {mine_sql!r}, the metric on "
+            f"{spec['where']!r}")
+
+
+def _select_base_datasets(sel, stmt, _depth: int = 0) -> set[str]:
+    """Tables a SELECT reads, through CTEs and subqueries."""
+    names: set[str] = set()
+    if _depth > 6:
+        return names
+    for item in _from_items(sel):
+        if isinstance(item, exp.Table) and item.name:
+            tname = item.name.lower()
+            body = _find_cte(stmt, tname) if not item.db else None
+            if body is not None:
+                names |= _body_bases(body, stmt, _depth + 1)
+                continue
+            names.add(tname)
+            names.add(".".join(p for p in (item.db, item.name) if p).lower())
+        elif isinstance(item, exp.Subquery) and item.this is not None:
+            names |= _body_bases(item.this, stmt, _depth + 1)
+    return names
+
+
+def _body_bases(body, stmt, _depth: int) -> set[str]:
+    if isinstance(body, exp.Select):
+        return _select_base_datasets(body, stmt, _depth)
+    names: set[str] = set()
+    for sel in body.find_all(exp.Select):  # the branches of a UNION
+        names |= _select_base_datasets(sel, stmt, _depth)
+    return names
+
+
+def _metric_parts(metric: dict) -> list[dict]:
+    if metric.get("kind") == "ratio":
+        return [metric["numerator"], metric["denominator"]]
+    if metric.get("kind") == "simple":
+        return [metric["measure"]]
+    return []
+
+
+def _slice_kept(sel, stmt, ds: str, metric: dict) -> list:
+    """The query WHERE's conjuncts that bear on the metric's own filters.
+    Any other condition (a run, a date window, a dimension, a joined
+    table) slices the metric and applies to every part alike."""
+    where = sel.args.get("where")
+    if where is None:
+        return []
+    filter_cols = set()
+    for part in _metric_parts(metric):
+        for cond in _declared_conjuncts(part.get("where")) or []:
+            filter_cols |= {c.name.lower() for c in cond.find_all(exp.Column)}
+    short = ds.split(".")[-1]
+    ds_aliases = set()
+    for item in _from_items(sel):
+        if isinstance(item, exp.Table) and item.name:
+            body = _find_cte(stmt, item.name.lower()) if not item.db else None
+            bases = (_body_bases(body, stmt, 1) if body is not None
+                     else {item.name.lower()})
+            alias = (item.alias or item.name).lower()
+        elif isinstance(item, exp.Subquery) and item.this is not None:
+            bases, alias = _body_bases(item.this, stmt, 1), (item.alias or "").lower()
+        else:
+            continue
+        if ds in bases or short in bases:
+            ds_aliases.add(alias)
+    kept = []
+    for cond in _conjuncts(where.this):
+        if any((c.name or "").lower() in filter_cols
+               and (not c.table or c.table.lower() in ds_aliases)
+               for c in cond.find_all(exp.Column)):
+            kept.append(cond)
+    return kept
+
+
+def metric_drift(stmt, loc, ctx):
+    if not ctx.metrics:
+        return []
+    out = []
+    for sel in stmt.find_all(exp.Select):
+        datasets = _select_base_datasets(sel, stmt)
+        if not datasets:
+            continue
+        for proj in sel.expressions:
+            if not isinstance(proj, exp.Alias) or not proj.alias:
+                continue
+            metric = ctx.metrics.get(proj.alias.lower())
+            if metric is None:
+                continue
+            ds = str(metric.get("dataset") or "").lower()
+            if ds not in datasets and ds.split(".")[-1] not in datasets:
+                continue
+            kind = metric.get("kind")
+            if kind == "ratio":
+                parts = _ratio_parts(proj.this, sel)
+                if parts is None:
+                    continue  # the name is reused for something else
+                specs = [("numerator", metric["numerator"]),
+                         ("denominator", metric["denominator"])]
+            elif kind == "simple":
+                if not proj.this.find(exp.Count, exp.Sum, exp.Avg, exp.Min,
+                                      exp.Max, exp.CountIf):
+                    continue
+                parts = (_extract_agg_spec(proj.this),)
+                specs = [("measure", metric["measure"])]
+            else:
+                continue
+            if any(part is None for part in parts):
+                # A part built elsewhere (a CTE column, a parameter) can't
+                # be compared from here: say nothing rather than guess.
+                continue
+            kept = _slice_kept(sel, stmt, ds, metric)
+            diffs = [d for (label, spec), got in zip(specs, parts)
+                     if (d := _compare_metric_part(label, got, spec, kept))]
+            if not diffs:
+                continue
+            contract = ctx.contracts.get(ds) or ctx.contracts.get(ds.split(".")[-1])
+            name = metric.get("metric") or proj.alias
+            declared = "; ".join(
+                f"{label}: {str(spec['agg']).upper()}({spec['column']})"
+                + (f" WHERE {spec['where']}" if spec.get("where") else "")
+                for label, spec in specs)
+            out.append((
+                proj,
+                f"{name!r} isn't computed as metrics/ defines it: "
+                f"{'; '.join(diffs)}{_draft_note(contract)}",
+                f"compute {name!r} as defined ({declared}), or give the column "
+                f"another name if it means something else",
+            ))
+    return out
+
+
 CHECKS = {
     "sql/not-in-nullable-subquery": not_in_nullable_subquery,
     "sql/unguarded-update-delete": unguarded_update_delete,
@@ -1384,4 +2619,10 @@ CHECKS = {
     "sql/union-all-default": union_all_default,
     "sql/group-by-bare-column": group_by_bare_column,
     "sql/case-without-else-in-aggregate": case_without_else_in_aggregate,
+    "dq/undeclared-status-value": undeclared_status_value,
+    "dq/expected-absence-counted-as-missing": expected_absence_counted_as_missing,
+    "sem/unit-mismatch": unit_mismatch,
+    "sem/timezone-mismatch": timezone_mismatch,
+    "sem/relative-path-base-mismatch": relative_path_base_mismatch,
+    "sem/metric-drift": metric_drift,
 }

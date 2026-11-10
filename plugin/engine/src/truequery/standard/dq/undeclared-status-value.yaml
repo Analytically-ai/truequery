@@ -1,0 +1,57 @@
+id: dq/undeclared-status-value
+title: Status predicates compare only against values declared in the contract
+domain: dq
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  When a contract declares the allowed values for a status or categorical
+  column, SQL predicates on that column (=, !=, <>, IN, NOT IN, CASE WHEN)
+  reference only values listed in the contract.
+rationale: >
+  Comparing a status column to a misspelled or invented literal (such as
+  status = 'downloaded' when the contract declares 'fetched') parses cleanly
+  and returns zero rows without error, silently zeroing out counts, filters,
+  and CASE branches.
+failure_example: >
+  A report filters fetch_log with WHERE status = 'downloaded', while the
+  contract's status values are fetched, released, refetchable,
+  removed_on_purpose, and failed; the report returns 0 fetched items on every
+  run.
+enforcement: contract
+evidence: contract
+contract_required: false
+detection_sketch: >
+  When a contract declares columns.<col>.values (or v1 allowed_values.<col>)
+  for a table referenced in a SELECT block, inspect equality, inequality, IN,
+  and CASE WHEN comparisons between that column and string/number literals.
+  Flag any literal not present in the contract's declared values.
+severity_suggestion: error
+examples:
+  bad: SELECT COUNT(*) FROM fetch_log WHERE status = 'downloaded';
+  good: SELECT COUNT(*) FROM fetch_log WHERE status = 'fetched';
+sources:
+- title: Add data tests to your DAG (accepted_values)
+  url: https://docs.getdbt.com/docs/build/data-tests
+  publisher: dbt Labs
+  accessed: 2026-10-12
+  supports: accepted_values asserts that a column only contains values from a declared set so typos and undeclared codes are caught.
+- title: Comparison Functions and Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-comparison.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: String equality compares exact character sequences; an unmatched literal evaluates to false and filters out every row.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [dq/validity-allowed-value-sets, dq/expected-absence-counted-as-missing]
+proof:
+  setup: |
+    CREATE TABLE fetch_log(id INT, status VARCHAR);
+    INSERT INTO fetch_log VALUES (1, 'fetched'), (2, 'released'), (3, 'failed');
+  bad: "SELECT COUNT(*) AS n FROM fetch_log WHERE status = 'downloaded'"
+  bad_result: "[(0,)]"
+  good: "SELECT COUNT(*) AS n FROM fetch_log WHERE status = 'fetched'"
+  good_result: "[(1,)]"
+  note: >
+    The table uses 'fetched' for completed downloads. Filtering on the
+    undeclared value 'downloaded' matches no rows and returns 0 instead of 1.

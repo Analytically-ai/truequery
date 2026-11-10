@@ -67,6 +67,9 @@ def _expected_counts():
                    if r["implemented"]}
     pandas = [r for slug, r in implemented.items() if slug.startswith("py/")]
     sql = [r for slug, r in implemented.items() if slug.startswith("sql/")]
+    # Checks that read the project's contracts and metric files.
+    contract = [r for slug, r in implemented.items()
+                if r["evidence"] == "contract"]
     enabled = sum(r["enabled"] for r in implemented.values())
     return {
         "checks": len(implemented),
@@ -74,9 +77,10 @@ def _expected_counts():
         "checks off by default": len(implemented) - enabled,
         "pandas checks": len(pandas),
         "SQL checks": len(sql),
-        # model/, dq/, ingest/, orch/: everything else.
+        "contract checks": len(contract),
+        # model/, dq/, ingest/, orch/ that read files: everything else.
         "dbt and orchestration checks":
-            len(implemented) - len(sql) - len(pandas),
+            len(implemented) - len(sql) - len(pandas) - len(contract),
         "pandas checks on by default": sum(r["enabled"] for r in pandas),
     }
 
@@ -95,6 +99,8 @@ CLAIMS = (
      "facts": ("dbt and orchestration checks",)},
     {"pattern": NUM + r"\s+in\s+pandas\s+code\b",
      "facts": ("pandas checks",)},
+    {"pattern": NUM + r"\s+that\s+read\s+your\s+contracts\b",
+     "facts": ("contract checks",)},
     # The pandas bullet of the evidence page: "The 5 checks on by default".
     {"pattern": r"The\s+" + NUM + r"\s+checks\s+on\s+by\s+default\s+found",
      "facts": ("pandas checks on by default",), "only": "docs/evidence.md"},
@@ -210,6 +216,41 @@ PROJECT_INPUTS = {
         "sources:\n  - name: raw\n    loaded_at_field: _loaded_at\n"
         "    tables:\n      - name: payments\n",
     "dag.py": "from airflow import DAG\ndag = DAG('x', start_date=None)\n",
+    # The contracts and metric the contract checks' proofs query.
+    "DATA.md": "# Data\n\n```tq-config\nbases:\n  data_root: ./data\n```\n",
+    "contracts/fetch_log.yaml":
+        "version: 2\ndataset: fetch_log\ngrain: one row per id\nkeys: [id]\n"
+        "columns:\n  id: {type: integer}\n  status:\n    type: string\n"
+        "    values:\n      fetched: {means: present}\n"
+        "      released: {means: absent_expected}\n"
+        "      removed_on_purpose: {means: absent_expected}\n"
+        "      failed: {means: absent_unexpected}\n",
+    "metrics/collection_rate.yaml":
+        "metric: collection_rate\nkind: ratio\ndataset: fetch_log\n"
+        "numerator: {agg: count, column: '*', where: \"status = 'fetched'\"}\n"
+        "denominator: {agg: count, column: '*', "
+        "where: \"status <> 'removed_on_purpose'\"}\n",
+    "contracts/order_invoices.yaml":
+        "version: 2\ndataset: order_invoices\ngrain: one row per id\n"
+        "keys: [id]\ncolumns:\n  id: {type: integer}\n"
+        "  amount_cents: {type: integer, unit: minor, currency: USD}\n"
+        "  discount_usd: {type: number, unit: major, currency: USD}\n",
+    "contracts/events.yaml":
+        "version: 2\ndataset: events\ngrain: one row per id\nkeys: [id]\n"
+        "columns:\n  id: {type: integer}\n"
+        "  occurred_at: {type: timestamp, time_zone: UTC}\n",
+    "contracts/shifts.yaml":
+        "version: 2\ndataset: shifts\ngrain: one row per shift_date\n"
+        "keys: [shift_date]\ncolumns:\n  shift_date: {type: date}\n"
+        "  shift_start: {type: timestamp, time_zone: 'local:Europe/Prague'}\n"
+        "  shift_end: {type: timestamp, time_zone: 'local:Europe/Prague'}\n",
+    "contracts/manifest.yaml":
+        "version: 2\ndataset: manifest\ngrain: one row per id\nkeys: [id]\n"
+        "columns:\n  id: {type: integer}\n"
+        "  rel_path: {type: path, relative_to: data_root}\n",
+    "contracts/disk_files.yaml":
+        "version: 2\ndataset: disk_files\ngrain: one row per full_path\n"
+        "keys: [full_path]\ncolumns:\n  full_path: {type: path}\n",
 }
 # Rules that only speak in a permissive dialect.
 DIALECT = {"sql/group-by-bare-column": "mysql"}
