@@ -73,8 +73,8 @@ right.
   cal-itp), Mattermost's PostgreSQL migrations, MediaWiki, the PostgreSQL
   regression suite, SQLMesh's examples and the Spider text-to-SQL dev set. We
   labelled every finding by hand. Checks that misfired were fixed or switched
-  off by default, which is why 20 of the 32 checks are on by default and the
-  other 12 wait until they prove precise.
+  off by default, which is why 20 of the 38 checks are on by default and the
+  other 18 wait until they prove precise.
 - **SQL inside Python.** We ran the checker over 12 public Python projects
   that run SQL from code: Apache Superset, PostHog, Zulip, Redash, Datasette,
   Frappe, Feast, Mage, beets, Databricks Labs' UCX, Apache Airflow's

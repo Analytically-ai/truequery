@@ -91,6 +91,28 @@ reported on. The receipt counts these files as `pandas in N Python files`.
 Checks that need to know what a column means (money, units, time zones)
 come with contracts.
 
+## Checks that read your contracts
+
+These checks compare SQL with what your contracts in `contracts/` and your
+metric files in `metrics/` declare. Each one speaks only where a contract
+states the fact it needs, so a project without contracts sees nothing new:
+
+- **A status compared to a value the contract doesn't declare,** such as
+  `status = 'downloaded'` when the values are `fetched`, `released` and
+  `failed`. The filter quietly matches nothing.
+- **Expected absences counted as missing:** `status <> 'fetched'` also counts
+  rows the contract marks as absent on purpose (`means: absent_expected`).
+- **Different units or currencies combined** without a conversion, such as
+  cents minus dollars.
+- **Different time zones compared** without a conversion.
+- **Paths with different declared bases compared** directly.
+- **A metric computed differently from its definition** in `metrics/`, when
+  the query names its column after the metric.
+
+They're all off by default until they're measured on real projects. Switch
+them on with `truequery rules set <rule> --enabled on`. A finding that relies
+on a draft contract says so.
+
 ## Install it on its own
 
 ```bash
@@ -125,7 +147,7 @@ only ignore a single line, and must give a reason
 earns its place on precision: one that misfires gets fixed or switched off
 by default.
 
-## All 32 checks
+## All 38 checks
 
 `immediate` checks run after every edit; `stop` checks run at the end of the
 turn. Checks that are off by default aren't yet precise enough to run
@@ -133,6 +155,8 @@ unasked; switch them on with `truequery rules set`.
 
 | Rule | Default | Build severity | What it catches |
 |---|---|---|---|
+| `dq/expected-absence-counted-as-missing` | off (stop) | error | Missing-data counts exclude statuses the contract says are absent on purpose |
+| `dq/undeclared-status-value` | off (stop) | error | Compare a status column only to values its contract declares |
 | `dq/uniqueness-key-no-duplicates` | off (stop) | error | Declared keys carry a zero-duplicate uniqueness check |
 | `ingest/declare-source-freshness` | off (stop) | warning | Every ingested source declares a freshness threshold |
 | `model/unique-key-merge-key` | on (stop) | error | Incremental merge models declare a non-null unique merge key |
@@ -144,6 +168,10 @@ unasked; switch them on with `truequery rules set`.
 | `py/pandas-no-chained-assignment` | on (immediate) | error | Change a DataFrame in one step on the DataFrame itself, never through a chain |
 | `py/pandas-no-row-loop-mutations` | on (stop) | error | Never write to the row of an iterrows() loop |
 | `py/pandas-to-sql-replace` | on (stop) | warning | Load into an existing table without to_sql(if_exists="replace") |
+| `sem/metric-drift` | off (stop) | error | A column named after a metric in `metrics/` computes it as declared |
+| `sem/relative-path-base-mismatch` | off (stop) | error | Normalize paths with different declared bases before comparing them |
+| `sem/timezone-mismatch` | off (stop) | error | Convert timestamps with different declared time zones before comparing them |
+| `sem/unit-mismatch` | off (stop) | error | Convert columns with different declared units or currencies before combining them |
 | `sql/accidental-cross-join` | on (stop) | error | Every join of two tables carries an explicit join predicate |
 | `sql/average-of-ratios` | off (stop) | warning | Aggregate a ratio as SUM(numerator) / SUM(denominator), not AVG of row ratios |
 | `sql/between-date-on-timestamp` | on (stop) | warning | Filter timestamps with a half-open range, not BETWEEN date literals |

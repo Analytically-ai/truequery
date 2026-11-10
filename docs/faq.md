@@ -6,7 +6,7 @@ Back to the [README](../README.md).
 Instructions in CLAUDE.md are a good start, but nothing checks that the
 agent followed them, and an agent reviewing its own work is blind in the
 same places as its first draft. TrueQuery gives the agent a full procedure
-and 225 sourced practices, then backs them with a deterministic checker
+and 231 sourced practices, then backs them with a deterministic checker
 that runs on every edit and a receipt that says what wasn't verified. It
 works alongside your CLAUDE.md; your team's definitions go in `DATA.md`.
 

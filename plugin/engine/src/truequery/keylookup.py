@@ -23,11 +23,15 @@ import yaml
 
 from truequery.project import (
     SKIP_DIRS,
+    ContextError,
     is_draft_contract,
+    load_config,
     load_contracts_reporting,
+    load_metrics_reporting,
 )
 
 _CACHE: dict[tuple, dict[str, list[frozenset]]] = {}
+_CONTEXT_CACHE: dict[tuple, dict] = {}
 
 
 def _read_yaml(path):
@@ -102,9 +106,39 @@ def _nearest(path, test):
 def _project_root(path):
     """Nearest ancestor with a project marker, or None: without one we
     don't walk the disk looking for keys (they'd belong to someone else)."""
-    markers = ("contracts", "dbt_project.yml", "DATA.md")
+    if not path or path == "<input>":
+        return None
+    markers = ("contracts", "metrics", "dbt_project.yml", "DATA.md")
     return _nearest(path, lambda d: any(
         os.path.exists(os.path.join(d, m)) for m in markers))
+
+
+def _dir_stamp(root: str | None) -> tuple:
+    """Fast stat fingerprint of DATA.md, contracts/, and metrics/ under root."""
+    if not root:
+        return ()
+    items = []
+    data_md = os.path.join(root, "DATA.md")
+    try:
+        st = os.stat(data_md)
+        items.append(("DATA.md", st.st_mtime_ns, st.st_size))
+    except OSError:
+        pass
+    for sub in ("contracts", "metrics"):
+        folder = os.path.join(root, sub)
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.endswith((".yaml", ".yml")):
+                continue
+            try:
+                st = entry.stat()
+                items.append((f"{sub}/{entry.name}", st.st_mtime_ns, st.st_size))
+            except OSError:
+                continue
+    return tuple(items)
 
 
 def _models_ymls(root):
@@ -123,19 +157,78 @@ def _models_ymls(root):
     return found
 
 
-def declared_keys_for(path):
+def declared_keys_for(path, root=None):
     """{relation name -> [candidate key, ...]} for the project of path.
 
     contracts/ may sit above the dbt project (examples/shop/contracts
     next to dbt_repo/), so it is looked up on its own."""
-    root = _project_root(path)
-    cdir = _nearest(path, lambda d: os.path.isdir(os.path.join(d, "contracts")))
-    cache_key = (root, cdir)
+    proj_root = _project_root(path)
+    cdir = (_nearest(path, lambda d: os.path.isdir(os.path.join(d, "contracts")))
+            if path and path != "<input>" else None)
+    if cdir is None and root:
+        cdir = _nearest(os.path.join(os.path.abspath(root), "_"),
+                        lambda d: os.path.isdir(os.path.join(d, "contracts")))
+    if proj_root is None and root:
+        proj_root = _project_root(os.path.join(os.path.abspath(root), "_"))
+    cache_key = (proj_root, cdir, _dir_stamp(cdir))
     if cache_key not in _CACHE:
         index: dict[str, list[frozenset]] = {}
         if cdir is not None:
             _from_contracts(cdir, index)
-        for yml in _models_ymls(root) if root is not None else []:
+        for yml in _models_ymls(proj_root) if proj_root is not None else []:
             _from_dbt_yaml(yml, index)
         _CACHE[cache_key] = index
     return _CACHE[cache_key]
+
+
+def declared_context_for(path, root=None) -> dict:
+    """Return {contracts, metrics, bases} for the project of path (or root).
+
+    Valid contracts (including status: draft contracts, whose findings carry
+    draft provenance) and valid metrics are indexed by lowercased name.
+    Invalid or duplicate files are ignored so they never poison checks.
+    """
+    markers = ("contracts", "metrics", "DATA.md")
+    ctx_dir = (_nearest(path, lambda d: any(
+        os.path.exists(os.path.join(d, m)) for m in markers))
+        if path and path != "<input>" else None)
+    if ctx_dir is None and root:
+        ctx_dir = _nearest(
+            os.path.join(os.path.abspath(root), "_"),
+            lambda d: any(os.path.exists(os.path.join(d, m)) for m in markers))
+    if ctx_dir is None:
+        return {"contracts": {}, "metrics": {}, "bases": {}}
+    cdir = (_nearest(path, lambda d: os.path.isdir(os.path.join(d, "contracts")))
+            if path and path != "<input>" else None) or ctx_dir
+    mdir = (_nearest(path, lambda d: os.path.isdir(os.path.join(d, "metrics")))
+            if path and path != "<input>" else None) or ctx_dir
+    ddir = (_nearest(path, lambda d: os.path.isfile(os.path.join(d, "DATA.md")))
+            if path and path != "<input>" else None) or ctx_dir
+    cache_key = (cdir, mdir, ddir, _dir_stamp(cdir), _dir_stamp(mdir),
+                 _dir_stamp(ddir))
+    if cache_key not in _CONTEXT_CACHE:
+        try:
+            cfg = load_config(ddir)
+        except ContextError:
+            cfg = {}
+        bases = (cfg or {}).get("bases") or {}
+        raw_contracts, _ = load_contracts_reporting(cdir)
+        raw_metrics, _ = load_metrics_reporting(mdir, contracts=raw_contracts)
+        contracts_idx: dict[str, dict] = {}
+        for key, contract in sorted(raw_contracts.items()):
+            k_low = key.lower()
+            contracts_idx[k_low] = contract
+            short = k_low.split(".")[-1]
+            contracts_idx.setdefault(short, contract)
+            loc = contract.get("location")
+            if isinstance(loc, dict) and loc.get("relation"):
+                rel = str(loc["relation"]).lower()
+                contracts_idx.setdefault(rel, contract)
+                contracts_idx.setdefault(rel.split(".")[-1], contract)
+        metrics_idx = {k.lower(): v for k, v in sorted(raw_metrics.items())}
+        _CONTEXT_CACHE[cache_key] = {
+            "contracts": contracts_idx,
+            "metrics": metrics_idx,
+            "bases": bases if isinstance(bases, dict) else {},
+        }
+    return _CONTEXT_CACHE[cache_key]

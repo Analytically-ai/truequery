@@ -281,6 +281,38 @@ mf query --metrics revenue --group-by campaign__channel
 - severity: assure=warning, build=warning
 - sources: Joins; Validations
 
+## sem/metric-drift
+
+*SQL expressions aliased to a declared metric name match the metric's aggregation and filters*
+
+When a query over a metric's dataset projects an expression aliased to a declared metric name in metrics/*.yaml, the expression's aggregation, numerator/denominator structure, and filter predicates match the governed metric definition.
+
+Why: Re-implementing a governed metric inline while omitting its denominator filter or changing its numerator predicate produces a column with the exact metric name that quietly disagrees with every other report.
+
+```sql
+-- bad
+SELECT ROUND(
+  COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*), 2
+) AS collection_rate
+FROM fetch_log;
+```
+```sql
+-- good
+SELECT ROUND(
+  COUNT(*) FILTER (WHERE status = 'fetched') * 1.0
+  / COUNT(*) FILTER (WHERE status <> 'removed_on_purpose'), 2
+) AS collection_rate
+FROM fetch_log;
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: explore,build,change,assure
+- severity: assure=error, build=error, change=error, explore=warning
+- sources: MetricFlow overview and governed metrics; Aggregate Expressions and FILTER (PostgreSQL)
+- proof bad: `SELECT ROUND(COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*), 2) AS collection_rate FROM fetch_log` → [(0.6,)]
+- proof good: `SELECT ROUND(COUNT(*) FILTER (WHERE status = 'fetched') * 1.0 / COUNT(*) FILTER (WHERE status <> 'removed_on_purpose'), 2) AS collection_rate FROM fetch_log` → [(0.75,)]
+
 ## sem/metric-filters-declared-not-hidden
 
 *Metric filters live in the metric definition, not in hidden SQL*
@@ -517,6 +549,31 @@ SELECT AVG(daily_conversion_rate) AS weekly_conversion FROM daily_kpis
 - severity: assure=error, build=error
 - sources: Ratio metrics; Creating metrics
 
+## sem/relative-path-base-mismatch
+
+*Normalize path columns with different relative_to bases before joining or comparing them*
+
+When contracts declare path columns with different relative_to bases (or one relative_to a declared base and the other an unanchored or full path), SQL joins and equality predicates prepend or strip the declared base path before comparing them.
+
+Why: Joining a path relative to data_root (such as '2026/a.csv') directly to a full path on disk ('/srv/data/2026/a.csv') compares unequal strings on every row, producing 0 matches or reporting 100% of files as missing in a L…
+
+```sql
+-- bad
+SELECT COUNT(*) FROM manifest m JOIN disk_files d ON m.rel_path = d.full_path;
+```
+```sql
+-- good
+SELECT COUNT(*) FROM manifest m JOIN disk_files d ON ('/srv/data/' || m.rel_path) = d.full_path;
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: explore,build,change,assure
+- severity: assure=error, build=error, change=error, explore=warning
+- sources: String Functions and Operators (PostgreSQL); Text Functions (DuckDB)
+- proof bad: `SELECT COUNT(*) AS matched FROM manifest m JOIN disk_files d ON m.rel_path = d.full_path` → [(0,)]
+- proof good: `SELECT COUNT(*) AS matched FROM manifest m JOIN disk_files d ON ('/srv/data/' || m.rel_path) = d.full_path` → [(2,)]
+
 ## sem/saved-query-canonical-slices
 
 *Top metrics ship canonical saved queries for standard slices*
@@ -634,6 +691,35 @@ dimensions:
 - severity: assure=warning, build=warning
 - sources: Dimensions; MetricFlow time spine
 
+## sem/timezone-mismatch
+
+*Convert timestamps with different declared time zones before comparing or joining them*
+
+When contracts declare different time_zone values on two timestamp columns (for example UTC vs local:Europe/Prague or UTC vs naive), queries convert both columns to the same time zone before comparing them or bucketing them into the same date grain.
+
+Why: Comparing a UTC timestamp directly against a local-time window shifts every boundary by the UTC offset (1 to 2 hours in Central Europe, 5 to 8 hours in North America), silently dropping or misattributing rows near window…
+
+```sql
+-- bad
+SELECT COUNT(*) FROM events e
+JOIN shifts s ON e.occurred_at BETWEEN s.shift_start AND s.shift_end;
+```
+```sql
+-- good
+SELECT COUNT(*) FROM events e
+JOIN shifts s
+  ON (e.occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Prague')
+     BETWEEN s.shift_start AND s.shift_end;
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: explore,build,change,assure
+- severity: assure=error, build=error, change=error, explore=warning
+- sources: Date/Time Types and Time Zones (PostgreSQL); Timestamp Functions and AT TIME ZONE (DuckDB)
+- proof bad: `SELECT COUNT(*) AS n FROM events e JOIN shifts s ON e.occurred_at BETWEEN s.shift_start AND s.shift_end` → [(0,)]
+- proof good: `SELECT COUNT(*) AS n FROM events e JOIN shifts s ON (e.occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Prague') BETWEEN s.shift_start AND s.shift_end` → [(1,)]
+
 ## sem/unit-consistency
 
 *Measures declare units and currency; mixed units never aggregate*
@@ -663,3 +749,28 @@ measures:
 - modes: build,assure
 - severity: assure=error, build=error
 - sources: Getting started data modeling; LookML terms and concepts
+
+## sem/unit-mismatch
+
+*Convert columns with different declared units or currencies before combining or comparing them*
+
+When a contract declares units or currencies on numeric columns (such as minor vs major currency units, GiB vs GB, or ms vs s), SQL expressions convert the columns to a common unit before adding, subtracting, comparing, or joining them.
+
+Why: Adding, subtracting, or comparing bare numbers across incompatible units (for example cents minus dollars, or GiB compared against bytes) produces a syntactically valid query whose result is off by orders of magnitude or…
+
+```sql
+-- bad
+SELECT SUM(amount_cents - discount_usd) AS net_usd FROM order_invoices;
+```
+```sql
+-- good
+SELECT SUM(amount_cents / 100.0 - discount_usd) AS net_usd FROM order_invoices;
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: explore,build,change,assure
+- severity: assure=error, build=error, change=error, explore=warning
+- sources: Getting started data modeling; Numeric Types and Mathematical Operators (PostgreSQL)
+- proof bad: `SELECT SUM(amount_cents - discount_usd) AS net_usd FROM order_invoices` → [(3495.0,)]
+- proof good: `SELECT SUM(amount_cents / 100.0 - discount_usd) AS net_usd FROM order_invoices` → [(30.0,)]

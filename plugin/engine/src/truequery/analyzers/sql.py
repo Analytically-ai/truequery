@@ -1002,7 +1002,7 @@ class _Pass:
                 self.findings.append(_finding(
                     slug, _severity(record, setting, self.mode), self.mode,
                     self.path, self.text, self.start_line, line, col, why,
-                    fix))
+                    fix, evidence=record.get("evidence", "file")))
                 self.findings[-1]["offset"] = self.base + loc.last_offset
         for suppressed in loc.suppressed:
             if suppressed not in self.key_lookups:
@@ -1074,9 +1074,9 @@ def _severity(record, setting, mode):
 
 
 def _finding(slug, severity, mode, path, chunk, start_line, line, col,
-             why, fix):
+             why, fix, evidence="file"):
     return {"rule": slug, "severity": severity, "mode": mode,
-            "evidence": "file", "file": path, "line": line, "col": col,
+            "evidence": evidence, "file": path, "line": line, "col": col,
             "snippet": _source_snippet(chunk, start_line, line),
             "why": why, "fix": fix}
 
@@ -1104,7 +1104,7 @@ INTDIV = "sql/integer-division-truncation"
 
 @quiet_sqlglot()
 def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
-               include_disabled=False, tiers=None, settings=None):
+               include_disabled=False, tiers=None, settings=None, root=None):
     """Run enabled file-level checks. Returns {path, findings,
     diagnostics, verified, key_lookups}. Findings carry rule slug +
     per-mode severity. ``tiers`` restricts to rule tiers (the hook's
@@ -1118,8 +1118,14 @@ def check_text(text, dialect=None, path="<input>", mode="build", registry=None,
     # is verified. Anything else must parse: a typo or prose is "not
     # checked", never "clean".
     active = _active_checks(registry, settings, tiers, include_disabled)
-    ctx = checks.CheckContext(dialect=dialect, path=path, mode=mode,
-                              keys=keylookup.declared_keys_for(path))
+    proj_ctx = keylookup.declared_context_for(path, root=root)
+    ctx = checks.CheckContext(
+        dialect=dialect, path=path, mode=mode,
+        keys=keylookup.declared_keys_for(path, root=root),
+        contracts=proj_ctx["contracts"],
+        metrics=proj_ctx["metrics"],
+        bases=proj_ctx["bases"],
+    )
     run = _Pass(active, ctx, path, mode, dialect)
     findings, diagnostics = run.findings, run.diagnostics
     base = 0  # offset of the chunk in the cleaned text (chunks are contiguous)

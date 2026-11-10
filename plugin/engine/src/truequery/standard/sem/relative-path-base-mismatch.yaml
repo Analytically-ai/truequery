@@ -1,0 +1,60 @@
+id: sem/relative-path-base-mismatch
+title: Normalize path columns with different relative_to bases before joining or comparing them
+domain: sem
+modes: [explore, build, change, assure]
+applies_to: [any]
+statement: >
+  When contracts declare path columns with different relative_to bases (or one
+  relative_to a declared base and the other an unanchored or full path), SQL
+  joins and equality predicates prepend or strip the declared base path before
+  comparing them.
+rationale: >
+  Joining a path relative to data_root (such as '2026/a.csv') directly to a
+  full path on disk ('/srv/data/2026/a.csv') compares unequal strings on every
+  row, producing 0 matches or reporting 100% of files as missing in a LEFT
+  JOIN audit.
+failure_example: >
+  SELECT COUNT(*) FROM manifest m JOIN disk_files d ON m.rel_path =
+  d.full_path returns 0 matched files even though every file in the manifest
+  exists under /srv/data.
+enforcement: contract
+evidence: contract
+contract_required: false
+detection_sketch: >
+  Resolve columns of type: path in equality or join predicates against v2
+  contracts and DATA.md bases. When the two columns have different relative_to
+  declarations (including one set and one unset) and neither side concatenates
+  or strips the base prefix, flag the comparison.
+severity_suggestion: error
+examples:
+  bad: SELECT COUNT(*) FROM manifest m JOIN disk_files d ON m.rel_path = d.full_path;
+  good: SELECT COUNT(*) FROM manifest m JOIN disk_files d ON ('/srv/data/' || m.rel_path) = d.full_path;
+sources:
+- title: String Functions and Operators (PostgreSQL)
+  url: https://www.postgresql.org/docs/current/functions-string.html
+  publisher: PostgreSQL Global Development Group
+  accessed: 2026-10-11
+  supports: String equality requires identical prefixes; a relative path and an absolute path never compare equal without concatenation or prefix stripping.
+- title: Text Functions (DuckDB)
+  url: https://duckdb.org/docs/current/sql/functions/text
+  publisher: DuckDB
+  accessed: 2026-10-11
+  supports: The || operator concatenates a base directory prefix with a relative path before comparison.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [dq/consistency-no-orphan-keys]
+proof:
+  setup: |
+    CREATE TABLE manifest(id INT, rel_path VARCHAR);
+    INSERT INTO manifest VALUES (1, '2026/a.csv'), (2, '2026/b.csv');
+    CREATE TABLE disk_files(full_path VARCHAR);
+    INSERT INTO disk_files VALUES ('/srv/data/2026/a.csv'), ('/srv/data/2026/b.csv');
+  bad: "SELECT COUNT(*) AS matched FROM manifest m JOIN disk_files d ON m.rel_path = d.full_path"
+  bad_result: "[(0,)]"
+  good: "SELECT COUNT(*) AS matched FROM manifest m JOIN disk_files d ON ('/srv/data/' || m.rel_path) = d.full_path"
+  good_result: "[(2,)]"
+  note: >
+    manifest.rel_path is relative to data_root (/srv/data), while
+    disk_files.full_path stores full paths. Joining them without prepending
+    '/srv/data/' matches 0 rows instead of 2.

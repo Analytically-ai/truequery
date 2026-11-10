@@ -268,6 +268,31 @@ SELECT (SELECT SUM(amount) FROM staging_payments) AS source_total,
 - severity: assure=error, build=error
 - sources: SodaCL metrics and checks; Reference checks
 
+## dq/expected-absence-counted-as-missing
+
+*Missing-data and failure counts exclude status values that mean expected absence*
+
+When a status column declares values with means: absent_expected (such as released, refetchable, or removed_on_purpose) alongside means: present and means: absent_unexpected, queries that count missing or failed items filter for absent_unexpected (or explicitly exclude absent_expected), never status != '<present>'.
+
+Why: Treating every row where status != 'fetched' as missing or failed sweeps in items that were intentionally released from disk or removed on purpose, inflating missing-file and failure counts.
+
+```sql
+-- bad
+SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status != 'fetched';
+```
+```sql
+-- good
+SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status = 'failed';
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: explore,build,change,assure
+- severity: assure=error, build=error, change=error, explore=warning
+- sources: Add data tests to your DAG; Conditional Expressions (PostgreSQL)
+- proof bad: `SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status != 'fetched'` → [(2,)]
+- proof good: `SELECT COUNT(*) AS missing_count FROM fetch_log WHERE status = 'failed'` → [(1,)]
+
 ## dq/schema-conformance-checked-on-read
 
 *Schema conformance is checked before content checks run*
@@ -292,6 +317,31 @@ missing_count(email) = 0 [PASSED]
 - modes: build,change,assure
 - severity: assure=warning, build=warning, change=warning
 - sources: SodaCL metrics and checks; Constraints
+
+## dq/undeclared-status-value
+
+*Status predicates compare only against values declared in the contract*
+
+When a contract declares the allowed values for a status or categorical column, SQL predicates on that column (=, !=, <>, IN, NOT IN, CASE WHEN) reference only values listed in the contract.
+
+Why: Comparing a status column to a misspelled or invented literal (such as status = 'downloaded' when the contract declares 'fetched') parses cleanly and returns zero rows without error, silently zeroing out counts, filters,…
+
+```sql
+-- bad
+SELECT COUNT(*) FROM fetch_log WHERE status = 'downloaded';
+```
+```sql
+-- good
+SELECT COUNT(*) FROM fetch_log WHERE status = 'fetched';
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: explore,build,change,assure
+- severity: assure=error, build=error, change=error, explore=warning
+- sources: Add data tests to your DAG (accepted_values); Comparison Functions and Operators (PostgreSQL)
+- proof bad: `SELECT COUNT(*) AS n FROM fetch_log WHERE status = 'downloaded'` → [(0,)]
+- proof good: `SELECT COUNT(*) AS n FROM fetch_log WHERE status = 'fetched'` → [(1,)]
 
 ## dq/unenforced-constraints-are-tested
 

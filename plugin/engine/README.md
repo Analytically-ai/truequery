@@ -12,7 +12,7 @@ It looks for SQL that silently returns the wrong answer: a `NOT IN` that one
 NULL empties, a `WHERE` that turns a `LEFT JOIN` into an inner join, a
 `COUNT(*)` that counts missing rows, an unguarded `UPDATE` or `DELETE`.
 It also checks pandas code for the same kind of mistake.
-It has 32 checks, 20 of them on by default, each
+It has 38 checks, 20 of them on by default, each
 promoted only when it proves precise on real projects. Files it can't parse,
 can't decode, or that are over the 10 MB limit are listed as not checked,
 never as clean.

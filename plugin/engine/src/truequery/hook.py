@@ -257,13 +257,16 @@ SESSION_FIELDS = {"session_id": (str, type(None)), "touched": list,
                   "reported": list, "blocked": list, "clean_acked": list,
                   "chain": int, "config_fp": (str, type(None)),
                   "config_error": (str, type(None)),
-                  "version_noted": (str, type(None))}
+                  "version_noted": (str, type(None)),
+                  "contracts_fp": (dict, type(None)),
+                  "contracts_changed": list}
 
 
 def _fresh_session(session_id=None) -> dict:
     return {"session_id": session_id, "touched": [], "reported": [],
             "blocked": [], "clean_acked": [], "chain": 0,
-            "config_fp": None, "config_error": None, "version_noted": None}
+            "config_fp": None, "config_error": None, "version_noted": None,
+            "contracts_fp": None, "contracts_changed": []}
 
 
 def load_session(root: str, session_id: str | None = None) -> dict:
@@ -290,7 +293,35 @@ def load_session(root: str, session_id: str | None = None) -> dict:
                            if isinstance(e, dict) and isinstance(e.get("key"), str)]
     session["blocked"] = [e for e in session["blocked"]
                           if isinstance(e, list) and len(e) == 2]
+    session["contracts_changed"] = [
+        p for p in session["contracts_changed"] if isinstance(p, str)
+    ]
+    if isinstance(session["contracts_fp"], dict):
+        session["contracts_fp"] = {
+            str(k): str(v) for k, v in session["contracts_fp"].items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
     return session
+
+
+def session_contracts_changed(root: str) -> list[str]:
+    """Contract/metric files modified during the current session, if any."""
+    try:
+        with open(_session_path(root), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    changed = [p for p in (data.get("contracts_changed") or [])
+               if isinstance(p, str)]
+    prev_fp = data.get("contracts_fp")
+    if isinstance(prev_fp, dict):
+        cur_fp = P.contracts_fingerprint(root)
+        for rel in sorted(set(prev_fp) | set(cur_fp)):
+            if prev_fp.get(rel) != cur_fp.get(rel) and rel not in changed:
+                changed.append(rel)
+    return sorted(set(changed))
 
 
 def save_session(root: str, session: dict) -> None:
@@ -889,17 +920,25 @@ def main(args) -> int:
     root = (claimed if isinstance(claimed, str)
             and os.path.isdir(claimed) else os.path.abspath("."))
     paths = []
+    contract_edits = []
     if event != "stop":
-        paths = [p for p in extract_paths(payload)
+        raw_paths = extract_paths(payload)
+        contract_edits = [
+            P._rel(p if os.path.isabs(p) else os.path.join(root, p), root)
+            for p in raw_paths
+            if P.is_contract_or_metric_path(p, root)
+            and (os.path.isfile(os.path.join(root, p)) or os.path.isfile(p))
+        ]
+        paths = [p for p in raw_paths
                  if is_sql_path(p) or p.lower().endswith(".py")]
         paths = [p for p in paths
                  if (os.path.isfile(os.path.join(root, p))
                      or os.path.isfile(p))
                  and is_checked_path(p, root)]
-        if not paths:
-            # No SQL in the edited files (or no files at all: a reminder,
-            # a skill load): a silent no-op that never loads or saves the
-            # session, so it can't reset what this session has touched.
+        if not paths and not contract_edits:
+            # No SQL or contract/metric in the edited files (or no files at
+            # all: a reminder, a skill load): a silent no-op that never loads
+            # or saves the session.
             return 0
     # A continued turn extends the chain (bounded); a new turn resets it.
     continued = payload.get("stop_hook_active") is True
@@ -930,11 +969,29 @@ def main(args) -> int:
         if session.get("config_fp") is not None and session["config_fp"] != fp:
             notice = S.NOTICE
         session["config_fp"] = fp
+        cur_cfp = P.contracts_fingerprint(root)
+        prev_cfp = session.get("contracts_fp")
+        newly_changed = list(contract_edits)
+        if isinstance(prev_cfp, dict):
+            for rel in sorted(set(prev_cfp) | set(cur_cfp)):
+                if prev_cfp.get(rel) != cur_cfp.get(rel) and rel not in newly_changed:
+                    newly_changed.append(rel)
+        session["contracts_fp"] = cur_cfp
+        if newly_changed:
+            recorded = session.setdefault("contracts_changed", [])
+            for rel in newly_changed:
+                if rel not in recorded:
+                    recorded.append(rel)
+            c_msg = (f"[TrueQuery] contracts/metrics changed this session "
+                     f"({', '.join(newly_changed)}) — confirm contract or "
+                     f"metric edits with the user; never alter contracts or "
+                     f"metrics to silence a finding.")
+            notice = c_msg if notice is None else notice + "\n" + c_msg
         hook_settings = eff.check_map()
         if event == "stop":
             text = _stop_text(root, session, dialect, continued,
                               hook_settings, cfg or {}, harness)
-        else:
+        elif paths:
             rels = [P._rel(p if os.path.isabs(p) else os.path.join(root, p),
                            root) for p in paths]
             for rel in rels:

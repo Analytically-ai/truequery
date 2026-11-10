@@ -7,6 +7,7 @@ Offline and deterministic. DATA.md carries a machine-readable
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 import re
 
@@ -894,3 +895,37 @@ def seed_contracts(root: str) -> list[str]:
             handle.write(_contract_for_spec(spec, source))
         created.append(dest)
     return created
+
+
+def is_contract_or_metric_path(path: str, root: str) -> bool:
+    """True when path is a YAML file inside contracts/ or metrics/ under root."""
+    if not path or not path.lower().endswith((".yaml", ".yml")):
+        return False
+    full = path if os.path.isabs(path) else os.path.join(root, path)
+    rel = _rel(full, root)
+    parts = rel.split("/")
+    return len(parts) == 2 and parts[0] in ("contracts", "metrics")
+
+
+def contracts_fingerprint(root: str) -> dict[str, str]:
+    """Map relative contract/metric YAML path -> SHA-256 hex digest."""
+    fp: dict[str, str] = {}
+    for sub in ("contracts", "metrics"):
+        folder = os.path.join(root, sub)
+        if not os.path.isdir(folder):
+            continue
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith((".yaml", ".yml")):
+                continue
+            full = os.path.join(folder, name)
+            try:
+                with open(full, "rb") as handle:
+                    digest = hashlib.sha256(handle.read()).hexdigest()
+                fp[f"{sub}/{name}"] = digest
+            except OSError:
+                continue
+    return fp

@@ -246,7 +246,9 @@ def cmd_review(args: argparse.Namespace) -> int:
                                    P.load_config(root)),
                                rule_settings=eff.settings_line(),
                                invalid_contracts=invalid_contracts,
-                               invalid_metrics=invalid_metrics)
+                               invalid_metrics=invalid_metrics,
+                               contracts_changed=hook.session_contracts_changed(
+                                   root))
     if args.sarif:
         print(RP.render_sarif(results, ENGINE_VERSION))
     elif args.json:
