@@ -205,6 +205,7 @@ def declared_context_for(path, root=None) -> dict:
                 contracts_idx.setdefault(rel.split(".")[-1], contract)
         metrics_idx = {k.lower(): v for k, v in sorted(raw_metrics.items())}
         _CONTEXT_CACHE[cache_key] = {
+            "root": cdir,
             "contracts": contracts_idx,
             "metrics": metrics_idx,
             "bases": bases if isinstance(bases, dict) else {},

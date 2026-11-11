@@ -65,7 +65,10 @@ def _value(token):
 def _expected_counts():
     implemented = {slug: r for slug, r in std_registry.RECORDS.items()
                    if r["implemented"]}
-    pandas = [r for slug, r in implemented.items() if slug.startswith("py/")]
+    # pandas checks that need no contract; the ones that read contracts
+    # are counted with the other contract checks
+    pandas = [r for slug, r in implemented.items()
+              if slug.startswith("py/") and r["evidence"] != "contract"]
     sql = [r for slug, r in implemented.items() if slug.startswith("sql/")]
     # Checks that read the project's contracts and metric files.
     contract = [r for slug, r in implemented.items()
@@ -251,6 +254,18 @@ PROJECT_INPUTS = {
     "contracts/disk_files.yaml":
         "version: 2\ndataset: disk_files\ngrain: one row per full_path\n"
         "keys: [full_path]\ncolumns:\n  full_path: {type: path}\n",
+    # The pandas contract checks link a DataFrame by the file it reads.
+    "contracts/refunds.yaml":
+        "version: 2\ndataset: refunds\nkind: files\n"
+        "location: {path: data/refunds.csv, format: csv}\n"
+        "grain: one row per refund\nkeys: [refund_id]\nwrite_mode: append\n"
+        "columns:\n  refund_id: {type: string}\n"
+        "  amount_cents: {type: integer, unit: minor, currency: USD}\n",
+    "refunds.py":
+        "import pandas as pd\n"
+        "refunds = pd.read_csv('data/refunds.csv')\n"
+        "avg = refunds['amount_cents'].fillna(0).mean()\n"
+        "refunds.to_csv('data/refunds.csv', index=False)\n",
 }
 # Rules that only speak in a permissive dialect.
 DIALECT = {"sql/group-by-bare-column": "mysql"}

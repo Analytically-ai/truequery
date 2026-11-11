@@ -66,7 +66,8 @@ def test_why_never_repeats_the_rule_id():
             "z = df.merge(df, on='id')\n"
             "df.to_sql('t', con, if_exists='replace')\n")
     _, found = pc.check(HEAD + code, pc.RULES)
-    assert {f[0] for f in found} == set(pc.RULES)
+    # the contract checks need a project (tests/test_pandas_contracts.py)
+    assert {f[0] for f in found} == set(pc.RULES) - set(pc.PC.NEW_RULES)
     for rule, _, _, why, fix in found:
         assert rule not in why and rule not in fix, why
 

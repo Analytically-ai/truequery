@@ -291,6 +291,33 @@ result = kept.sort_values("id")["capture"].tolist()
 result = kept.sort_values("id")["capture"].tolist()
 ` → [9, 13, 17]
 
+## py/pandas-fillna-zero-on-money
+
+*Don't fill missing money amounts with 0*
+
+pandas code doesn't replace missing values in a money column (a contract column in minor or major currency units that may be empty) with 0, unless 0 is the true amount and that is stated; missing amounts stay missing, so mean(), count() and the like skip them.
+
+Why: A missing amount means "not known", not "zero". fillna(0) turns every unknown amount into a real one: the mean drops, count() includes rows that have no amount, and minimums become 0. Nothing fails, and the numbers look …
+
+```sql
+-- bad
+avg_refund = refunds["amount_cents"].fillna(0).mean()
+```
+```sql
+-- good
+avg_refund = refunds["amount_cents"].mean()  # skips unknown amounts
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: build,change,explore
+- severity: build=warning, change=warning, explore=warning
+- sources: pandas.Series.mean | pandas docs; pandas.DataFrame.fillna | pandas docs
+- proof bad: `result = [df["amount_cents"].fillna(0).mean(), df["amount_cents"].fillna(0).count()]
+` → [1333.3333333333333, 3]
+- proof good: `result = [df["amount_cents"].mean(), df["amount_cents"].count()]
+` → [2000.0, 2]
+
 ## py/pandas-filter-before-collect
 
 *Push filters and projections to the engine before collecting to pandas*
@@ -460,6 +487,33 @@ result = df
 result = df
 ` → [(1, 10, 10), (2, 20, 40)]
 
+## py/pandas-read-csv-contract-dtype
+
+*Read a contracted file's string keys as strings*
+
+When a contract declares a key column as a string, pandas code that reads that contract's CSV file passes a dtype (or a converter) for the key, so identifiers that look like numbers stay text.
+
+Why: read_csv infers each column's type from its values. A key such as 007 or 0042 looks like a number, so pandas reads it as an integer and drops the leading zeros. The read succeeds, but joins and lookups against the same k…
+
+```sql
+-- bad
+orders = pd.read_csv("data/orders.csv")
+```
+```sql
+-- good
+orders = pd.read_csv("data/orders.csv", dtype={"order_id": "string"})
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: build,change
+- severity: build=warning, change=warning
+- sources: pandas.read_csv | pandas docs
+- proof bad: `result = pd.read_csv(io.StringIO(csv))["order_id"]
+` → [7, 42]
+- proof good: `result = pd.read_csv(io.StringIO(csv), dtype={"order_id": "string"})["order_id"]
+` → ['007', '042']
+
 ## py/pandas-to-sql-replace
 
 *Load into an existing table without to_sql(if_exists="replace")*
@@ -490,6 +544,35 @@ result = con.execute("PRAGMA table_info(sales)").fetchall()
 df.to_sql("sales", con, if_exists="append", index=False)
 result = con.execute("PRAGMA table_info(sales)").fetchall()
 ` → [(0, 'id', 'INTEGER', 0, None, 1), (1, 'amt', 'NUMERIC(10,2)', 1, None, 0)]
+
+## py/pandas-write-mode-violation
+
+*Write an output the way its contract says it's written*
+
+When an output contract declares how the output is written (write_mode: append, overwrite_partition or merge_on_key), pandas code that writes that output doesn't do the opposite: it doesn't replace an append-only table or file, doesn't append blindly to a table that is merged on its key, and doesn't replace a whole table that is overwritten one partition at a time.
+
+Why: The write mode is what keeps reruns and history correct. Replacing an append-only output deletes every earlier load; appending to a merge-on-key output adds a second copy of each key on every rerun; replacing a table tha…
+
+```sql
+-- bad
+day.to_sql("events", con, if_exists="replace", index=False)
+```
+```sql
+-- good
+day.to_sql("events", con, if_exists="append", index=False)
+```
+
+- checked by truequery: no (taught, not checked)
+- enforcement: contract
+- modes: build,change
+- severity: build=error, change=error
+- sources: pandas.DataFrame.to_sql | pandas docs; pandas.DataFrame.to_csv | pandas docs
+- proof bad: `day.to_sql("events", con, if_exists="replace", index=False)
+result = con.execute("SELECT id FROM events ORDER BY id").fetchall()
+` → [(3,)]
+- proof good: `day.to_sql("events", con, if_exists="append", index=False)
+result = con.execute("SELECT id FROM events ORDER BY id").fetchall()
+` → [(1,), (2,), (3,)]
 
 ## py/pin-pipeline-dependencies
 

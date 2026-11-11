@@ -73,7 +73,7 @@ right.
   cal-itp), Mattermost's PostgreSQL migrations, MediaWiki, the PostgreSQL
   regression suite, SQLMesh's examples and the Spider text-to-SQL dev set. We
   labelled every finding by hand. Checks that misfired were fixed or switched
-  off by default. 20 of the 38 checks are on by default and the other 18 wait
+  off by default. 20 of the 41 checks are on by default and the other 21 wait
   until they prove precise, including the ones that read contracts, which
   haven't been measured on real projects yet.
 - **SQL inside Python.** We ran the checker over 12 public Python projects

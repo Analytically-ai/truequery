@@ -12,7 +12,18 @@
 - If a contract or metric file changes during an agent session (from the
   session's first check on), the hook says so once per change, and the
   receipt names the file. The agent is told to confirm the change with you.
-- The standard has 231 practices (was 225) and the checker 38 checks (was 32).
+- **The contract checks reach pandas code.** A DataFrame read from a file or
+  table a contract describes (a literal path matching its location, or
+  `read_sql` of one contracted table) is checked against the contract: a
+  status compared to an undeclared value, expected absences counted as
+  missing, units combined, text timestamps in different zones compared, and
+  a wrong folder put in front of a path. Three new pandas checks: a
+  contracted CSV read without a `dtype` for its string key (`007` becomes
+  7), `fillna(0)` on a money column that may be empty, and a write that
+  contradicts the output contract's `write_mode`. All off by default. See
+  "Checks that read your contracts" in `docs/checker.md` for what links a
+  DataFrame to a contract.
+- The standard has 234 practices (was 225) and the checker 41 checks (was 32).
 - **`truequery verify` checks your data against your contracts.** It reads
   the local files (CSV, JSONL, JSON, Parquet) and SQLite or DuckDB database
   files a contract points to, read-only, and says in plain words whether the

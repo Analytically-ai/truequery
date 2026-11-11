@@ -14,7 +14,9 @@ reads. Deterministic and offline.
   that. When the checker can't tell, it doesn't report.
 
 Each check is backed by a practice record in standard/py/ (its proof
-runs pandas in the tests).
+runs pandas in the tests). The checks that read the project's contracts
+are in `pandas_contracts.py`; they run in the same walk, and only when
+one of them is on and the project has contracts.
 """
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ import ast
 import hashlib
 import re
 import warnings
+
+from truequery.analyzers import pandas_contracts as PC
 
 # Cheap pre-filter before parsing: a line that imports pandas.
 _IMPORTS_PANDAS = re.compile(r"^[ \t]*(?:import[ \t]+pandas\b|from[ \t]+pandas\b"
@@ -36,7 +40,11 @@ MERGE = "py/pandas-merge-validate"
 DROPNA = "py/pandas-groupby-dropna"
 TO_SQL = "py/pandas-to-sql-replace"
 
-RULES = (CHAINED, ROW_LOOP, FIRST, DEDUPE, MERGE, DROPNA, TO_SQL)
+# Each has a pandas proof (the first seven need no contract).
+RULES = (CHAINED, ROW_LOOP, FIRST, DEDUPE, MERGE, DROPNA, TO_SQL) \
+    + PC.NEW_RULES
+# Every rule this walk runs: C1's SQL contract checks reach pandas too.
+ALL_RULES = RULES + PC.EXTENDED_RULES
 
 FRAME, SERIES, GROUPBY, GROUPBY_SERIES = "frame", "series", "groupby", \
     "groupby-series"
@@ -204,13 +212,21 @@ class _File:
 class _Scope:
     """One function (or the module) at a time, statements in order."""
 
-    def __init__(self, file, rules, out, frames=()):
+    def __init__(self, file, rules, out, frames=(), cx=None, body=None):
         self.file = file
         self.rules = rules
         self.out = out
         self.env = {name: FRAME for name in frames}
         # name -> the line of a sort_values on one key, default sort
         self.sorted_unstable = {}
+        # The contract checks (None when none is on, or no contracts):
+        # name -> Link, name -> a boolean mask expression, and this
+        # scope's constants.
+        self.cx = cx
+        self.links, self.masks = {}, {}
+        self.consts = PC._constants(body) if cx is not None and body else {}
+        self.assigned = PC.assigned_names(body) if cx is not None and body \
+            else set()
 
     # -- what an expression is ---------------------------------------------
     def kind(self, node):
@@ -310,15 +326,18 @@ class _Scope:
                       if a.annotation is not None
                       and self.file.is_frame_annotation(a.annotation)]
             _Scope(self.file, self.rules, self.out,
-                   [a.arg for a in params]).run(stmt.body)
+                   [a.arg for a in params], self.cx, stmt.body).run(stmt.body)
             return
         if isinstance(stmt, ast.ClassDef):
-            _Scope(self.file, self.rules, self.out).run(stmt.body)
+            _Scope(self.file, self.rules, self.out, (), self.cx,
+                   stmt.body).run(stmt.body)
             return
         if isinstance(stmt, ast.Assign):
             self.expressions(stmt.value)
             for target in stmt.targets:
                 self.check_target(stmt, target)
+                if self.cx is not None:
+                    self.cx.track_write(self, target)
             kind = self.kind(stmt.value)
             for target in stmt.targets:
                 self.bind(target, kind, stmt.value)
@@ -327,6 +346,8 @@ class _Scope:
             if stmt.value is not None:
                 self.expressions(stmt.value)
             self.check_target(stmt, stmt.target)
+            if self.cx is not None:
+                self.cx.track_write(self, stmt.target)
             kind = (FRAME if self.file.is_frame_annotation(stmt.annotation)
                     else self.kind(stmt.value) if stmt.value is not None
                     else None)
@@ -336,6 +357,10 @@ class _Scope:
         if isinstance(stmt, ast.AugAssign):
             self.expressions(stmt.value)
             self.check_target(stmt, stmt.target)
+            if self.cx is not None:
+                self.cx.track_write(self, stmt.target)
+                if isinstance(stmt.target, ast.Name):
+                    self.links.pop(stmt.target.id, None)
             return
         if isinstance(stmt, (ast.For, ast.AsyncFor)):
             self.expressions(stmt.iter)
@@ -380,6 +405,8 @@ class _Scope:
         if isinstance(stmt, ast.Expr):
             self.expressions(stmt.value)
             self.inplace_on_selection(stmt)
+            if self.cx is not None and isinstance(stmt.value, ast.Call):
+                self.cx.track_inplace(self, stmt.value)
             return
         if isinstance(stmt, ast.Delete):
             for target in stmt.targets:
@@ -390,6 +417,14 @@ class _Scope:
                 self.expressions(child)
 
     def bind(self, target, kind, value):
+        if self.cx is not None:
+            if isinstance(target, ast.Name):
+                self.cx.bind(self, target, value)
+            else:
+                for sub in ast.walk(target):
+                    if isinstance(sub, ast.Name):
+                        self.links.pop(sub.id, None)
+                        self.masks.pop(sub.id, None)
         if isinstance(target, ast.Name):
             self.sorted_unstable.pop(target.id, None)
             if kind in (FRAME, GROUPBY):
@@ -413,6 +448,13 @@ class _Scope:
         calls.sort(key=lambda n: (n.lineno, n.col_offset))
         for call in calls:
             self.call(call)
+        if self.cx is not None:
+            parents = PC.parent_map(node)
+            for call in calls:
+                self.cx.call(self, call, parents)
+            for sub in ast.walk(node):
+                if isinstance(sub, (ast.Compare, ast.BinOp, ast.Subscript)):
+                    self.cx.expression(self, sub, parents)
 
     # -- the checks -----------------------------------------------------------
     def report(self, rule, node, why, fix):
@@ -714,13 +756,15 @@ def _is_called(attr, body):
     return False
 
 
-def check(text: str, rules) -> tuple[bool, list]:
+def check(text: str, rules, contracts=None) -> tuple[bool, list]:
     """(ran, [(rule, line, col, why, fix)]) for one .py file.
 
-    `rules` is the set of pandas rules to run. `ran` is True only when the
-    file imports pandas, parses, and at least one rule ran on it.
+    `rules` is the set of rules to run. `contracts` is the project's
+    contract context (keylookup.declared_context_for), read only when a
+    contract check is on. `ran` is True only when the file imports
+    pandas, parses, and at least one rule ran on it.
     """
-    rules = set(rules) & set(RULES)
+    rules = set(rules) & set(ALL_RULES)
     if not rules or not _IMPORTS_PANDAS.search(text):
         return False, []
     tree = _parse(text)
@@ -730,7 +774,13 @@ def check(text: str, rules) -> tuple[bool, list]:
     if aliases is None:
         return False, []
     out = []
-    _Scope(_File(tree, aliases, functions), rules, out).run(tree.body)
+    PC.clear_cache()
+    file = _File(tree, aliases, functions)
+    cx = None
+    known = PC.Contracts(contracts or {})
+    if rules & set(PC.RULES) and known:
+        cx = PC.ContractPass(file, rules, out, known, tree)
+    _Scope(file, rules, out, (), cx, tree.body).run(tree.body)
     out = sorted(set(out), key=lambda f: (f[1], f[2], f[0]))
     return True, out
 

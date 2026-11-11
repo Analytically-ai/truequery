@@ -771,9 +771,10 @@ class TestReviewFixes:
               "  seen_at: {type: timestamp, time_zone: UTC, pii: true}\n")
         code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
         assert code == 1
+        # one bracket: where, then why the value isn't shown
         assert ("people: stale: the newest seen_at is more than 1d before "
-                "2026-10-02T00:00:00+00:00 (its value isn't shown: marked "
-                "pii)") in out
+                "2026-10-02T00:00:00+00:00 (data/p.csv; its value isn't "
+                "shown: marked pii)") in out
         _, js, _ = tq(capsys, tmp_path, "verify", "--json", "--now", NOW)
         _, rv, _ = tq(capsys, tmp_path, "review", "--data", "--json",
                       "--now", NOW)
@@ -989,3 +990,58 @@ class TestReviewFixes:
                              env=dict(os.environ, PYTHONPATH=str(
                                  REPO / "plugin" / "engine" / "src")))
         assert out.stderr.strip().splitlines()[-1] == "[]", out.stderr
+
+
+class TestWordingFollowUps:
+    """The three wording follow-ups the main developer found in part D."""
+
+    def test_a_link_out_of_the_base_is_named(self, tmp_path, capsys):
+        write(tmp_path / "DATA.md", "# Data\n\n```tq-config\ndialect: duckdb\n"
+              "bases:\n  data_root: ./data/files\n```\n")
+        (tmp_path / "data" / "files").mkdir(parents=True)
+        try:
+            os.symlink(tmp_path / "data", tmp_path / "data" / "files" / "up")
+        except (OSError, NotImplementedError):
+            pytest.skip("no symlinks here")
+        write(tmp_path / "data" / "links.csv", "id,p\n1,up/links.csv\n")
+        write(tmp_path / "contracts" / "links.yaml",
+              "version: 2\ndataset: links\nkind: files\n"
+              "location: {path: data/links.csv, format: csv}\n"
+              "grain: one row per id\nkeys: [id]\ncolumns:\n"
+              "  id: {type: string}\n"
+              "  p: {type: path, relative_to: data_root}\n")
+        _, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert ("links: 1 path in p points outside data_root, through an "
+                "absolute path, ~, .. or a link (data/links.csv; e.g. key 1)"
+                ) in out
+        assert ") (" not in out
+
+    def test_parquet_time_zones_in_plain_words(self, tmp_path, capsys):
+        duckdb = pytest.importorskip("duckdb")
+        write(tmp_path / "DATA.md", "# Data\n\n```tq-config\ndialect: duckdb\n```\n")
+        (tmp_path / "data").mkdir()
+        con = duckdb.connect()
+        con.execute("COPY (SELECT 'a' AS id, TIMESTAMP '2026-01-01 00:00:00' "
+                    f"AS ts) TO '{(tmp_path / 'data' / 'n.parquet').as_posix()}' "
+                    "(FORMAT parquet)")
+        con.execute("SET TimeZone = 'UTC'")
+        con.execute("COPY (SELECT 'a' AS id, TIMESTAMPTZ '2026-01-01 "
+                    "00:00:00+00:00' AS ts) TO "
+                    f"'{(tmp_path / 'data' / 'a.parquet').as_posix()}' "
+                    "(FORMAT parquet)")
+        con.close()
+        for name, zone in (("n", "UTC"), ("a", "'local:Europe/Prague'")):
+            write(tmp_path / "contracts" / f"{name}.yaml",
+                  f"version: 2\ndataset: {name}\nkind: files\n"
+                  f"location: {{path: data/{name}.parquet, format: parquet}}\n"
+                  "grain: one row per id\nkeys: [id]\ncolumns:\n"
+                  "  id: {type: string}\n"
+                  f"  ts: {{type: timestamp, time_zone: {zone}}}\n")
+        _, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert ("Not verified n: ts is stored with no time zone in the Parquet "
+                "file, so whether its times are UTC can't be told from the "
+                "data") in out
+        assert ("Not verified a: ts is stored as an instant (a time with a "
+                "zone) in the Parquet file, so the local zone the contract "
+                "declares (Europe/Prague) can't be told from the data") in out
+        assert "cannot verify" not in out and "TIMESTAMP" not in out

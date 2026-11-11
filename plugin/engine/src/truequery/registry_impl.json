@@ -34,6 +34,11 @@
   "implemented": true,
   "tier": "stop"
  },
+ "py/pandas-fillna-zero-on-money": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
  "py/pandas-groupby-dropna": {
   "enabled": false,
   "implemented": true,
@@ -59,8 +64,18 @@
   "implemented": true,
   "tier": "stop"
  },
+ "py/pandas-read-csv-contract-dtype": {
+  "enabled": false,
+  "implemented": true,
+  "tier": "stop"
+ },
  "py/pandas-to-sql-replace": {
   "enabled": true,
+  "implemented": true,
+  "tier": "stop"
+ },
+ "py/pandas-write-mode-violation": {
+  "enabled": false,
   "implemented": true,
   "tier": "stop"
  },

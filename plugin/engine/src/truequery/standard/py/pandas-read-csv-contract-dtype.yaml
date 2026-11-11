@@ -1,0 +1,63 @@
+id: py/pandas-read-csv-contract-dtype
+title: Read a contracted file's string keys as strings
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  When a contract declares a key column as a string, pandas code that reads
+  that contract's CSV file passes a dtype (or a converter) for the key, so
+  identifiers that look like numbers stay text.
+rationale: >
+  read_csv infers each column's type from its values. A key such as 007 or
+  0042 looks like a number, so pandas reads it as an integer and drops the
+  leading zeros. The read succeeds, but joins and lookups against the same
+  key as text then match nothing, and two distinct keys (07 and 7) collapse
+  into one.
+failure_example: >
+  orders.csv has order_id values 007 and 042, and the contract declares
+  order_id a string key. pd.read_csv("data/orders.csv") reads them as 7 and
+  42, and a join to the refunds table, whose keys are text, finds no refunds.
+enforcement: contract
+evidence: contract
+contract_required: true
+detection_sketch: >
+  Link a read_csv / read_table / read_fwf call to a contract when its path is
+  a string literal (or a same-file constant, Path() of one, or os.path.join of
+  literals) that matches the contract's location.path glob, relative to the
+  project root or to the contract's declared base. Flag the call when a key
+  column declared `type: string` is read (not left out by usecols) and gets
+  no string dtype: no dtype for all columns (str, "string", object), no dtype
+  entry for that column, and no converter for it. Quiet when the call passes
+  **kwargs or a dtype the checker can't read.
+severity_suggestion: warning
+examples:
+  bad: |
+    orders = pd.read_csv("data/orders.csv")
+  good: |
+    orders = pd.read_csv("data/orders.csv", dtype={"order_id": "string"})
+sources:
+  - title: "pandas.read_csv | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.read_csv.html
+    publisher: pandas
+    accessed: 2026-11-10
+    supports: dtype sets the data type for the whole dataset or for
+      individual columns; without it, each column's type is inferred from
+      its values.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [py/pandas-merge-validate]
+proof:
+  engine: pandas
+  setup: |
+    import io
+    csv = "order_id,amount\n007,10\n042,20\n"
+  bad: |
+    result = pd.read_csv(io.StringIO(csv))["order_id"]
+  bad_result: "[7, 42]"
+  good: |
+    result = pd.read_csv(io.StringIO(csv), dtype={"order_id": "string"})["order_id"]
+  good_result: "['007', '042']"
+  note: >
+    Without a dtype, pandas 3.1.0 reads the key as int64: 007 becomes 7 and
+    042 becomes 42. With dtype "string" the keys stay as written.
