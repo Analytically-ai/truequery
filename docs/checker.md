@@ -28,9 +28,13 @@ could hit it.
 TrueQuery receipt
 Checked      1 SQL file · contracts for 0 of 3 tables
 Found        5 errors · 2 warnings
-Not checked  your data: TrueQuery reads files and never connects to your database
+Not checked  your data: no contract points at a local data file, so none was read (remote databases: not until 0.3)
 No contract  customers, orders, staging_orders
 ```
+
+When a contract points at local data files or a SQLite or DuckDB database,
+`truequery review --data` also reads that data, read-only, and adds a
+`Verified     against the data` line: see [Checking your data](data.md).
 
 ## What it promises
 

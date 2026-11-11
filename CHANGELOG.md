@@ -13,6 +13,35 @@
   session's first check on), the hook says so once per change, and the
   receipt names the file. The agent is told to confirm the change with you.
 - The standard has 231 practices (was 225) and the checker 38 checks (was 32).
+- **`truequery verify` checks your data against your contracts.** It reads
+  the local files (CSV, JSONL, JSON, Parquet) and SQLite or DuckDB database
+  files a contract points to, read-only, and says in plain words whether the
+  data matches: keys unique and filled, statuses declared, timestamps in the
+  declared zone, paths under the declared folder, files present where the
+  status says so (expected absences are counted, not flagged), sizes in the
+  declared unit, freshness. Failures say what's wrong and what to do. Each
+  run is logged to `.truequery/evidence.jsonl` (moved to `.1` past 5 MB;
+  git-ignored). Exit codes: 0 verified, 1 the data breaks a contract, 2 a
+  usage error, 3 some data couldn't be verified. See `docs/data.md`.
+- `truequery review --data` adds `Verified     against the data` lines to
+  the receipt, and data failures under `Found`. Without `--data`, the
+  receipt's data line now says whether any contract points at local data
+  and the command that would read it (it used to say TrueQuery never reads
+  data).
+- **The data reader is optional.** SQLite needs nothing extra. Data files
+  and DuckDB databases need DuckDB 1.2.0 or later: `pip install
+  "truequery[data]"`, or `truequery setup data`, which picks the right
+  command for how TrueQuery was installed (pip, uv tool, pipx, uvx or the
+  Claude Code plugin) and runs it only with `--yes`. `--no` records that the
+  project doesn't want it. The answer is kept in `DATA.md`
+  (`setup: data: true|false`; the `tq-config` block now has a JSON Schema).
+  Without the reader, `verify` checks what it can and names the rest;
+  `--require data` makes that fail in CI.
+- `truequery status` says whether the data reader is installed, whether this
+  project needs it, and the command.
+- The skill runs `review --data` at the receipt step when a contract points
+  at local data, and `/truequery init` offers the data reader when the
+  project has data files.
 
 ## 0.1.7 (2026-11-07)
 

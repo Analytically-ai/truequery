@@ -991,7 +991,7 @@ class TestSecurityAndSafety:
             "location": {" base": "data_root", "path": "*.txt", "format": "csv"},
         }
         bad_contract["location"] = {"base": "data_root", "path": "*.txt", "format": "csv"}
-        with pytest.raises(V.VerificationError, match="escapes base directory"):
+        with pytest.raises(V.VerificationError, match="points outside"):
             V.expand_contract_files(
                 bad_contract, bases={"data_root": "./data"}, project_root=str(proj_root)
             )

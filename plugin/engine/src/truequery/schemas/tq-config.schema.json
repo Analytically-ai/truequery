@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Analytically-ai/truequery/main/plugin/engine/src/truequery/schemas/tq-config.schema.json",
+  "title": "TrueQuery project config (the tq-config block in DATA.md)",
+  "description": "The YAML in DATA.md's ```tq-config fence. Unknown keys are allowed and ignored; the keys below are checked when TrueQuery reads them.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Config format version (1)."
+    },
+    "stack": {
+      "type": "string",
+      "description": "Detected stack, such as plain, dbt or sqlmesh."
+    },
+    "dialect": {
+      "type": ["string", "null"],
+      "description": "sqlglot dialect for SQL in this project; null means auto."
+    },
+    "modes": {
+      "type": "array",
+      "description": "Path globs and the mode each one is in.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pattern": {"type": "string"},
+          "mode": {"enum": ["explore", "build", "change", "assure"]}
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "description": "Per-rule settings. Human-only: agents never change these.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "enabled": {"type": ["boolean", "string"]},
+          "tier": {"enum": ["immediate", "stop"]},
+          "severity": {"enum": ["error", "warning", "advisory"]}
+        }
+      }
+    },
+    "interrupt_edits": {
+      "type": "boolean",
+      "description": "Whether per-edit findings go back to the agent. Human-only."
+    },
+    "tier_overrides": {
+      "type": "object",
+      "description": "Testing only: move a rule between the per-edit and end-of-turn checks. Human-only.",
+      "additionalProperties": {"enum": ["immediate", "stop"]}
+    },
+    "bases": {
+      "type": "object",
+      "description": "Named base folders that path columns are relative to (`relative_to` in contracts).",
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "string", "minLength": 1},
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "default": {"type": "string", "minLength": 1}
+            }
+          }
+        ]
+      }
+    },
+    "setup": {
+      "type": "object",
+      "description": "The project's answer for each optional part, so nobody is asked twice. Written by `truequery setup <part> --yes` (true) or `--no` (false).",
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "boolean",
+          "description": "The data reader (DuckDB) for `truequery verify`: true = wanted, false = the team said no."
+        }
+      }
+    }
+  }
+}

@@ -207,8 +207,8 @@ def test_review_receipt_golden(tmp_path):
         "Checked      3 SQL files · 2 project files · "
         "contracts for 0 of 3 tables\n"
         "Found        2 errors\n"
-        "Not checked  your data: TrueQuery reads files and never connects "
-        "to your database\n"
+        "Not checked  your data: no contract points at a local data file, "
+        "so none was read (remote databases: not until 0.3)\n"
         "Not checked  dbt, incremental-model and Airflow rules beyond the 4 "
         "project checks\n"
         "No contract  a, b, t\n")
@@ -224,7 +224,7 @@ def test_receipt_names_only_the_limits_that_apply(tmp_path):
     assert "Found        no problems" in out
     assert "integer division" not in out
     assert "Airflow" not in out
-    assert "your data: TrueQuery reads files" in out  # always said
+    assert "your data: no contract points at a local data file" in out
     (root / "q.sql").write_text("SELECT a / b AS r FROM t;\n",
                                 encoding="utf-8")
     _, out, _ = run("review", ".", cwd=root)

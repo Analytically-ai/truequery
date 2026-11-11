@@ -34,9 +34,14 @@ Homepage = "https://github.com/Analytically-ai/truequery"
 Issues = "https://github.com/Analytically-ai/truequery/issues"
 
 [project.optional-dependencies]
+# The data reader for `truequery verify` (data files and .duckdb
+# databases). 1.2.0 is the first DuckDB with every lockdown setting the
+# runner uses (`allowed_paths`); tests/test_assertions_and_safety.py fails
+# on 1.1.3. `truequery setup data` installs it; SQLite needs nothing extra.
+data = ["duckdb>=1.2.0"]
 # pandas and numpy run the pandas proofs in the tests (pinned: the
 # versions the proofs were checked against). Never a runtime dependency.
-test = ["duckdb", "pytest", "pandas==3.1.0", "numpy==2.4.6", "jsonschema"]
+test = ["duckdb>=1.2.0", "pytest", "pandas==3.1.0", "numpy==2.4.6", "jsonschema"]
 
 [project.scripts]
 truequery = "truequery.cli:main"

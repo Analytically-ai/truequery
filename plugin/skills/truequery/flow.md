@@ -72,9 +72,19 @@ one it did.
 
 ## 6. Receipt
 
+When a contract points at local data (`kind: files`, or a table with
+`location.database`), step 5's receipt says so ("your data: not read in
+this run") and names them. Then check the data before the receipt:
+`truequery review --data` (or `truequery verify`). Read-only.
+Quote its `Verified`, `Found` and `Not checked` lines as printed; a data
+failure is fixed or reported like any finding. If it says the data reader
+isn't installed, say so and offer `truequery setup data`: never install
+without the user's yes. Never quote data results from an earlier run
+(`.truequery/evidence.jsonl` is an audit log, not this run's evidence).
+
 Every command ends with: what was built · what was checked (checker evidence
-levels) · what was **not** checked, and why · assumptions (step-2
-defaults used) · **conflicts** (see the conflict rule).
+levels, and the data if it was read) · what was **not** checked, and why ·
+assumptions (step-2 defaults used) · **conflicts** (see the conflict rule).
 
 ## 7. Remember
 

@@ -25,8 +25,13 @@ DIVISION_LIMIT = ("integer division between columns: column types aren't "
                   "known from files alone")
 PROJECT_LIMIT = ("dbt, incremental-model and Airflow rules beyond the 4 "
                  "project checks")
-DATA_LIMIT = ("your data: TrueQuery reads files and never connects to "
-              "your database")
+# The data line when this run didn't read the data. TrueQuery reads local
+# data files and database files a contract points to (`review --data`,
+# `truequery verify`); it doesn't connect to remote databases yet.
+DATA_LIMIT = ("your data: no contract points at a local data file, so none "
+              "was read (remote databases: not until 0.3)")
+DATA_NOT_READ = ("your data: not read in this run. Run `truequery review "
+                 "--data` to check {names} against the contracts")
 PANDAS_LIMIT = ("pandas: only DataFrames a file builds or annotates "
                 "itself are followed; what a column means (money, units, "
                 "time zones) needs contracts")
@@ -237,7 +242,11 @@ def build_receipt(results, modes: list[str], contracts: dict,
                   rule_settings: str | None = None,
                   invalid_contracts: list[str] | None = None,
                   invalid_metrics: list[str] | None = None,
-                  contracts_changed: list[str] | None = None) -> dict:
+                  contracts_changed: list[str] | None = None,
+                  data: dict | None = None,
+                  local_data: list[str] | None = None) -> dict:
+    """`data` is this run's `review --data` result (None: data not read);
+    `local_data` names the contracts whose data could be read here."""
     findings = all_findings(results)
     counts = {"error": 0, "warning": 0, "advisory": 0, "info": 0}
     attributed: dict[str, dict[str, int]] = {}
@@ -276,6 +285,16 @@ def build_receipt(results, modes: list[str], contracts: dict,
     contract_ev = f"{len(present)}/{len(tables_referenced)} tables"
     if drafts:
         contract_ev += f" ({len(drafts)} draft)"
+    data_lines = None
+    if data is not None:
+        from truequery import dataverify  # only when the data was read
+        data_lines = dataverify.receipt_lines(data)
+        data_ev = dataverify.summary(data)
+        data = dataverify.public_doc(data)
+    elif local_data:
+        data_ev = "not read in this run"
+    else:
+        data_ev = "no contract points at local data"
     return {
         "modes": sorted(set(modes)),
         "standard": STANDARD_VERSION,
@@ -299,7 +318,7 @@ def build_receipt(results, modes: list[str], contracts: dict,
             "contract": contract_ev,
             "contract_consumers": consumers,
             "metadata": "no adapter",
-            "data": "no adapter",
+            "data": data_ev,
         },
         "not_checked": {
             "unverified_files": unverified,
@@ -316,9 +335,12 @@ def build_receipt(results, modes: list[str], contracts: dict,
             "invalid_contracts": list(invalid_contracts or []),
             "invalid_metrics": list(invalid_metrics or []),
             "metadata": "no adapter",
-            "data": "no adapter",
+            "data": data_ev,
             "recall_limits": recall_limits(results),
         },
+        "data": data,
+        "data_lines": data_lines,
+        "local_data": list(local_data or []),
         "findings": counts,
         "contracts_referenced": tables_referenced,
         "contracts_missing": missing,
@@ -370,6 +392,10 @@ def render_receipt(receipt: dict) -> str:
             contract += f" (keys used by {', '.join(ev['contract_consumers'])})"
         checked.append(contract)
     lines.append(f"{'Checked':<13}" + " · ".join(checked))
+    data_lines = receipt.get("data_lines")
+    for i, text in enumerate((data_lines or {}).get("verified", [])):
+        lines.append(f"{'Verified':<13}against the data: {text}" if i == 0
+                     else f"{'':<13}{text}")
     counts = receipt["findings"]
     attributed = receipt.get("attribution", {})
     parts = []
@@ -381,7 +407,15 @@ def render_receipt(receipt: dict) -> str:
                 if attributed.get(tag, {}).get(severity)]
         parts.append(_plural(counts[severity], severity)
                      + (f" ({'; '.join(bits)})" if bits else ""))
-    lines.append(f"{'Found':<13}" + (" · ".join(parts) or "no problems"))
+    data_found = (data_lines or {}).get("found", [])
+    if data_found:
+        parts.append(_plural(len(data_found), "data failure"))
+        lines.append(f"{'Found':<13}" + " · ".join(parts) + ":")
+        lines.extend(f"{'':<13}{text}" for text in data_found)
+    else:
+        lines.append(f"{'Found':<13}" + (" · ".join(parts) or "no problems"))
+    for text in (data_lines or {}).get("not_verified", []):
+        lines.append(f"{'Not verified':<13}{text}")
     unverified = nc.get("unparsed_files", nc["unverified_files"])
     if unverified:
         lines.append(f"{'Not checked':<13}{_plural(len(unverified), 'file')} "
@@ -419,7 +453,21 @@ def render_receipt(receipt: dict) -> str:
         lines.append(f"{'Not checked':<13}invalid contract: {problem}")
     for problem in nc.get("invalid_metrics", []):
         lines.append(f"{'Not checked':<13}invalid metric: {problem}")
-    lines.append(f"{'Not checked':<13}{DATA_LIMIT}")
+    if data_lines is not None:
+        data_nc = data_lines.get("not_checked", [])
+        data = receipt.get("data") or {}
+        if not (data.get("datasets") or data_nc):
+            data_nc = [DATA_LIMIT]
+        for text in data_nc:
+            lines.append(f"{'Not checked':<13}{text}")
+    elif receipt.get("local_data"):
+        names = receipt["local_data"]
+        shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more"
+                                        if len(names) > 3 else "")
+        lines.append(f"{'Not checked':<13}"
+                     + DATA_NOT_READ.format(names=shown))
+    else:
+        lines.append(f"{'Not checked':<13}{DATA_LIMIT}")
     for limit in nc["recall_limits"]:
         lines.append(f"{'Not checked':<13}{limit}")
     ignores = receipt.get("ignores", {})

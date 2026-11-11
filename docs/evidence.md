@@ -145,8 +145,10 @@ right.
   by a function, imported from another module) isn't in the file to read.
   The receipt names those files, and they're never counted as clean.
 - **Your warehouse.** The checker reads files. It doesn't connect to a
-  warehouse, so it can't see column types, data or row counts, and the
-  receipt says so every time.
+  warehouse, so it can't see column types, data or row counts there, and
+  the receipt says so. `truequery verify` reads local data files and SQLite
+  or DuckDB database files that a contract points to
+  ([Checking your data](data.md)); remote databases aren't read until 0.3.
 
 ## Help us fill the gaps
 
