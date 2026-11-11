@@ -19,8 +19,8 @@ Anyone who can write them can weaken or silence checks:
   silences the checks that consume it, by design.
 - Contracts and `DATA.md` `bases:` also decide which local files
   `truequery verify` (and `review --data`) reads. It reads them read-only
-  and prints counts and up to five key values from them (never keys of a
-  `pii: true` column). A base can be any folder, so whoever can write
+  and prints counts, up to five key values, and for a freshness check the
+  newest timestamp (none of them for a `pii: true` column). A base can be any folder, so whoever can write
   `DATA.md` and `contracts/` decides what is read.
 
 Treat both as human-owned: agents may only add the narrowest ignore with a

@@ -238,13 +238,20 @@ def _review_tables(results, dialect) -> list[str]:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
-    from truequery import dataverify as DV  # not loaded by hooks
+    from truequery.verify import local_data_contracts  # not loaded by hooks
     root = os.path.abspath(".")
     paths = args.paths or [root]
     require_data = getattr(args, "require", None) == "data"
     read_data = bool(getattr(args, "data", False)) or require_data
+    DV = None
+    if read_data:  # the data module loads only when the data is read
+        from truequery import dataverify as DV
     try:
-        now = DV.parse_now(args.now) if read_data else None
+        now = DV.parse_now(args.now) if DV else None
+    except ValueError as exc:
+        print(f"truequery: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    try:
         eff, settings_map = _effective_for(args, root)
         results = run(paths, root, dialect=args.dialect, mode=args.mode,
                       settings=settings_map)
@@ -253,7 +260,7 @@ def cmd_review(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     modes = [r.mode for r in results]
     contracts, invalid_contracts = P.load_contracts_reporting(root)
-    data_doc = DV.run(root, now=now) if read_data else None
+    data_doc = DV.run(root, now=now) if DV else None
     _, invalid_metrics = P.load_metrics_reporting(
         root, contracts=contracts)
     tables = _review_tables(results, args.dialect)
@@ -266,7 +273,7 @@ def cmd_review(args: argparse.Namespace) -> int:
                                contracts_changed=hook.session_contracts_changed(
                                    root),
                                data=data_doc,
-                               local_data=DV.local_data_contracts(contracts))
+                               local_data=local_data_contracts(contracts))
     if args.sarif:
         print(RP.render_sarif(results, ENGINE_VERSION))
     elif args.json:

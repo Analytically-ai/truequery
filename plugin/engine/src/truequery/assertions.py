@@ -43,6 +43,21 @@ class CompiledAssertion:
     params: dict[str, Any] = field(default_factory=dict)
 
 
+def _count_where(cond: exp.Expression, name: str) -> exp.Expression:
+    """`COALESCE(SUM(CASE WHEN cond THEN 1 ELSE 0 END), 0) AS name`: a count
+    beside the failed count, in plain SQL every runner dialect reads."""
+    case = exp.Case().when(cond, exp.Literal.number(1)).else_(exp.Literal.number(0))
+    return exp.func("COALESCE", exp.func("SUM", case), exp.Literal.number(0)).as_(
+        exp.to_identifier(name, quoted=True))
+
+
+def _filled(col_expr: exp.Expression) -> exp.Expression:
+    """The value is there: not NULL and not blank."""
+    col_txt = exp.cast(col_expr.copy(), exp.DataType.build("VARCHAR"))
+    return exp.and_(col_expr.copy().is_(exp.null()).not_(),
+                    exp.func("TRIM", col_txt).neq(exp.Literal.string("")))
+
+
 def _clean_ident_part(raw: str) -> str:
     """Strip surrounding backticks or quotes from a single v1 identifier part."""
     s = raw.strip()
@@ -421,11 +436,16 @@ def compile_contract_assertions(
         else:
             bad_cond = exp.or_(col_expr.is_(exp.null()), exp.not_(in_expr))
 
+        # failed, then how many values were compared, then how many of the
+        # failures are empty (said as "empty", not "undeclared")
         cnt_select = (
-            exp.select(exp.func("COUNT", exp.Star()).as_(
-                exp.to_identifier("failed_count", quoted=True)))
+            exp.select(
+                _count_where(bad_cond.copy(), "failed_count"),
+                _count_where(_filled(col_expr), "compared_count"),
+                _count_where(exp.and_(bad_cond.copy(),
+                                      exp.not_(_filled(col_expr))),
+                             "empty_count"))
             .from_(table_expr)
-            .where(bad_cond)
         )
         if pk_cols:
             select_cols = [_quote_col(k) for k in pk_cols]
@@ -479,10 +499,10 @@ def compile_contract_assertions(
             _tz_failing_condition(col_expr, str(tz)),
         )
         cnt_select = (
-            exp.select(exp.func("COUNT", exp.Star()).as_(
-                exp.to_identifier("failed_count", quoted=True)))
+            exp.select(
+                _count_where(fail_cond.copy(), "failed_count"),
+                _count_where(_filled(col_expr), "compared_count"))
             .from_(table_expr)
-            .where(fail_cond)
         )
         if pk_cols:
             select_cols = [_quote_col(k) for k in pk_cols]
@@ -726,6 +746,8 @@ def compile_contract_assertions(
                 "time_zone": str(fcol_tz) if fcol_tz else None,
                 "key_columns": pk_cols,
                 "pii_redacted": True,
+                # a pii column's newest value is never shown either
+                "value_hidden": fcol.lower() in pii_cols,
                 **sample_meta,
                 **prov,
             },

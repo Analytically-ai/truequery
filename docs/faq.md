@@ -45,7 +45,8 @@ The checker makes no network calls and sends no telemetry. Claude Code
 still talks to its model provider as it always does, and TrueQuery doesn't
 change that. `truequery verify` reads local data files on your machine,
 read-only, and never connects to your warehouse. It shows counts and at
-most five key values, never other values. See [Checking your
+most five key values (and, for a freshness check, the newest timestamp),
+never other values. See [Checking your
 data](data.md).
 
 **Does checking data mean installing something?**

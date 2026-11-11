@@ -156,6 +156,12 @@ def has_local_data(contract: dict) -> bool:
     return bool(loc.get("database"))
 
 
+def local_data_contracts(contracts: dict) -> list[str]:
+    """Names of the valid contracts whose data `verify` can read here."""
+    return sorted(str(c.get("dataset") or c.get("table"))
+                  for c in contracts.values() if has_local_data(c))
+
+
 def _import_duckdb():
     try:
         import duckdb
@@ -255,10 +261,35 @@ def open_duckdb_database(db_path: str):
     return con
 
 
+def _sqlite_wal_closed(real_db: str) -> bool:
+    """True for a database in WAL mode that nobody has open: the header says
+    WAL (bytes 18-19 are 2) and there is no `-wal` file beside it."""
+    try:
+        with open(real_db, "rb") as fh:
+            header = fh.read(20)
+    except OSError:
+        return False
+    return (len(header) == 20 and header[:16] == b"SQLite format 3\x00"
+            and header[18] == 2 and header[19] == 2
+            and not os.path.lexists(real_db + "-wal"))
+
+
 def sqlite_readonly_uri(db_path: str) -> str:
-    """Build a read-only SQLite URI safe on paths containing `#`, spaces, etc."""
+    """Build a read-only SQLite URI safe on paths containing `#`, spaces, etc.
+
+    A WAL-mode database opened with only `mode=ro` gets a `-shm` and a `-wal`
+    file created beside it, which stay. When no `-wal` file exists nobody has
+    the database open, so it's opened `immutable=1`: no locks, no side files.
+    (If a writer opens it during the check, the result can be stale; the file
+    is still never written.) With a `-wal` file there, someone has it open
+    (or it wasn't closed cleanly): `mode=ro` reads it through the files that
+    are already there.
+    """
     real_db = Path(os.path.realpath(db_path)).resolve()
-    return real_db.as_uri() + "?mode=ro"
+    query = "?mode=ro"
+    if _sqlite_wal_closed(str(real_db)):
+        query += "&immutable=1"
+    return real_db.as_uri() + query
 
 
 def open_sqlite_readonly(db_path: str) -> sqlite3.Connection:
@@ -302,12 +333,19 @@ def resolve_base_dir(
     return os.path.realpath(os.path.join(root_real, raw_dir))
 
 
-def resolve_path_within_base(row_path: str, real_base: str) -> str | None:
+PATH_CACHE_LIMIT = 100_000  # folders remembered per check
+
+
+def resolve_path_within_base(row_path: str, real_base: str,
+                             cache: dict | None = None) -> str | None:
     """Resolve `row_path` under `real_base` and verify it never escapes `real_base`.
 
     Returns the resolved `real_target` string if safe, or `None` if `row_path`
     is empty, contains NUL, is absolute, starts with `~` or a Windows drive, or
     escapes `real_base` via `..` or a symlink at any path prefix.
+
+    `cache` (one dict per check) remembers the folders already resolved, so a
+    log of a million paths in a few hundred folders resolves each folder once.
     """
     if not isinstance(row_path, str):
         return None
@@ -322,18 +360,45 @@ def resolve_path_within_base(row_path: str, real_base: str) -> str | None:
     if not parts or ".." in parts or "~" in parts:
         return None
 
-    base_real = os.path.realpath(real_base)
-    cur = base_real
-    for part in parts:
-        candidate = os.path.join(cur, part)
-        resolved = os.path.realpath(candidate)
-        try:
-            if os.path.commonpath([base_real, resolved]) != base_real:
+    if cache is None:
+        cache = {}
+    base_real = cache.get(("base", real_base))
+    if base_real is None:
+        base_real = cache[("base", real_base)] = os.path.realpath(real_base)
+    cur: str | None = base_real
+    for depth, part in enumerate(parts):
+        last = depth == len(parts) - 1
+        key = (base_real, tuple(parts[:depth + 1]))
+        if not last and key in cache:
+            cur = cache[key]
+            if cur is None:
                 return None
-        except ValueError:
+            continue
+        cur = _resolve_one(base_real, cur, part)
+        if not last:
+            if len(cache) > PATH_CACHE_LIMIT:  # bounded memory
+                cache.clear()
+                cache[("base", real_base)] = base_real
+            cache[key] = cur
+        if cur is None:
             return None
-        cur = resolved
     return cur
+
+
+def _resolve_one(base_real: str, parent_real: str, part: str) -> str | None:
+    """`parent_real/part` resolved, or None when it leaves `base_real`.
+    `parent_real` is already resolved, so on POSIX only a link needs
+    resolving; Windows (junctions) always goes through realpath."""
+    candidate = os.path.join(parent_real, part)
+    if os.name == "posix" and not os.path.islink(candidate):
+        return candidate
+    resolved = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([base_real, resolved]) != base_real:
+            return None
+    except ValueError:
+        return None
+    return resolved
 
 
 def expand_contract_files(
@@ -803,6 +868,10 @@ def _run_sql_assertion(
         max_dt = max(parsed_dts)
         age = now_dt - max_dt
         passed = age <= max_delta
+        # A column marked pii: say whether it's fresh, never its value (or
+        # the age, which gives the value back with --now).
+        hidden = bool(params.get("value_hidden"))
+        shown = "" if hidden else f" ({max_dt.isoformat()})"
         return {
             "assertion": "freshness",
             "target": col_name,
@@ -812,14 +881,15 @@ def _run_sql_assertion(
             "sample_keys": [],
             "pii_redacted": True,
             "message": (
-                f"newest {col_name} ({max_dt.isoformat()}) is within "
+                f"newest {col_name}{shown} is within "
                 f"{max_age_str} of {now_dt.isoformat()}{s_suffix}"
                 if passed
-                else f"stale data: newest {col_name} is {max_dt.isoformat()}, "
+                else f"stale data: newest {col_name}{shown} is "
                      f"older than {max_age_str} at {now_dt.isoformat()}{s_suffix}"
             ),
             "details": {
-                "max_timestamp": max_dt.isoformat(),
+                "max_timestamp": None if hidden else max_dt.isoformat(),
+                "value_hidden": hidden,
                 "checked_at": now_dt.isoformat(),
                 "max_age": max_age_str,
             },
@@ -830,7 +900,12 @@ def _run_sql_assertion(
     # Private by default (DESIGN §5): report counts and at most 5 failing key values,
     # never non-key column values, and never keys when `pii_redacted` is True.
     cnt_rows = _execute_single_select(con, comp.count_sql, comp.dialect)
-    failed_count = int(cnt_rows[0][0]) if cnt_rows and cnt_rows[0][0] is not None else 0
+    counts = list(cnt_rows[0]) if cnt_rows else []
+    counts += [None] * (3 - len(counts))
+    failed_count = int(counts[0] or 0)
+    # values the check looked at (not_null and unique look at every row)
+    compared = int(counts[1] or 0) if counts[1] is not None else total_rows
+    empty_count = int(counts[2] or 0)
     sample_rows = (
         _execute_single_select(con, comp.sql, comp.dialect)
         if failed_count > 0 and not pii_redacted
@@ -908,7 +983,9 @@ def _run_sql_assertion(
         "sample_keys": sample_keys,
         "pii_redacted": pii_redacted,
         "message": msg,
-        "details": {},
+        "details": ({"compared": compared, "empty_count": empty_count}
+                    if comp.assertion == "accepted_values"
+                    else {"compared": compared}),
         "provenance_note": prov_note,
     }
 
@@ -927,6 +1004,7 @@ def _run_filesystem_assertion(
     rel_to = params.get("relative_to")
     base_label = str(rel_to) if rel_to else "project_root"
     real_base = resolve_base_dir(rel_to, bases, project_root)
+    path_cache: dict = {}  # folders resolved once per check
     rows = _execute_single_select(con, comp.sql, comp.dialect)
     s_phrase = _sample_phrase(params, total_rows)
     s_suffix = f" {s_phrase}" if s_phrase else ""
@@ -957,10 +1035,12 @@ def _run_filesystem_assertion(
         present_existing = 0
         present_unflagged_keys: list[Any] = []
         sample_keys: list[Any] = []
+        paths_compared = 0
         for row in rows:
             raw_path = row[pk_len]
             if raw_path is None or not str(raw_path).strip():
                 continue
+            paths_compared += 1
             status_val = (
                 str(row[pk_len + 1])
                 if status_col and len(row) > pk_len + 1 and row[pk_len + 1] is not None
@@ -968,7 +1048,7 @@ def _run_filesystem_assertion(
             )
             means = status_means.get(status_val) if status_val is not None else None
             # Step 1: containment check — NEVER stat/exists a path that escapes real_base
-            real_target = resolve_path_within_base(str(raw_path), real_base)
+            real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
             if real_target is None:
                 failed_count += 1
                 escaped_count += 1
@@ -1023,6 +1103,7 @@ def _run_filesystem_assertion(
                 "base": base_label,
                 "escaped_count": escaped_count,
                 "unresolved_base_count": wrong_base_count,
+                "compared": paths_compared,
             },
             "provenance_note": prov_note,
         }
@@ -1038,6 +1119,8 @@ def _run_filesystem_assertion(
         absent_expected_statuses: set[str] = set()
         todo_statuses: set[str] = set()
         todo_rows = 0
+        present_compared = 0
+        failure_compared = 0
         sample_keys = []
 
         for row in rows:
@@ -1059,7 +1142,7 @@ def _run_filesystem_assertion(
             else:
                 # Never touch the filesystem if the row path escapes `real_base`;
                 # count the escaping path as a failure of `exists_per_status`.
-                real_target = resolve_path_within_base(str(raw_path), real_base)
+                real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
                 if real_target is None:
                     failed_count += 1
                     escaped_count += 1
@@ -1068,6 +1151,7 @@ def _run_filesystem_assertion(
                     continue
                 exists = os.path.exists(real_target)
             if means == "present":
+                present_compared += 1
                 if not exists:
                     failed_count += 1
                     present_missing += 1
@@ -1078,6 +1162,7 @@ def _run_filesystem_assertion(
                     absent_expected_count += 1
                     absent_expected_statuses.add(sval)
             elif means == "absent_unexpected":
+                failure_compared += 1
                 if not exists:
                     failed_count += 1
                     unexpected_absent += 1
@@ -1125,6 +1210,8 @@ def _run_filesystem_assertion(
                 "absent_expected_statuses": sorted(absent_expected_statuses),
                 "unconfirmed_todo_statuses": sorted(todo_statuses),
                 "unconfirmed_todo_rows": todo_rows,
+                "present_compared": present_compared,
+                "compared": present_compared + failure_compared,
             },
             "provenance_note": prov_note,
         }
@@ -1151,7 +1238,7 @@ def _run_filesystem_assertion(
                 if means in ("absent_expected", "TODO"):
                     continue
             # Never call os.stat() on a path that escapes `real_base`
-            real_target = resolve_path_within_base(str(raw_path), real_base)
+            real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
             if real_target is None or not os.path.isfile(real_target):
                 continue
             files_compared += 1
@@ -1194,6 +1281,7 @@ def _run_filesystem_assertion(
             "details": {
                 "unit": unit,
                 "files_compared": files_compared,
+                "compared": files_compared,
                 "twin_unit_matches": twin_counts,
             },
             "provenance_note": prov_note,
@@ -1292,9 +1380,16 @@ def verify_contract(
                 )
             real_base = resolve_base_dir(loc.get("base"), bases, project_root)
             real_db = resolve_path_within_base(str(db_rel), real_base)
+            where = loc.get("base") or "the project folder"
+            if real_db is None and os.path.lexists(
+                    os.path.join(real_base, str(db_rel))):
+                raise VerificationError(
+                    f"database file {db_rel} points outside {where} "
+                    "(a link?), so nothing was read"
+                )
             if real_db is None or not os.path.isfile(real_db):
                 raise VerificationError(
-                    f"database file {db_rel!r} does not exist under base"
+                    f"database file {db_rel} isn't there (looked in {where})"
                 )
             total_bytes = os.stat(real_db).st_size
             if total_bytes > max_bytes:
@@ -1522,7 +1617,7 @@ def verify_project(
         if not has_local_data(contract):
             skipped.append({
                 "dataset": ds_name,
-                "reason": "no local location.database declared",
+                "reason": "no location",
             })
             continue
         prov = A._provenance_params(contract)

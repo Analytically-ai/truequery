@@ -216,34 +216,110 @@ def recorded_answer(root: str) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+UNSAFE = ""  # record_answer: the block is there but couldn't be edited safely
+
+
 def record_answer(root: str, wanted: bool) -> str | None:
     """Write `setup: data: <wanted>` into DATA.md's tq-config. Returns the
-    path, or None when there's no DATA.md with a tq-config block."""
+    path; None when there's no DATA.md with a tq-config block; UNSAFE when
+    the block can't be changed without touching other lines.
+
+    DATA.md is the team's file: only the `data:` line under `setup:` is
+    written (added if missing). Every other line, comment and spelling
+    stays byte for byte."""
     path = os.path.join(root, "DATA.md")
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(path, encoding="utf-8", newline="") as handle:
             text = handle.read()
     except OSError:
         return None
+    crlf = "\r\n" in text  # kept as the file has it
+    if crlf:
+        text = text.replace("\r\n", "\n")
     match = P._TQ_FENCE.search(text)
     if not match:
         return None
+    body = match.group(1)
     try:
-        config = yaml.safe_load(match.group(1))
+        config = yaml.safe_load(body)
     except yaml.YAMLError:
-        return None
-    if not isinstance(config, dict):
+        return UNSAFE
+    if config is None:
         config = {}
+    if not isinstance(config, dict):
+        return UNSAFE
     block = config.get("setup")
-    if not isinstance(block, dict):
-        block = {}
-    if block.get("data") is wanted:
+    if isinstance(block, dict) and block.get("data") is wanted:
         return path
-    config["setup"] = {**block, "data": wanted}
-    body = yaml.safe_dump(config, sort_keys=True).rstrip()
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(text[:match.start(1)] + body + text[match.end(1):])
+    new_body = _set_setup_data(body, "true" if wanted else "false")
+    # Write only if the edit means exactly what was asked, nothing else.
+    expected = dict(config)
+    expected["setup"] = {**(block if isinstance(block, dict) else {}),
+                         "data": wanted}
+    try:
+        ok = new_body is not None and yaml.safe_load(new_body) == expected
+    except yaml.YAMLError:
+        ok = False
+    if not ok:
+        return UNSAFE
+    out = text[:match.start(1)] + new_body + text[match.end(1):]
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(out.replace("\n", "\r\n") if crlf else out)
     return path
+
+
+_TOP_SETUP = re.compile(r"^setup[ \t]*:(?P<rest>[^\n]*)$", re.MULTILINE)
+_DATA_LINE = re.compile(
+    r"^(?P<indent>[ \t]+)data[ \t]*:[ \t]*(?P<value>[^#\n]*?)"
+    r"(?P<tail>[ \t]+#[^\n]*)?$")
+
+
+def _set_setup_data(body: str, value: str) -> str | None:
+    """`body` with `data: <value>` under the top-level `setup:` key, every
+    other line kept. None when `setup:` is written in a form this doesn't
+    edit (a flow mapping such as `setup: {data: true}`)."""
+    found = _TOP_SETUP.search(body)
+    if not found:
+        sep = "" if not body or body.endswith("\n") else "\n"
+        return f"{body}{sep}setup:\n  data: {value}"
+    rest = found.group("rest").split("#", 1)[0].strip()
+    if rest not in ("", "null", "~"):
+        return None
+    lines = body.split("\n")
+    head = body[:found.start()].count("\n")
+    child_indent = None
+    for i in range(head + 1, len(lines)):
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line[0] not in " \t":
+            break  # the next top-level key
+        indent = line[:len(line) - len(line.lstrip())]
+        if child_indent is None:
+            child_indent = indent
+        hit = _DATA_LINE.match(line) if indent == child_indent else None
+        if hit:
+            lines[i] = (f"{hit.group('indent')}data: {value}"
+                        f"{hit.group('tail') or ''}")
+            return "\n".join(lines)
+    if rest:  # `setup: null` becomes a mapping
+        lines[head] = "setup:"
+    lines.insert(head + 1, f"{child_indent or '  '}data: {value}")
+    return "\n".join(lines)
+
+
+def _say_recorded(root: str, where: str | None, wanted: bool,
+                  extra: str = "") -> None:
+    word = "true" if wanted else "false"
+    if where:
+        print(f"Recorded in {P._rel(where, root)} (setup: data: {word}){extra}")
+    elif where == UNSAFE:
+        print("DATA.md's tq-config block couldn't be changed without touching "
+              "other lines, so nothing was recorded. To keep the answer, add "
+              f"`setup:` with `data: {word}` under it yourself.")
+    else:
+        print("No DATA.md with a tq-config block here, so nothing was "
+              "recorded (run `truequery init` first to keep the answer).")
 
 
 # ---------------------------------------------------------------------------
@@ -339,13 +415,9 @@ def run_setup(args, root: str, env: dict | None = None,
     if args.no:
         where = record_answer(root, False)
         print("Not installing the data reader.")
-        if where:
-            print(f"Recorded in {P._rel(where, root)} (setup: data: false), so "
-                  "this project isn't asked again. Change it there, or run "
-                  "`truequery setup data --yes`.")
-        else:
-            print("No DATA.md with a tq-config block here, so nothing was "
-                  "recorded (run `truequery init` first to keep the answer).")
+        _say_recorded(root, where, False,
+                      ", so this project isn't asked again. Change it there, "
+                      "or run `truequery setup data --yes`.")
         return 0
 
     install = detect_install(env)
@@ -417,6 +489,5 @@ def run_setup(args, root: str, env: dict | None = None,
 
 def _record(root: str, wanted: bool) -> None:
     where = record_answer(root, wanted)
-    if where:
-        print(f"Recorded in {P._rel(where, root)} (setup: data: "
-              f"{'true' if wanted else 'false'}).")
+    if where is not None:  # no DATA.md: nothing to say after an install
+        _say_recorded(root, where, wanted, ".")

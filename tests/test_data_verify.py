@@ -205,7 +205,10 @@ class TestVerifyCommand:
         verified = [l for l in out.splitlines() if l.startswith("Verified")]
         found = [l for l in out.splitlines() if l.startswith("Found")]
         assert verified and all(l.endswith(note) for l in verified)
-        assert found and all(l.endswith(note) for l in found)
+        # one bracket: the draft note joins the where-and-keys bracket
+        assert found and all(
+            l.endswith("; from draft contract orders, inferred from a 2-row "
+                       "sample)") and ") (" not in l for l in found)
 
     def test_pii_key_is_never_shown(self, tmp_path, capsys):
         write(tmp_path / "DATA.md", "# Data\n\n```tq-config\ndialect: duckdb\n```\n")
@@ -300,8 +303,10 @@ class TestVerifyCommand:
               "  order_id: {type: string}\n")
         code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
         assert code == 0
-        assert ("Skipped      orders: a remote table (no `location.database`); "
-                "remote databases aren't read until 0.3") in out
+        assert ("Skipped      orders: the contract doesn't say where the data "
+                "is (add `location.database` for a local database file; remote "
+                "databases aren't read until 0.3)") in out
+        assert "1 skipped (no location)" in out
         shutil.rmtree(tmp_path / "contracts")
         code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
         assert code == 0
@@ -704,3 +709,283 @@ def test_dataverify_summary_words():
     doc = {"datasets": [], "not_checked": [], "skipped": [],
            "invalid_contracts": []}
     assert DV.summary(doc) == "no data read"
+
+
+# ---------------------------------------------------------------------------
+# Fixes from the independent review of part D
+# ---------------------------------------------------------------------------
+
+
+def _nested_same_quotes(path: Path) -> list[int]:
+    """Lines where an f-string holds a string in its own quote character:
+    valid only on Python 3.12+ (PEP 701), a SyntaxError on 3.11."""
+    import io
+    import tokenize
+    bad, stack = [], []
+    toks = tokenize.generate_tokens(io.StringIO(path.read_text()).readline)
+    for tok in toks:
+        name = tokenize.tok_name[tok.type]
+        if name == "FSTRING_START":
+            stack.append(tok.string.lstrip("rRbBfFuU")[:1])
+        elif name == "FSTRING_END":
+            stack.pop()
+        elif name == "STRING" and stack:
+            quote = tok.string.lstrip("rRbBfFuU")[:1]
+            if quote == stack[-1]:
+                bad.append(tok.start[0])
+        elif name == "FSTRING_START" and stack:
+            pass
+    return bad
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12),
+                    reason="3.11 itself refuses these files")
+def test_sources_parse_on_python_311():
+    """requires-python is >=3.11: no f-string may nest its own quotes."""
+    files = sorted((REPO / "plugin" / "engine" / "src").rglob("*.py"))
+    files += sorted((REPO / "tools").glob("*.py"))
+    files += sorted((REPO / "tests").glob("*.py"))
+    found = {str(f.relative_to(REPO)): _nested_same_quotes(f) for f in files}
+    assert {k: v for k, v in found.items() if v} == {}
+
+
+def test_nested_quote_detector_catches_the_311_trap(tmp_path):
+    if sys.version_info < (3, 12):
+        pytest.skip("the sample itself doesn't parse on 3.11")
+    sample = tmp_path / "s.py"
+    sample.write_text('x = f"{y("a")} b"\nz = f"{y(\'a\')} b"\n')
+    assert _nested_same_quotes(sample) == [1]
+
+
+class TestReviewFixes:
+    def test_pii_freshness_value_is_never_shown(self, tmp_path, capsys):
+        write(tmp_path / "DATA.md", "# Data\n\n```tq-config\ndialect: duckdb\n```\n")
+        write(tmp_path / "data" / "p.csv",
+              "id,seen_at\n1,2020-01-01T00:00:00Z\n2,2020-01-02T00:00:00Z\n")
+        write(tmp_path / "contracts" / "people.yaml",
+              "version: 2\ndataset: people\nkind: files\n"
+              "location: {path: data/p.csv, format: csv}\n"
+              "grain: one row per person\nkeys: [id]\n"
+              "freshness_sla: {column: seen_at, max_age: 1d}\ncolumns:\n"
+              "  id: {type: string}\n"
+              "  seen_at: {type: timestamp, time_zone: UTC, pii: true}\n")
+        code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert code == 1
+        assert ("people: stale: the newest seen_at is more than 1d before "
+                "2026-10-02T00:00:00+00:00 (its value isn't shown: marked "
+                "pii)") in out
+        _, js, _ = tq(capsys, tmp_path, "verify", "--json", "--now", NOW)
+        _, rv, _ = tq(capsys, tmp_path, "review", "--data", "--json",
+                      "--now", NOW)
+        evidence = (tmp_path / ".truequery" / "evidence.jsonl").read_text()
+        for text in (out, js, rv, evidence):
+            assert "2020-01-02" not in text
+        # not pii: the newest timestamp is shown, as the docs say
+        contract = tmp_path / "contracts" / "people.yaml"
+        contract.write_text(contract.read_text().replace(", pii: true", ""))
+        _, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert "the newest seen_at is 2020-01-02T00:00:00+00:00" in out
+
+    def test_nothing_checkable_is_never_a_match(self, tmp_path, capsys):
+        write(tmp_path / "DATA.md", "# Data\n\n```tq-config\ndialect: duckdb\n```\n")
+        write(tmp_path / "data" / "a.csv", "amount\nabc\n\n")
+        write(tmp_path / "contracts" / "a.yaml",
+              "version: 2\ndataset: amounts\nkind: files\n"
+              "location: {path: data/a.csv, format: csv}\n"
+              "grain: one row per amount\nkeys: []\ncolumns:\n"
+              "  amount: {type: number}\n")
+        code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert code == 3
+        assert "Verified" not in out and "matches its contract" not in out
+        assert ("Not verified amounts: read 1 file, 2 rows, but the contract "
+                "declares nothing `truequery verify` checks") in out
+        assert "column types aren't checked" in out
+        assert out.rstrip().endswith(
+            "1 dataset read, no failures; 1 with nothing to compare")
+        code, out, _ = tq(capsys, tmp_path, "review", "--data", "--now", NOW)
+        assert code == 3
+        assert "amounts: read 1 file, 2 rows, but the contract declares" in out
+        code, _, _ = tq(capsys, tmp_path, "verify", "--allow-unverified",
+                        "--now", NOW)
+        assert code == 0
+
+    def test_all_empty_column_is_nothing_to_compare(self, tmp_path, capsys):
+        write(tmp_path / "DATA.md", "# Data\n\n```tq-config\ndialect: duckdb\n```\n")
+        write(tmp_path / "data" / "e.csv", "id,ts,kind\n1,,\n2,,\n")
+        write(tmp_path / "contracts" / "e.yaml",
+              "version: 2\ndataset: events\nkind: files\n"
+              "location: {path: data/e.csv, format: csv}\n"
+              "grain: one row per event\nkeys: [id]\ncolumns:\n"
+              "  id: {type: string}\n"
+              "  ts: {type: timestamp, time_zone: UTC}\n"
+              "  kind: {type: string, nullable: true, values: [a, b]}\n")
+        code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert code == 0  # empty is allowed: nothing breaks the contract
+        line = next(l for l in out.splitlines() if l.startswith("Verified"))
+        assert "timestamps UTC" not in line and "values all declared" not in line
+        assert line.endswith("key id unique · nothing to compare: kind values "
+                             "(all empty), ts time zone (all empty)")
+        # only the empty column: nothing was compared, so not verified
+        contract = tmp_path / "contracts" / "e.yaml"
+        contract.write_text(contract.read_text().replace("keys: [id]", "keys: []")
+                            .replace("  kind: {type: string, nullable: true, "
+                                     "values: [a, b]}\n", ""))
+        code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert code == 3
+        assert ("Not verified events: read 1 file, 2 rows, but nothing to "
+                "compare: ts time zone (all empty)") in out
+
+    def test_sizes_and_status_with_no_file_to_compare(self, tmp_path, capsys):
+        root = R2.build(tmp_path / "sizes", "sizes", False)
+        for f in ("shard1.bin", "shard2.bin"):
+            (root / "data" / f).unlink()
+        _, out, _ = tq(capsys, root, "verify", "--now", NOW)
+        assert "(0 files)" not in out
+        assert "matches the size on disk" not in out
+        assert "nothing to compare: bytes_logged sizes (none of the files " \
+               "was found)" in out
+        root = R2.build(tmp_path / "life", "lifecycle", False)
+        log = root / "logs" / "fetch" / "2026-10-01.csv"
+        head, *rows = log.read_text().splitlines()
+        log.write_text("\n".join([head] + [r for r in rows
+                                           if "removed_on_purpose" in r]) + "\n")
+        _, out, _ = tq(capsys, root, "verify", "--now", NOW)
+        assert "files exist where the status says present" not in out
+        assert "(0 files)" not in out
+        assert "1 row absent as expected (removed_on_purpose)" in out
+        assert "files per status (no row whose status means present or a " \
+               "failure)" in out
+
+    def test_wal_sqlite_leaves_no_files_beside_it(self, tmp_path, capsys):
+        import sqlite3
+        sqlite_users(tmp_path)
+        db = tmp_path / "db" / "app.sqlite"
+        con = sqlite3.connect(db)
+        con.execute("PRAGMA journal_mode=wal")
+        con.close()
+        before = sorted(os.listdir(tmp_path / "db"))
+        assert before == ["app.sqlite"]
+        code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert code == 0, out
+        assert sorted(os.listdir(tmp_path / "db")) == before
+        assert "&immutable=1" in V.sqlite_readonly_uri(str(db))
+        # someone has it open: read through the files that are there
+        writer = sqlite3.connect(db)
+        writer.execute("INSERT INTO users VALUES (3, 'c@x')")
+        writer.commit()
+        try:
+            assert "immutable" not in V.sqlite_readonly_uri(str(db))
+            _, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+            assert "3 rows" in out
+        finally:
+            writer.close()
+
+    def test_rollback_journal_sqlite_is_not_opened_immutable(self, tmp_path):
+        sqlite_users(tmp_path)
+        assert V.sqlite_readonly_uri(str(tmp_path / "db" / "app.sqlite")
+                                     ).endswith("?mode=ro")
+
+    def test_path_cache_keeps_the_containment_rule(self, tmp_path):
+        base = tmp_path / "base"
+        (base / "day").mkdir(parents=True)
+        (base / "day" / "a.warc").write_text("x")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "s.warc").write_text("secret")
+        try:
+            os.symlink(outside, base / "out")
+            os.symlink(outside / "s.warc", base / "day" / "s.warc")
+        except (OSError, NotImplementedError):
+            pytest.skip("no symlinks here")
+        cache: dict = {}
+        real = os.path.realpath(base)
+        for _ in range(2):  # the second pass is served from the cache
+            assert V.resolve_path_within_base("day/a.warc", str(base), cache) \
+                == os.path.join(real, "day", "a.warc")
+            assert V.resolve_path_within_base("out/s.warc", str(base), cache) is None
+            assert V.resolve_path_within_base("day/s.warc", str(base), cache) is None
+            assert V.resolve_path_within_base("day/../a", str(base), cache) is None
+            assert V.resolve_path_within_base("day/nope/x", str(base), cache) \
+                == os.path.join(real, "day", "nope", "x")
+
+    def test_setup_changes_only_the_setup_line(self, tmp_path):
+        text = ("# Data\n\nintro\n\n```tq-config\n# team settings\n"
+                "dialect: duckdb   # we use duckdb\nrules:\n"
+                "  sql/select-star: off\n```\n\nafter\n")
+        write(tmp_path / "DATA.md", text)
+        assert DS.record_answer(str(tmp_path), True)
+        assert (tmp_path / "DATA.md").read_text() == text.replace(
+            "  sql/select-star: off\n", "  sql/select-star: off\nsetup:\n"
+            "  data: true\n")
+        assert DS.record_answer(str(tmp_path), False)
+        assert (tmp_path / "DATA.md").read_text() == text.replace(
+            "  sql/select-star: off\n", "  sql/select-star: off\nsetup:\n"
+            "  data: false\n")
+        # an existing data line keeps its comment and indent
+        write(tmp_path / "DATA.md", "```tq-config\nsetup:\n    other: 1\n"
+              "    data: false   # said no in May\nzeta: 1\n```\n")
+        DS.record_answer(str(tmp_path), True)
+        assert (tmp_path / "DATA.md").read_text() == (
+            "```tq-config\nsetup:\n    other: 1\n"
+            "    data: true   # said no in May\nzeta: 1\n```\n")
+        # CRLF stays CRLF
+        (tmp_path / "DATA.md").write_bytes(
+            b"```tq-config\r\ndialect: duckdb\r\n```\r\n")
+        DS.record_answer(str(tmp_path), True)
+        assert (tmp_path / "DATA.md").read_bytes() == (
+            b"```tq-config\r\ndialect: duckdb\r\nsetup:\r\n  data: true\r\n"
+            b"```\r\n")
+
+    def test_setup_leaves_a_form_it_cant_edit(self, tmp_path, capsys):
+        text = "```tq-config\nsetup: {other: 1}\n```\n"
+        write(tmp_path / "DATA.md", text)
+        code = DS.run_setup(_args(yes=False, no=True), str(tmp_path))
+        assert code == 0
+        assert (tmp_path / "DATA.md").read_text() == text
+        assert "couldn't be changed without touching other lines" in \
+            capsys.readouterr().out
+
+    def test_wording(self, tmp_path, capsys):
+        root = R2.build(tmp_path / "tz", "tz", True)
+        log = root / "logs" / "events.csv"
+        log.write_text(log.read_text().replace(
+            "3,2026-10-01T10:00:00+02:00", "3,2026-10-01T10:00:00Z"))
+        _, out, _ = tq(capsys, root, "verify", "--now", NOW)
+        assert "1 timestamp in fetched_at isn't UTC" in out
+        orders_csv(tmp_path / "o", "order_id,status\n1,paid\n2,\n3,lost\n")
+        _, out, _ = tq(capsys, tmp_path / "o", "verify", "--now", NOW)
+        assert ("orders: 1 row with a status value the contract doesn't "
+                "declare; 1 row with an empty status") in out
+        assert "set `nullable: true` on it if empty is allowed" in out
+        code, _, err = tq(capsys, tmp_path / "o", "review", "--data", "--now",
+                          "garbage")
+        assert code == 2 and err.startswith("truequery: --now must be")
+
+    def test_database_missing_or_linked_out(self, tmp_path, capsys):
+        sqlite_users(tmp_path)
+        db = tmp_path / "db" / "app.sqlite"
+        outside = tmp_path.parent / f"{tmp_path.name}-out.sqlite"
+        shutil.move(db, outside)
+        _, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert ("Not checked  users: database file db/app.sqlite isn't there "
+                "(looked in the project folder)") in out
+        try:
+            os.symlink(outside, db)
+        except (OSError, NotImplementedError):
+            pytest.skip("no symlinks here")
+        _, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)
+        assert ("Not checked  users: database file db/app.sqlite points "
+                "outside the project folder (a link?), so nothing was read") in out
+        assert "under base" not in out
+
+    def test_plain_review_never_loads_the_data_module(self):
+        code = ("import sys, os; from truequery import cli; os.chdir(sys.argv[1]);"
+                "cli.main(['review', '--json']);"
+                "print([m for m in ('truequery.dataverify','duckdb') "
+                "if m in sys.modules], file=sys.stderr)")
+        out = subprocess.run([sys.executable, "-c", code,
+                              str(REPO / "examples" / "shop")],
+                             capture_output=True, text=True,
+                             env=dict(os.environ, PYTHONPATH=str(
+                                 REPO / "plugin" / "engine" / "src")))
+        assert out.stderr.strip().splitlines()[-1] == "[]", out.stderr

@@ -91,12 +91,6 @@ def run(root: str, datasets: list[str] | None = None,
     }
 
 
-def local_data_contracts(contracts: dict) -> list[str]:
-    """Names of the valid contracts whose data `verify` can read here."""
-    return sorted(str(c.get("dataset") or c.get("table"))
-                  for c in contracts.values() if V.has_local_data(c))
-
-
 def public_doc(doc: dict) -> dict:
     """The run document without raw error text (which can quote data)."""
     return {k: v for k, v in doc.items() if k != "not_checked_detail"}
@@ -159,6 +153,13 @@ def _plural(count: int, word: str, plural: str | None = None) -> str:
 
 def _verb(count: int, one: str, many: str) -> str:
     return one if count == 1 else many
+
+
+IT_IS, THEY_ARE = "it's", "they're"
+
+
+def _dont(count: int) -> str:
+    return "doesn't" if count == 1 else "don't"
 
 
 def _join(items: list[str]) -> str:
@@ -236,9 +237,19 @@ def _keys(result: dict) -> str:
     return f"; e.g. key {', '.join(shown)}{more}"
 
 
-def _pass_phrases(report: dict, contract: dict) -> list[str]:
+def _compared(result: dict) -> int | None:
+    """How many values the check looked at; None when it judged the whole
+    column at once (a native timestamp type) or looked at every row."""
+    value = (result.get("details") or {}).get("compared")
+    return None if value is None else int(value)
+
+
+def _pass_phrases(report: dict, contract: dict) -> tuple[list[str], list[str]]:
+    """What passed, and the checks that passed only because they had
+    nothing to compare (never said as verified)."""
     cols = _columns(contract)
     phrases: list[str] = []
+    nothing: list[str] = []
     not_null = [r["target"] for r in report["assertions"]
                 if r["assertion"] == "not_null" and r["status"] == "passed"]
     if not_null:
@@ -251,6 +262,9 @@ def _pass_phrases(report: dict, contract: dict) -> list[str]:
             continue
         name, target = r["assertion"], r["target"]
         det = r.get("details") or {}
+        if _compared(r) == 0:
+            nothing.append(_nothing_words(name, target))
+            continue
         if name == "unique":
             phrases.append(f"key {_key_label(target)} unique")
         elif name == "accepted_values":
@@ -262,14 +276,39 @@ def _pass_phrases(report: dict, contract: dict) -> list[str]:
         elif name == "path_resolves":
             phrases.append(f"every {target} under {_base_words(det.get('base'))}")
         elif name == "exists_per_status":
-            phrases.append("files exist where the status says present")
+            if det.get("present_compared", 1):
+                phrases.append("files exist where the status says present")
+            else:
+                phrases.append("no file missing where the status means a failure")
         elif name == "size_matches_disk":
             phrases.append(f"{target} matches the size on disk"
                            f" ({_plural(det.get('files_compared', 0), 'file')})")
         elif name == "freshness":
             phrases.append(f"fresh (newest {target} within "
                            f"{det.get('max_age')})")
-    return phrases
+    return phrases, nothing
+
+
+def _nothing_words(name: str, target) -> str:
+    """A check that had nothing to look at, in a few words."""
+    if name == "accepted_values":
+        return f"{target} values (all empty)"
+    if name == "tz_marker":
+        return f"{target} time zone (all empty)"
+    if name == "path_resolves":
+        return f"{target} (all empty)"
+    if name == "exists_per_status":
+        return ("files per status (no row whose status means present or "
+                "a failure)")
+    if name == "size_matches_disk":
+        return f"{target} sizes (none of the files was found)"
+    return f"{name} on {_key_label(target)} (nothing to compare)"
+
+
+NOTHING_CHECKABLE = (
+    "the contract declares nothing `truequery verify` checks (it checks "
+    "keys, nullable: false, values, time zones, paths, sizes and freshness; "
+    "column types aren't checked)")
 
 
 def _absent_note(report: dict) -> str:
@@ -302,10 +341,22 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
         fix = ("remove the duplicates (dedupe on the key before writing), or "
                "correct `keys` in the contract if a row is something finer")
     elif name == "accepted_values":
-        what = (f"{_plural(count, 'row')} with a {target} value the contract "
-                "doesn't declare")
-        fix = (f"add the value under {target} `values` (with what it means), "
-               "or correct those rows")
+        empty = min(int(det.get("empty_count") or 0), count)
+        bits = []
+        if count - empty:
+            bits.append(f"{_plural(count - empty, 'row')} with a {target} "
+                        "value the contract doesn't declare")
+        if empty:
+            bits.append(f"{_plural(empty, 'row')} with an empty {target}")
+        what = "; ".join(bits)
+        fixes = []
+        if count - empty:
+            fixes.append(f"add the value under {target} `values` (with what "
+                         "it means), or correct those rows")
+        if empty:
+            fixes.append(f"fill in {target}, or set `nullable: true` on it if "
+                         "empty is allowed")
+        fix = "; ".join(fixes)
     elif name == "tz_marker":
         tz = str((cols.get(target) or {}).get("time_zone")
                  or det.get("time_zone") or "")
@@ -313,13 +364,16 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
             what = (f"{target} is stored as {det['physical_type']}, but the "
                     f"contract says {_tz_words(tz)}")
         elif tz == "UTC":
-            what = (f"{_plural(count, 'timestamp')} in {target} aren't UTC "
+            what = (f"{_plural(count, 'timestamp')} in {target} "
+                    f"{_verb(count, 'isn', 'aren')}'t UTC "
                     "(no Z or +00:00, or another offset)")
         elif tz.startswith("local:"):
-            what = (f"{_plural(count, 'timestamp')} in {target} are marked "
+            what = (f"{_plural(count, 'timestamp')} in {target} "
+                    f"{_verb(count, 'is', 'are')} marked "
                     f"UTC (Z), but the contract says {_tz_words(tz)}")
         else:
-            what = (f"{_plural(count, 'timestamp')} in {target} carry a zone, "
+            what = (f"{_plural(count, 'timestamp')} in {target} "
+                    f"{_verb(count, 'carries', 'carry')} a zone, "
                     "but the contract says naive")
         fix = ("write the zone marker where the data is written, or declare "
                f"the zone the data really uses (`time_zone` for {target})")
@@ -337,13 +391,14 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
             out = det.get("escaped_count") or 0
             if gone:
                 bits.append(f"{_plural(gone, 'path')} in {target} "
-                            f"{_verb(gone, "doesn't", "don't")} exist "
+                            f"{_dont(gone)} exist "
                             f"under {_base_words(base)}")
             if out:
                 bits.append(f"{_plural(out, 'path')} in {target} "
                             f"{_verb(out, 'points', 'point')} outside it "
                             "(absolute, ~ or ..)")
-            what = "; ".join(bits) or f"{_plural(count, 'path')} in {target} don't resolve"
+            what = "; ".join(bits) or (f"{_plural(count, 'path')} in {target} "
+                                       f"{_dont(count)} resolve")
             fix = ("check which folder the paths are relative to (`bases:` in "
                    "DATA.md, `relative_to` in the contract) and how the paths "
                    "are written")
@@ -358,7 +413,7 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
         if det.get("escaped_count"):
             bits.append(f"{_plural(det['escaped_count'], 'path')} outside "
                         f"{_base_words(det.get('base'))}")
-        what = "; ".join(bits) or f"{_plural(count, 'row')} {_verb(count, "doesn't", "don't")} match the status"
+        what = "; ".join(bits) or f"{_plural(count, 'row')} {_dont(count)} match the status"
         fix = ("fetch the missing files again, or correct the status of "
                "those rows")
     elif name == "size_matches_disk":
@@ -375,7 +430,7 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
                    "the contract; else convert the sizes where they're written")
         else:
             what = (f"{_plural(count, 'value')} of {target} "
-                    f"{_verb(count, "doesn't", "don't")} match the file "
+                    f"{_dont(count)} match the file "
                     f"on disk ({unit})")
             fix = "check the unit and how the sizes are rounded where they're written"
     elif name == "columns_present":
@@ -386,9 +441,13 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
                 f"so the checks on {_verb(n, 'it', 'them')} didn't run")
         fix = (f"add {_verb(n, 'it', 'them')} where the data is written, or "
                f"take {_verb(n, 'it', 'them')} out of the contract if "
-               f"{_verb(n, "it's", "they're")} gone for good")
+               f"{_verb(n, IT_IS, THEY_ARE)} gone for good")
     elif name == "freshness":
-        if det.get("max_timestamp"):
+        if det.get("value_hidden"):
+            what = (f"stale: the newest {target} is more than "
+                    f"{det.get('max_age')} before {det.get('checked_at')} "
+                    "(its value isn't shown: marked pii)")
+        elif det.get("max_timestamp"):
             what = (f"stale: the newest {target} is {det['max_timestamp']}, "
                     f"more than {det.get('max_age')} before "
                     f"{det.get('checked_at')}")
@@ -399,10 +458,12 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
         what, fix = result.get("message") or name, "check the contract"
     # freshness reports one newest value, a missing column has no rows
     keys = "" if name in ("freshness", "columns_present") else _keys(result)
-    what += f" ({_where(report, contract)}{keys})"
-    note = report.get("provenance_note")
-    if note:
-        what += f" {note}"
+    note = report.get("provenance_note") or ""
+    if note.startswith("(") and note.endswith(")"):
+        note = "; " + note[1:-1]  # one bracket, not two in a row
+    elif note:
+        note = f"; {note}"
+    what += f" ({_where(report, contract)}{keys}{note})"
     return {"dataset": report["dataset"], "assertion": name,
             "target": target, "failed_count": count, "what": what,
             "fix": fix}
@@ -443,21 +504,32 @@ def _entry(report: dict, contract: dict, root: str) -> dict:
     fails = [_failure(r, report, contract, root)
              for r in report["assertions"] if r["status"] == "failed"]
     note = report.get("provenance_note")
-    phrases = [] if empty else _pass_phrases(report, contract)
+    phrases, nothing = ([], []) if empty else _pass_phrases(report, contract)
+    not_verified = [] if empty else _not_verified(report, contract)
     line = None
     if phrases:
         line = (f"{report['dataset']} ({_source_words(report, contract)}): "
                 + ", ".join(phrases) + _absent_note(report))
+        if nothing:
+            line += " · nothing to compare: " + ", ".join(nothing)
         if note:
             line += f" {note}"
+    # Read, but nothing in it was compared with the contract: never a pass.
+    nothing_checked = not empty and not phrases and not fails and not not_verified
+    if nothing_checked:
+        why = (("nothing to compare: " + ", ".join(nothing)) if nothing
+               else NOTHING_CHECKABLE)
+        not_verified = [f"read {_source_words(report, contract)}, but {why}"
+                        + (f" {note}" if note else "")]
     return {
         "dataset": report["dataset"],
-        "status": "failed" if fails else ("partial" if empty or _not_verified(
-            report, contract) else "passed"),
+        "status": "failed" if fails else ("partial" if empty or not_verified
+                                          else "passed"),
         "line": line,
         "empty": empty,
+        "nothing_checked": nothing_checked,
         "failures": fails,
-        "not_verified": [] if empty else _not_verified(report, contract),
+        "not_verified": not_verified,
         "source": report["source"],
         "contract_status": report["contract_status"],
         "provenance_note": note,
@@ -472,8 +544,9 @@ def _entry(report: dict, contract: dict, root: str) -> dict:
 
 
 def skipped_lines(doc: dict) -> list[str]:
-    return [f"{item['dataset']}: a remote table (no `location.database`); "
-            "remote databases aren't read until 0.3" for item in doc["skipped"]]
+    return [f"{item['dataset']}: the contract doesn't say where the data is "
+            "(add `location.database` for a local database file; remote "
+            "databases aren't read until 0.3)" for item in doc["skipped"]]
 
 
 def not_checked_lines(doc: dict, include_invalid: bool = True,
@@ -551,14 +624,16 @@ def summary(doc: dict) -> str:
     read = doc["datasets"]
     failed = [e for e in read if e["status"] == "failed"]
     empty = [e for e in read if e["empty"] and e["status"] != "failed"]
-    partial = [e for e in read if e["status"] == "partial" and not e["empty"]]
+    nothing = [e for e in read if e.get("nothing_checked")]
+    partial = [e for e in read if e["status"] == "partial" and not e["empty"]
+               and not e.get("nothing_checked")]
     if not read:
         head = "no data read"
     elif failed:
         n = len(failures(doc))
         head = (f"{_plural(n, 'data failure')} in {_n(len(failed))} of "
                 f"{_plural(len(read), 'dataset')} read")
-    elif partial or empty:
+    elif partial or empty or nothing:
         head = f"{_plural(len(read), 'dataset')} read, no failures"
     else:
         head = (f"{_plural(len(read), 'dataset')} read, "
@@ -568,11 +643,13 @@ def summary(doc: dict) -> str:
         head += f"; {_n(len(partial))} checked only in part"
     if empty:
         head += f"; {_n(len(empty))} with no rows"
+    if nothing:
+        head += f"; {_n(len(nothing))} with nothing to compare"
     parts = [head]
     if doc["not_checked"]:
         parts.append(f"{_n(len(doc['not_checked']))} not checked")
     if doc["skipped"]:
-        parts.append(f"{_n(len(doc['skipped']))} skipped (remote)")
+        parts.append(f"{_n(len(doc['skipped']))} skipped (no location)")
     if doc["invalid_contracts"]:
         parts.append(_plural(len(doc["invalid_contracts"]), "invalid contract"))
     return " · ".join(parts)

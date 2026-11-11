@@ -69,8 +69,16 @@ or DuckDB). From what the contract declares:
 | `unit` + `size_of` | each size matches the file on disk; GiB written as GB (and the other binary/decimal twins) is named as such |
 | `freshness_sla: {column, max_age}` | the newest timestamp is within `max_age` of now (`--now` sets "now") |
 
+Column types (`type: number`, …) aren't checked yet.
+
+A check is called verified only when it compared at least one value. One
+that had nothing to compare (every `ts` empty, no file found to measure) is
+named after the line: `· nothing to compare: ts time zone (all empty)`. A
+dataset in which nothing at all was compared (or whose contract declares
+nothing from the table) is listed under `Not verified`, never as a match.
+
 A contract that's a draft (`status: draft`) still runs, and every line that
-relies on it says `(from draft contract <name>, inferred from …)`.
+relies on it says `from draft contract <name>, inferred from …`.
 
 ## The data reader
 
@@ -116,7 +124,8 @@ project needs it, and the command.
 Exit codes: 0 means every dataset with local data was read and matches its
 contract; 1 means the data breaks a contract; 2 is a usage or config error;
 3 means some data couldn't be verified (files missing or unreadable, no
-rows, only part of a large dataset checked, an invalid contract), and
+rows, nothing to compare, only part of a large dataset checked, an invalid
+contract), and
 `--allow-unverified` turns 3 into 0.
 
 When the reader isn't installed, the datasets that need it are listed as
@@ -138,8 +147,10 @@ truequery verify --require data
   opened read-only.
 - **No network.** It reads local files. Remote databases aren't read until
   0.3.
-- **Private.** It reports counts and at most five failing key values, never
-  other values. Keys of a column marked `pii: true` are never shown. When the
+- **Private.** It reports counts and at most five failing key values, and
+  for a freshness check the newest timestamp; never other values. Keys of a
+  column marked `pii: true` are never shown, and neither is the newest
+  timestamp when that column is marked `pii: true`. When the
   reader can't read a file, only the kind of error is shown (its full text
   can quote a line of your data; `--verbose` prints it on stderr).
 - **Bounded.** A dataset over 500 MB isn't read (it's listed as not
