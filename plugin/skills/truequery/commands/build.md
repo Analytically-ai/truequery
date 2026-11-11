@@ -28,7 +28,17 @@ are the build-specific parts.
      SLA/alerting (`orch/explicit-catchup-policy`,
      `orch/idempotent-retries-with-limits`, `orch/sla-deadline-alerts`).
 3. **Contract first, build, check, receipt, remember** — flow steps
-   3–7 unchanged, in the detected stack. Tests must run here (flow
+   3–7 unchanged, in the detected stack. **A pandas pipeline over files
+   with contracts** (input and output, `version: 2` with columns; draft
+   them with `truequery init --from` when there are none): scaffold the
+   boundaries first, `truequery scaffold contracts/<in>.yaml
+   contracts/<out>.yaml --out <package>`. It writes `read_<dataset>()`
+   (typed read), `check_<dataset>()` (keys, types, values, zones) and
+   pytest tests, in plain pandas. Then write only the transform between
+   them: read with the generated reader, call the output's check before
+   writing, and keep the generated files unedited (regenerate with
+   `--force` when a contract changes). If a contract is a draft, the
+   generated code says so: say it in the receipt. Tests must run here (flow
    step 4: dbt tests, or SQL assertions on the available engine), and
    destructive actions need confirmation first — never rebuild raw
    data unasked. When the input or output contract points at local data

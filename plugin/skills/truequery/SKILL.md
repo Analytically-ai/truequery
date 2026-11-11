@@ -58,9 +58,9 @@ Check the mode before calling a practice wrong (`SELECT *` is fine in Explore).
 
 | Command | Kind | Purpose |
 |---|---|---|
-| `build` | full | build a pipeline, model or load (intent: ingest/transform/orchestrate) |
+| `build` | full | build a pipeline, model or load (intent: ingest/transform/orchestrate; pandas: `truequery scaffold` first) |
 | `ask` | full | plain-English answer for non-technical users (uses `analyze`) |
-| `init` | full | detect stack/dialect, write `DATA.md`, seed `contracts/`, teach interview |
+| `init` | full | detect stack/dialect, write `DATA.md`, seed or draft `contracts/` (`--from` data files), teach interview |
 | `metric` | full | define a metric once; `metric check` finds drift |
 | `analyze` | full | answer a data question to the standard |
 | `review` | full | run all checks plus the receipt, then critique judgment-only items |

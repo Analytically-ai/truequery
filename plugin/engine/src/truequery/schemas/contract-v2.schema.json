@@ -209,7 +209,19 @@
         "format": {
           "type": "string",
           "enum": ["csv", "jsonl", "json", "parquet"]
+        },
+        "delimiter": {
+          "type": ["string", "null"],
+          "enum": [",", ";", "\t", "|", null],
+          "description": "The field separator of a CSV file (default ','). Only for format: csv."
         }
+      },
+      "if": {
+        "required": ["delimiter"],
+        "properties": {"delimiter": {"type": "string"}}
+      },
+      "then": {
+        "properties": {"format": {"const": "csv"}}
       }
     },
     "tableLocation": {
@@ -356,6 +368,11 @@
         },
         "pii": {
           "type": ["boolean", "null"]
+        },
+        "status": {
+          "type": ["string", "null"],
+          "enum": ["confirmed", "draft", null],
+          "description": "draft: this column has an inferred fact nobody has confirmed yet (only in a contract with status: draft)."
         }
       },
       "allOf": [

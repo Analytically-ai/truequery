@@ -186,6 +186,13 @@ also run it on its own.
   declared zone, paths under the declared folder, sizes in the declared
   unit. Files and DuckDB need the data reader, installed only when you say
   yes (`truequery setup data`). See [Checking your data](docs/data.md).
+- **Starts from the data you have, and builds on it.** `truequery init
+  --from logs/` drafts contracts from CSV, JSONL and Parquet files (types,
+  keys, time zones, statuses, units and path folders, each marked as a
+  draft), and the `/truequery init` interview asks only what it couldn't
+  settle. `truequery scaffold` turns contracts into a pipeline's boundaries
+  in plain pandas: a typed reader, an output check and tests. See [Building
+  pipelines from contracts](docs/pipelines.md).
 
 All 41 checks, with what each one catches: [the checker in
 detail](docs/checker.md).

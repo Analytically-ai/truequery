@@ -232,12 +232,15 @@ def _sql_string_literal(val: str) -> str:
     return "'" + val.replace("'", "''") + "'"
 
 
-def open_duckdb_for_files(file_paths: list[str]):
-    """Open an in-memory DuckDB connection locked to the exact `file_paths`."""
+def open_duckdb_for_files(file_paths: list[str], threads: int | None = None):
+    """Open an in-memory DuckDB connection locked to the exact `file_paths`.
+    `threads=1` keeps row order stable for a sample (`init --from`)."""
     duckdb = _import_duckdb()
     resolved = [os.path.realpath(p) for p in file_paths]
     paths_sql = "[" + ", ".join(_sql_string_literal(p) for p in resolved) + "]"
     con = duckdb.connect(":memory:")
+    if threads is not None:
+        con.execute(f"SET threads = {int(threads)};")
     con.execute("SET autoinstall_known_extensions = false;")
     con.execute("SET autoload_known_extensions = false;")
     con.execute(f"SET allowed_paths = {paths_sql};")
@@ -609,9 +612,17 @@ def _setup_duckdb_files_view(
     files_sql = "[" + ", ".join(_sql_string_literal(f) for f in files) + "]"
     quoted_view = exp.table_(exp.to_identifier(view_name, quoted=True)).sql(dialect="duckdb")
     if fmt == "csv":
+        loc = contract.get("location") if isinstance(
+            contract.get("location"), dict) else {}
+        delim = loc.get("delimiter")
+        # A declared delimiter is one of `contract_v2.CSV_DELIMITERS`
+        # (validated), quoted as a SQL string literal all the same.
+        delim_sql = (f", delim={_sql_string_literal(delim)}"
+                     if delim in contract_v2.CSV_DELIMITERS else "")
         con.execute(
             f"CREATE OR REPLACE TEMP VIEW {quoted_view} AS "
-            f"SELECT * FROM read_csv({files_sql}, all_varchar=true);"
+            f"SELECT * FROM read_csv({files_sql}, all_varchar=true"
+            f"{delim_sql});"
         )
     elif fmt in ("jsonl", "json"):
         desc = con.execute(

@@ -21,6 +21,8 @@ CONTRACT_V2_KINDS = ("table", "files")
 CONTRACT_V2_STATUSES = ("confirmed", "draft")
 CONTRACT_V2_FORMATS = ("csv", "jsonl", "json", "parquet")
 CONTRACT_V2_WRITE_MODES = ("append", "overwrite_partition", "merge_on_key")
+# `location.delimiter` for CSV files; the default is ",".
+CSV_DELIMITERS = (",", ";", "\t", "|")
 COLUMN_TYPES = ("string", "integer", "number", "boolean", "date",
                 "timestamp", "path")
 
@@ -63,7 +65,7 @@ CONTRACT_V2_TOP_KEYS = frozenset({
 COLUMN_V2_KEYS = frozenset({
     "type", "nullable", "meaning", "description", "unit", "currency",
     "currency_column", "size_of", "time_zone", "relative_to",
-    "status_column", "values", "pii",
+    "status_column", "values", "pii", "status",
 })
 
 METRIC_V1_TOP_KEYS = frozenset({
@@ -273,7 +275,7 @@ def _validate_location_v2(loc, kind: str, path: str) -> None:
             raise ValueError(
                 f"{path}: location is required and must be a mapping when "
                 "kind is 'files'")
-        unknown = set(loc) - {"path", "base", "format"}
+        unknown = set(loc) - {"path", "base", "format", "delimiter"}
         if unknown:
             raise ValueError(
                 f"{path}: location has unknown keys {sorted(unknown)}")
@@ -291,6 +293,15 @@ def _validate_location_v2(loc, kind: str, path: str) -> None:
         if base is not None and not is_valid_ident(base):
             raise ValueError(
                 f"{path}: location.base must be a valid base identifier or null")
+        delim = loc.get("delimiter")
+        if delim is not None:
+            if fmt != "csv":
+                raise ValueError(
+                    f"{path}: location.delimiter is only for format: csv")
+            if delim not in CSV_DELIMITERS:
+                raise ValueError(
+                    f"{path}: location.delimiter must be one of "
+                    f"{list(CSV_DELIMITERS)}")
     else:
         if loc is None:
             return
@@ -521,6 +532,17 @@ def _validate_columns_v2(columns, is_draft: bool, path: str) -> dict:
         if pii is not None and not isinstance(pii, bool):
             raise ValueError(
                 f"{path}: columns.{col_name}.pii must be a boolean")
+        col_status = spec.get("status")
+        if col_status is not None:
+            if col_status not in CONTRACT_V2_STATUSES:
+                raise ValueError(
+                    f"{path}: columns.{col_name}.status must be one of "
+                    f"{list(CONTRACT_V2_STATUSES)}")
+            if col_status == "draft" and not is_draft:
+                raise ValueError(
+                    f"{path}: columns.{col_name}.status is draft, so the "
+                    "contract is a draft too: set status: draft (with "
+                    "inferred_from) at the top, or confirm the column")
 
     # Cross-column checks within the same contract:
     for col_name, spec in columns.items():

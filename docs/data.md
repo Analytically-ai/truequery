@@ -5,7 +5,9 @@ local files and database files a contract points to, read-only, on your
 machine. It checks that the data says what the contract says: keys unique,
 statuses declared, timestamps in the declared zone, paths under the
 declared folder, sizes in the declared unit. Back to the
-[README](../README.md) or [the checker](checker.md).
+[README](../README.md) or [the checker](checker.md). No contracts yet?
+`truequery init --from` drafts them from your files: see [Building
+pipelines from contracts](pipelines.md).
 
 ## Run it
 
@@ -56,7 +58,9 @@ A contract (`contracts/<name>.yaml`, `version: 2`) with local data either
 lists files (`kind: files`, `location: {path: logs/*.csv, format: csv}`;
 CSV, JSONL, JSON or Parquet) or names a database file
 (`kind: table`, `location: {database: app.sqlite, relation: users}`; SQLite
-or DuckDB). From what the contract declares:
+or DuckDB). A CSV separated by something other than a comma says so:
+`delimiter: ";"` (or a tab, or `|`) in its `location`. From what the
+contract declares:
 
 | The contract says | `verify` checks |
 |---|---|
