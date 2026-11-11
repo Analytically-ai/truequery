@@ -6,8 +6,10 @@ Any mode; any stack.
 1. Call `truequery context [--target <path>]` first. Respect MODE and the
    contracts in scope.
 2. Run `truequery review [<paths>]`. With no paths it reviews the project.
-   Quote the receipt verbatim. A pass with unverified files is not a
-   pass — say which files, and why.
+   When a contract points at local data (the receipt's `Not checked` line
+   says how), run `truequery review --data` instead: it also reads that
+   data, read-only, against the contracts. Quote the receipt verbatim. A
+   pass with unverified files or data is not a pass — say which, and why.
 3. Fix every error finding, or add the narrowest ignore with a reason
    (`truequery ignore add <rule> <path:line> --reason "..."`). Warnings get
    the same treatment unless you write down why not.
@@ -30,7 +32,8 @@ Any mode; any stack.
      comments that claim what the code doesn't do; tests on keys.
    - **Confirm in the data** when a warehouse or file is reachable,
      read-only: one count or sum per suspected bug. Label each finding
-     "confirmed in data" or "by reading".
+     "confirmed in data" or "by reading". (`review --data` lines are the
+     checker's evidence; your own queries are yours: say which is which.)
 5. Report blockers first (wrong headline numbers, broken definitions),
    then should-fix, then minor, and end with a merge recommendation.
 6. Close with the receipt again if anything changed.

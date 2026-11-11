@@ -30,6 +30,17 @@ EXIT_HELP = ("Exit codes: 0 = everything checked, no findings at or above "
              "text, or files over the size limit, "
              "listed on stderr). --allow-unverified turns 3 into 0.")
 
+VERIFY_EXIT_HELP = (
+    "Exit codes: 0 = every dataset with local data was read and matches its "
+    "contract; 1 = the data breaks a contract; 2 = usage or config error "
+    "(a bad --now, a dataset with no contract, an unreadable DATA.md); "
+    "3 = no failures, but some data couldn't be verified (files missing or "
+    "unreadable, no rows, checked only in part, an invalid contract). "
+    "--allow-unverified turns 3 into 0. When the data reader isn't "
+    "installed, datasets that need it are listed as not checked and the "
+    "exit code ignores them, unless --require data, which makes that 3 even "
+    "with --allow-unverified.")
+
 FAIL_LEVELS = ("error", "warning", "advisory")
 
 
@@ -227,8 +238,19 @@ def _review_tables(results, dialect) -> list[str]:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
+    from truequery.verify import local_data_contracts  # not loaded by hooks
     root = os.path.abspath(".")
     paths = args.paths or [root]
+    require_data = getattr(args, "require", None) == "data"
+    read_data = bool(getattr(args, "data", False)) or require_data
+    DV = None
+    if read_data:  # the data module loads only when the data is read
+        from truequery import dataverify as DV
+    try:
+        now = DV.parse_now(args.now) if DV else None
+    except ValueError as exc:
+        print(f"truequery: {exc}", file=sys.stderr)
+        return EXIT_ERROR
     try:
         eff, settings_map = _effective_for(args, root)
         results = run(paths, root, dialect=args.dialect, mode=args.mode,
@@ -238,6 +260,7 @@ def cmd_review(args: argparse.Namespace) -> int:
         return EXIT_ERROR
     modes = [r.mode for r in results]
     contracts, invalid_contracts = P.load_contracts_reporting(root)
+    data_doc = DV.run(root, now=now) if DV else None
     _, invalid_metrics = P.load_metrics_reporting(
         root, contracts=contracts)
     tables = _review_tables(results, args.dialect)
@@ -248,7 +271,9 @@ def cmd_review(args: argparse.Namespace) -> int:
                                invalid_contracts=invalid_contracts,
                                invalid_metrics=invalid_metrics,
                                contracts_changed=hook.session_contracts_changed(
-                                   root))
+                                   root),
+                               data=data_doc,
+                               local_data=local_data_contracts(contracts))
     if args.sarif:
         print(RP.render_sarif(results, ENGINE_VERSION))
     elif args.json:
@@ -260,11 +285,66 @@ def cmd_review(args: argparse.Namespace) -> int:
             print(text)
             print()
         else:
-            print(_summary_line(results, RP.all_findings(results)))
+            line = _summary_line(results, RP.all_findings(results))
+            if data_doc is not None and line.startswith("clean: "):
+                # "clean" is about the code; the data's verdict is in the
+                # receipt, and may be partial. Never let one read as both.
+                line = ("no findings in the code: "
+                        + line[len("clean: "):].replace(", no findings", "")
+                        + " (the data is in the receipt)")
+            print(line)
             print()
         print(RP.render_receipt(receipt))
     _stderr_diagnostics(results, verbose=args.verbose)
-    return _exit_for(results, args)
+    code = _exit_for(results, args)
+    if data_doc is not None and code != EXIT_FINDINGS:
+        # Code findings rank first; then the data: a failure is a finding,
+        # data that couldn't be read is unverified.
+        data_code = DV.exit_code(data_doc, args.allow_unverified,
+                                 require_data, include_invalid=False)
+        if data_code == EXIT_FINDINGS or (data_code == EXIT_UNVERIFIED
+                                          and code == EXIT_CLEAN):
+            code = data_code
+    return code
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    from truequery import dataverify as DV  # not loaded by hooks
+    root = os.path.abspath(".")
+    require_data = args.require == "data"
+    try:
+        now = DV.parse_now(args.now)
+        doc = DV.run(root, datasets=args.datasets or None, now=now)
+    except (P.ContextError, ValueError) as exc:
+        print(f"truequery: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if doc["unknown"]:
+        contracts, _ = P.load_contracts_reporting(root)
+        known = sorted(str(c.get("dataset") or c.get("table"))
+                       for c in contracts.values())
+        print(f"truequery: no valid contract for {', '.join(doc['unknown'])}"
+              f" (contracts here: {', '.join(known) or 'none'})",
+              file=sys.stderr)
+        return EXIT_ERROR
+    if args.json:
+        out = DV.public_doc(doc)
+        out["exit_code"] = DV.exit_code(doc, args.allow_unverified,
+                                        require_data)
+        print(json.dumps(out, indent=2, sort_keys=True))
+    else:
+        print(DV.render_text(doc))
+        if args.verbose:
+            for name, detail in sorted(doc["not_checked_detail"].items()):
+                print(f"{name}: {detail}", file=sys.stderr)
+    return DV.exit_code(doc, args.allow_unverified, require_data)
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    from truequery import datasetup
+    if args.yes and args.no:
+        print("truequery: choose --yes or --no, not both", file=sys.stderr)
+        return EXIT_ERROR
+    return datasetup.run_setup(args, os.path.abspath("."))
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -726,7 +806,16 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    return hook.status(args)
+    code = hook.status(args)
+    from truequery import datasetup
+    try:
+        lines = datasetup.status_lines(os.path.abspath("."))
+    except (P.ContextError, ValueError) as exc:
+        lines = [f"unknown ({exc})"]
+    print(f"truequery status: data reader: {lines[0]}")
+    for line in lines[1:]:
+        print(f"  {line}")
+    return code
 
 
 def cmd_ignore_add(args: argparse.Namespace) -> int:
@@ -828,7 +917,56 @@ def build_parser() -> argparse.ArgumentParser:
                           help="files/dirs; default: the project")
     _add_output(p_review)
     _add_rule_flags(p_review)
+    p_review.add_argument("--data", action="store_true",
+                          help="also read the local data your contracts "
+                               "point to (read-only) and add it to the "
+                               "receipt; the same checks as `truequery "
+                               "verify`. Data that breaks a contract exits "
+                               "1; data that couldn't be verified exits 3")
+    p_review.add_argument("--require", choices=["data"], default=None,
+                          help="--require data: implies --data, and fails "
+                               "(exit 3) when the data reader isn't "
+                               "installed")
+    p_review.add_argument("--now", default=None, metavar="ISO_TIME",
+                          help="the time freshness is judged at (default: "
+                               "now)")
     p_review.set_defaults(func=cmd_review)
+
+    p_verify = sub.add_parser(
+        "verify", help="check local data against its contracts (read-only)",
+        epilog=VERIFY_EXIT_HELP)
+    p_verify.add_argument("datasets", nargs="*",
+                          help="dataset names; default: every contract with "
+                               "local data")
+    p_verify.add_argument("--json", action="store_true",
+                          help="machine-readable report")
+    p_verify.add_argument("--require", choices=["data"], default=None,
+                          help="--require data: fail (exit 3) when the data "
+                               "reader isn't installed, for CI")
+    p_verify.add_argument("--now", default=None, metavar="ISO_TIME",
+                          help="the time freshness is judged at, for "
+                               "reproducible runs (default: now)")
+    p_verify.add_argument("--allow-unverified", action="store_true",
+                          help="exit 0 even when some data couldn't be "
+                               "verified")
+    p_verify.add_argument("--verbose", action="store_true",
+                          help="print the reader's full error text on stderr "
+                               "(it can quote a line of your data)")
+    p_verify.set_defaults(func=cmd_verify)
+
+    p_setup = sub.add_parser(
+        "setup", help="install an optional part (only with --yes)")
+    p_setup_sub = p_setup.add_subparsers(dest="setup_command", required=True)
+    p_sdata = p_setup_sub.add_parser(
+        "data", help="the data reader (DuckDB) that `truequery verify` uses "
+                     "for data files and .duckdb databases")
+    p_sdata.add_argument("--yes", action="store_true",
+                         help="install it (without --yes: print the command "
+                              "and change nothing)")
+    p_sdata.add_argument("--no", action="store_true",
+                         help="record in DATA.md that this project doesn't "
+                              "want it; install nothing")
+    p_sdata.set_defaults(func=cmd_setup)
 
     p_init = sub.add_parser(
         "init", help="detect stack/dialect; write DATA.md; seed contracts/")
@@ -905,7 +1043,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_uninstall.set_defaults(func=cmd_uninstall)
 
     p_status = sub.add_parser(
-        "status", help="report hook state per harness (never writes)")
+        "status", help="report hook state per harness and the data reader "
+                       "(never writes)")
     p_status.add_argument("--harness", default="auto",
                           choices=["auto", "claude", "codex", "muse"])
     p_status.add_argument("--scope", default="project",

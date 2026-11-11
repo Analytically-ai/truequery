@@ -31,7 +31,10 @@ are the build-specific parts.
    3–7 unchanged, in the detected stack. Tests must run here (flow
    step 4: dbt tests, or SQL assertions on the available engine), and
    destructive actions need confirmation first — never rebuild raw
-   data unasked.
+   data unasked. When the input or output contract points at local data
+   (`kind: files`, or `location.database`), run `truequery review --data`
+   at the receipt step (flow step 6), so the receipt says whether the
+   data matches the contract, not only the code.
 4. Apply the conflict rule: if the request contradicts a contract or
    definition ("just append the feed, keys don't matter" against a
    contracted key), say so before writing and follow the contract

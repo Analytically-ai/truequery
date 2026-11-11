@@ -30,7 +30,17 @@ only (steps 1–5) — for scripts and CI.
    or binary vs decimal file sizes `GiB` vs `GB`), (d) the business date
    and time zone of naive timestamps (`UTC`, `naive`, or `local:<zone>`),
    (e) who owns corrections and any base directories (`bases:` in
-   `DATA.md` `tq-config`).
+   `DATA.md` `tq-config`), and (f) only when `truequery status` says the
+   data reader is "needed here" or "useful here" and `DATA.md` has no
+   `setup: data` answer yet: "Install the data reader (DuckDB, a 15–25 MB
+   download from PyPI) so TrueQuery can check these files against the contracts?
+   Without it, code and contracts are still checked." Default: no.
+   On a yes, run `truequery setup data --yes`; on a no,
+   `truequery setup data --no`. Both record the answer in `DATA.md`, so
+   it's never asked again. Never install without the yes. (f) counts
+   toward the five: when (a)–(e) are all still open, don't ask it; end
+   init with one line offering the data reader instead. In a
+   non-interactive session, run neither command: nobody answered.
    Write the answers into `DATA.md` as house definitions, into
    `contracts/*.yaml` (`version: 2`), and into `metrics/*.yaml` where
    they define a governed metric, then run `truequery contract validate`.

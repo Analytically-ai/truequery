@@ -250,9 +250,31 @@ def load_config(root: str) -> dict | None:
         data["dialect"] = normalize_dialect(data.get("dialect"))
         if "bases" in data:
             data["bases"] = contract_v2.validate_bases(data.get("bases"))
+        if "setup" in data:
+            data["setup"] = validate_setup(data.get("setup"))
     except ValueError as exc:
         raise ConfigError(f"DATA.md tq-config: {exc}") from None
     return data
+
+
+SETUP_CAPABILITIES = ("data",)
+
+
+def validate_setup(block) -> dict:
+    """`setup:` in tq-config: the project's answer to each optional
+    capability (`data: true` = wanted, `false` = the team said no)."""
+    if block is None:
+        return {}
+    if not isinstance(block, dict):
+        raise ValueError("setup must be a mapping, such as `setup: {data: true}`")
+    unknown = sorted(str(k) for k in block if k not in SETUP_CAPABILITIES)
+    if unknown:
+        raise ValueError(f"setup has unknown keys {unknown} (known: "
+                         f"{', '.join(SETUP_CAPABILITIES)})")
+    for key, value in block.items():
+        if not isinstance(value, bool):
+            raise ValueError(f"setup.{key} must be true or false")
+    return dict(block)
 
 
 def resolve_mode(relpath: str, config: dict | None,

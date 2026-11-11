@@ -93,14 +93,139 @@ class DuckDBMissingError(RuntimeError):
     """Raised when DuckDB is required to verify a dataset but is not installed."""
 
 
+# The lowest DuckDB with every lockdown setting the runner relies on
+# (`allowed_paths` arrived in 1.2.0). The `data` extra in pyproject.toml,
+# `truequery setup data` and the plugin launcher all use this spec.
+DUCKDB_MIN_VERSION = (1, 2, 0)
+DUCKDB_SPEC = "duckdb>=1.2.0"
+
+EVIDENCE_FILE = "evidence.jsonl"
+# One verify run writes one line per assertion (about 0.5 KB each). When
+# the file passes this size it is moved to `evidence.jsonl.1` (replacing
+# the previous one), so the log never takes more than about twice this.
+MAX_EVIDENCE_BYTES = 5 * 1024 * 1024
+
+
+def _version_tuple(text: str) -> tuple[int, ...]:
+    parts = []
+    for bit in re.split(r"[.+-]", text):
+        if not bit.isdigit():
+            break
+        parts.append(int(bit))
+    return tuple(parts)
+
+
+def duckdb_status() -> dict[str, Any]:
+    """Whether the data reader is usable, without importing it:
+    `{"installed": bool, "version": str | None, "too_old": bool}`."""
+    import importlib.util
+    try:
+        found = importlib.util.find_spec("duckdb") is not None
+    except (ImportError, ValueError):
+        found = False
+    if not found:
+        return {"installed": False, "version": None, "too_old": False}
+    version = None
+    try:
+        from importlib.metadata import PackageNotFoundError, version as _v
+        try:
+            version = _v("duckdb")
+        except PackageNotFoundError:
+            version = None
+    except ImportError:  # pragma: no cover - stdlib on 3.11+
+        version = None
+    too_old = bool(version) and _version_tuple(version) < DUCKDB_MIN_VERSION
+    return {"installed": not too_old, "version": version, "too_old": too_old}
+
+
+def needs_duckdb(contract: dict) -> bool:
+    """True when verifying `contract` reads data through DuckDB (data
+    files, or a `.duckdb` database). SQLite files need only the stdlib."""
+    if (contract.get("kind") or "table") == "files":
+        return True
+    loc = contract.get("location") if isinstance(contract.get("location"), dict) else {}
+    return str(loc.get("database") or "").lower().endswith(".duckdb")
+
+
+def has_local_data(contract: dict) -> bool:
+    """True when the contract points at data TrueQuery can read here: files,
+    or a table with `location.database`."""
+    if (contract.get("kind") or "table") == "files":
+        return True
+    loc = contract.get("location") if isinstance(contract.get("location"), dict) else {}
+    return bool(loc.get("database"))
+
+
+def local_data_contracts(contracts: dict) -> list[str]:
+    """Names of the valid contracts whose data `verify` can read here."""
+    return sorted(str(c.get("dataset") or c.get("table"))
+                  for c in contracts.values() if has_local_data(c))
+
+
 def _import_duckdb():
     try:
         import duckdb
-        return duckdb
     except ImportError as exc:
         raise DuckDBMissingError(
             "the data reader isn't installed. Run: truequery setup data"
         ) from exc
+    version = getattr(duckdb, "__version__", "") or ""
+    if version and _version_tuple(version) < DUCKDB_MIN_VERSION:
+        raise DuckDBMissingError(
+            f"the data reader is too old (DuckDB {version}; TrueQuery needs "
+            f"{DUCKDB_SPEC}). Run: truequery setup data"
+        )
+    return duckdb
+
+
+def append_evidence(project_root: str, records: list[dict[str, Any]],
+                    run_at: str | None = None) -> str | None:
+    """Append `records` to `<root>/.truequery/evidence.jsonl` and return
+    its path. Rotates to `evidence.jsonl.1` past `MAX_EVIDENCE_BYTES`, and
+    keeps the log out of git with `.truequery/.gitignore`."""
+    if not records:
+        return None
+    ev_dir = os.path.join(project_root, ".truequery")
+    os.makedirs(ev_dir, exist_ok=True)
+    _ignore_evidence(ev_dir)
+    ev_path = os.path.join(ev_dir, EVIDENCE_FILE)
+    try:
+        if os.path.getsize(ev_path) > MAX_EVIDENCE_BYTES:
+            os.replace(ev_path, ev_path + ".1")
+    except OSError:
+        pass
+    if run_at is None:
+        run_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    with open(ev_path, "a", encoding="utf-8") as handle:
+        for rec in records:
+            handle.write(json.dumps({**rec, "run_at": run_at},
+                                    sort_keys=True) + "\n")
+    return ev_path
+
+
+_EVIDENCE_IGNORES = ("evidence.jsonl", "evidence.jsonl.1")
+
+
+def _ignore_evidence(ev_dir: str) -> None:
+    path = os.path.join(ev_dir, ".gitignore")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        text = None
+    if text is None:
+        text = ("# TrueQuery session state (ignores.json is meant to be "
+                "committed)\nsession.json\nhook.log\n")
+    missing = [n for n in _EVIDENCE_IGNORES if n not in text.split("\n")]
+    if not missing:
+        return
+    if text and not text.endswith("\n"):
+        text += "\n"
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text + "".join(n + "\n" for n in missing))
+    except OSError:
+        pass
 
 
 def _sql_string_literal(val: str) -> str:
@@ -136,10 +261,35 @@ def open_duckdb_database(db_path: str):
     return con
 
 
+def _sqlite_wal_closed(real_db: str) -> bool:
+    """True for a database in WAL mode that nobody has open: the header says
+    WAL (bytes 18-19 are 2) and there is no `-wal` file beside it."""
+    try:
+        with open(real_db, "rb") as fh:
+            header = fh.read(20)
+    except OSError:
+        return False
+    return (len(header) == 20 and header[:16] == b"SQLite format 3\x00"
+            and header[18] == 2 and header[19] == 2
+            and not os.path.lexists(real_db + "-wal"))
+
+
 def sqlite_readonly_uri(db_path: str) -> str:
-    """Build a read-only SQLite URI safe on paths containing `#`, spaces, etc."""
+    """Build a read-only SQLite URI safe on paths containing `#`, spaces, etc.
+
+    A WAL-mode database opened with only `mode=ro` gets a `-shm` and a `-wal`
+    file created beside it, which stay. When no `-wal` file exists nobody has
+    the database open, so it's opened `immutable=1`: no locks, no side files.
+    (If a writer opens it during the check, the result can be stale; the file
+    is still never written.) With a `-wal` file there, someone has it open
+    (or it wasn't closed cleanly): `mode=ro` reads it through the files that
+    are already there.
+    """
     real_db = Path(os.path.realpath(db_path)).resolve()
-    return real_db.as_uri() + "?mode=ro"
+    query = "?mode=ro"
+    if _sqlite_wal_closed(str(real_db)):
+        query += "&immutable=1"
+    return real_db.as_uri() + query
 
 
 def open_sqlite_readonly(db_path: str) -> sqlite3.Connection:
@@ -183,12 +333,19 @@ def resolve_base_dir(
     return os.path.realpath(os.path.join(root_real, raw_dir))
 
 
-def resolve_path_within_base(row_path: str, real_base: str) -> str | None:
+PATH_CACHE_LIMIT = 100_000  # folders remembered per check
+
+
+def resolve_path_within_base(row_path: str, real_base: str,
+                             cache: dict | None = None) -> str | None:
     """Resolve `row_path` under `real_base` and verify it never escapes `real_base`.
 
     Returns the resolved `real_target` string if safe, or `None` if `row_path`
     is empty, contains NUL, is absolute, starts with `~` or a Windows drive, or
     escapes `real_base` via `..` or a symlink at any path prefix.
+
+    `cache` (one dict per check) remembers the folders already resolved, so a
+    log of a million paths in a few hundred folders resolves each folder once.
     """
     if not isinstance(row_path, str):
         return None
@@ -203,18 +360,45 @@ def resolve_path_within_base(row_path: str, real_base: str) -> str | None:
     if not parts or ".." in parts or "~" in parts:
         return None
 
-    base_real = os.path.realpath(real_base)
-    cur = base_real
-    for part in parts:
-        candidate = os.path.join(cur, part)
-        resolved = os.path.realpath(candidate)
-        try:
-            if os.path.commonpath([base_real, resolved]) != base_real:
+    if cache is None:
+        cache = {}
+    base_real = cache.get(("base", real_base))
+    if base_real is None:
+        base_real = cache[("base", real_base)] = os.path.realpath(real_base)
+    cur: str | None = base_real
+    for depth, part in enumerate(parts):
+        last = depth == len(parts) - 1
+        key = (base_real, tuple(parts[:depth + 1]))
+        if not last and key in cache:
+            cur = cache[key]
+            if cur is None:
                 return None
-        except ValueError:
+            continue
+        cur = _resolve_one(base_real, cur, part)
+        if not last:
+            if len(cache) > PATH_CACHE_LIMIT:  # bounded memory
+                cache.clear()
+                cache[("base", real_base)] = base_real
+            cache[key] = cur
+        if cur is None:
             return None
-        cur = resolved
     return cur
+
+
+def _resolve_one(base_real: str, parent_real: str, part: str) -> str | None:
+    """`parent_real/part` resolved, or None when it leaves `base_real`.
+    `parent_real` is already resolved, so on POSIX only a link needs
+    resolving; Windows (junctions) always goes through realpath."""
+    candidate = os.path.join(parent_real, part)
+    if os.name == "posix" and not os.path.islink(candidate):
+        return candidate
+    resolved = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([base_real, resolved]) != base_real:
+            return None
+    except ValueError:
+        return None
+    return resolved
 
 
 def expand_contract_files(
@@ -246,8 +430,10 @@ def expand_contract_files(
         except ValueError:
             inside = False
         if not inside:
+            where = loc.get("base") or "the project folder"
             raise VerificationError(
-                f"matched file {path!r} escapes base directory {real_base!r}")
+                f"{P._rel(os.path.abspath(path), os.path.realpath(project_root))} "
+                f"points outside {where} (a link?), so nothing was read")
         if os.path.isfile(real_p):
             safe_files.append(real_p)
     return real_base, sorted(set(safe_files))
@@ -682,6 +868,10 @@ def _run_sql_assertion(
         max_dt = max(parsed_dts)
         age = now_dt - max_dt
         passed = age <= max_delta
+        # A column marked pii: say whether it's fresh, never its value (or
+        # the age, which gives the value back with --now).
+        hidden = bool(params.get("value_hidden"))
+        shown = "" if hidden else f" ({max_dt.isoformat()})"
         return {
             "assertion": "freshness",
             "target": col_name,
@@ -691,14 +881,15 @@ def _run_sql_assertion(
             "sample_keys": [],
             "pii_redacted": True,
             "message": (
-                f"newest {col_name} ({max_dt.isoformat()}) is within "
+                f"newest {col_name}{shown} is within "
                 f"{max_age_str} of {now_dt.isoformat()}{s_suffix}"
                 if passed
-                else f"stale data: newest {col_name} is {max_dt.isoformat()}, "
+                else f"stale data: newest {col_name}{shown} is "
                      f"older than {max_age_str} at {now_dt.isoformat()}{s_suffix}"
             ),
             "details": {
-                "max_timestamp": max_dt.isoformat(),
+                "max_timestamp": None if hidden else max_dt.isoformat(),
+                "value_hidden": hidden,
                 "checked_at": now_dt.isoformat(),
                 "max_age": max_age_str,
             },
@@ -709,7 +900,12 @@ def _run_sql_assertion(
     # Private by default (DESIGN §5): report counts and at most 5 failing key values,
     # never non-key column values, and never keys when `pii_redacted` is True.
     cnt_rows = _execute_single_select(con, comp.count_sql, comp.dialect)
-    failed_count = int(cnt_rows[0][0]) if cnt_rows and cnt_rows[0][0] is not None else 0
+    counts = list(cnt_rows[0]) if cnt_rows else []
+    counts += [None] * (3 - len(counts))
+    failed_count = int(counts[0] or 0)
+    # values the check looked at (not_null and unique look at every row)
+    compared = int(counts[1] or 0) if counts[1] is not None else total_rows
+    empty_count = int(counts[2] or 0)
     sample_rows = (
         _execute_single_select(con, comp.sql, comp.dialect)
         if failed_count > 0 and not pii_redacted
@@ -787,7 +983,9 @@ def _run_sql_assertion(
         "sample_keys": sample_keys,
         "pii_redacted": pii_redacted,
         "message": msg,
-        "details": {},
+        "details": ({"compared": compared, "empty_count": empty_count}
+                    if comp.assertion == "accepted_values"
+                    else {"compared": compared}),
         "provenance_note": prov_note,
     }
 
@@ -806,6 +1004,7 @@ def _run_filesystem_assertion(
     rel_to = params.get("relative_to")
     base_label = str(rel_to) if rel_to else "project_root"
     real_base = resolve_base_dir(rel_to, bases, project_root)
+    path_cache: dict = {}  # folders resolved once per check
     rows = _execute_single_select(con, comp.sql, comp.dialect)
     s_phrase = _sample_phrase(params, total_rows)
     s_suffix = f" {s_phrase}" if s_phrase else ""
@@ -836,10 +1035,12 @@ def _run_filesystem_assertion(
         present_existing = 0
         present_unflagged_keys: list[Any] = []
         sample_keys: list[Any] = []
+        paths_compared = 0
         for row in rows:
             raw_path = row[pk_len]
             if raw_path is None or not str(raw_path).strip():
                 continue
+            paths_compared += 1
             status_val = (
                 str(row[pk_len + 1])
                 if status_col and len(row) > pk_len + 1 and row[pk_len + 1] is not None
@@ -847,7 +1048,7 @@ def _run_filesystem_assertion(
             )
             means = status_means.get(status_val) if status_val is not None else None
             # Step 1: containment check — NEVER stat/exists a path that escapes real_base
-            real_target = resolve_path_within_base(str(raw_path), real_base)
+            real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
             if real_target is None:
                 failed_count += 1
                 escaped_count += 1
@@ -902,6 +1103,7 @@ def _run_filesystem_assertion(
                 "base": base_label,
                 "escaped_count": escaped_count,
                 "unresolved_base_count": wrong_base_count,
+                "compared": paths_compared,
             },
             "provenance_note": prov_note,
         }
@@ -917,6 +1119,8 @@ def _run_filesystem_assertion(
         absent_expected_statuses: set[str] = set()
         todo_statuses: set[str] = set()
         todo_rows = 0
+        present_compared = 0
+        failure_compared = 0
         sample_keys = []
 
         for row in rows:
@@ -938,7 +1142,7 @@ def _run_filesystem_assertion(
             else:
                 # Never touch the filesystem if the row path escapes `real_base`;
                 # count the escaping path as a failure of `exists_per_status`.
-                real_target = resolve_path_within_base(str(raw_path), real_base)
+                real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
                 if real_target is None:
                     failed_count += 1
                     escaped_count += 1
@@ -947,6 +1151,7 @@ def _run_filesystem_assertion(
                     continue
                 exists = os.path.exists(real_target)
             if means == "present":
+                present_compared += 1
                 if not exists:
                     failed_count += 1
                     present_missing += 1
@@ -957,6 +1162,7 @@ def _run_filesystem_assertion(
                     absent_expected_count += 1
                     absent_expected_statuses.add(sval)
             elif means == "absent_unexpected":
+                failure_compared += 1
                 if not exists:
                     failed_count += 1
                     unexpected_absent += 1
@@ -1004,6 +1210,8 @@ def _run_filesystem_assertion(
                 "absent_expected_statuses": sorted(absent_expected_statuses),
                 "unconfirmed_todo_statuses": sorted(todo_statuses),
                 "unconfirmed_todo_rows": todo_rows,
+                "present_compared": present_compared,
+                "compared": present_compared + failure_compared,
             },
             "provenance_note": prov_note,
         }
@@ -1030,7 +1238,7 @@ def _run_filesystem_assertion(
                 if means in ("absent_expected", "TODO"):
                     continue
             # Never call os.stat() on a path that escapes `real_base`
-            real_target = resolve_path_within_base(str(raw_path), real_base)
+            real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
             if real_target is None or not os.path.isfile(real_target):
                 continue
             files_compared += 1
@@ -1073,12 +1281,40 @@ def _run_filesystem_assertion(
             "details": {
                 "unit": unit,
                 "files_compared": files_compared,
+                "compared": files_compared,
                 "twin_unit_matches": twin_counts,
             },
             "provenance_note": prov_note,
         }
 
     raise ValueError(f"unsupported filesystem assertion {comp.assertion!r}")
+
+
+def _missing_columns(contract: dict, discovered: tuple[str, ...]) -> list[str]:
+    """Key and declared columns the data doesn't have, in contract order."""
+    have = {str(c).lower() for c in discovered}
+    wanted: list[str] = []
+    for entry in contract.get("keys") or []:
+        wanted.extend(str(k) for k in (entry if isinstance(entry, list) else [entry]))
+    cols = contract.get("columns")
+    if isinstance(cols, dict):
+        wanted.extend(str(c) for c in cols)
+    out: list[str] = []
+    for name in wanted:
+        clean = A._clean_ident_part(name)
+        if clean.lower() not in have and clean not in out:
+            out.append(clean)
+    return out
+
+
+def _referenced_columns(comp: A.CompiledAssertion) -> set[str]:
+    names: set[str] = set()
+    for text in (comp.sql, comp.count_sql):
+        if not text:
+            continue
+        stmt = A.assert_single_select(text, dialect=comp.dialect)
+        names |= {c.name.lower() for c in stmt.find_all(exp.Column)}
+    return names
 
 
 def verify_contract(
@@ -1144,9 +1380,16 @@ def verify_contract(
                 )
             real_base = resolve_base_dir(loc.get("base"), bases, project_root)
             real_db = resolve_path_within_base(str(db_rel), real_base)
+            where = loc.get("base") or "the project folder"
+            if real_db is None and os.path.lexists(
+                    os.path.join(real_base, str(db_rel))):
+                raise VerificationError(
+                    f"database file {db_rel} points outside {where} "
+                    "(a link?), so nothing was read"
+                )
             if real_db is None or not os.path.isfile(real_db):
                 raise VerificationError(
-                    f"database file {db_rel!r} does not exist under base"
+                    f"database file {db_rel} isn't there (looked in {where})"
                 )
             total_bytes = os.stat(real_db).st_size
             if total_bytes > max_bytes:
@@ -1167,6 +1410,9 @@ def verify_contract(
             discovered_cols, physical_types = _describe_relation_columns_and_types(
                 con, dialect, relation
             )
+            if not discovered_cols:
+                raise VerificationError(
+                    f"table {relation!r} isn't in {db_rel}")
 
         cnt_select = exp.select(
             exp.func("COUNT", exp.Star()).as_(
@@ -1188,6 +1434,32 @@ def verify_contract(
         findings: list[dict[str, Any]] = []
         evidence_records: list[dict[str, Any]] = []
 
+        # A column the contract declares but the data doesn't have is a
+        # finding in itself; the assertions that need it can't run, and
+        # the rest still do. (JSON readers fill declared columns with
+        # NULL, so this applies to CSV, Parquet and database tables.)
+        missing = (_missing_columns(contract, discovered_cols)
+                   if source_format not in ("json", "jsonl") else [])
+        if missing:
+            gone = {m.lower() for m in missing}
+            compiled_list = [c for c in compiled_list
+                             if not (_referenced_columns(c) & gone)]
+            assertion_results.append({
+                "assertion": "columns_present",
+                "target": missing,
+                "status": "failed",
+                "rows_checked": checked_rows,
+                "failed_count": len(missing),
+                "sample_keys": [],
+                "pii_redacted": False,
+                "message": (
+                    f"column(s) {', '.join(missing)} declared in the contract "
+                    "are not in the data"),
+                "details": {"missing": missing,
+                            "found": list(discovered_cols)},
+                "provenance_note": prov["provenance_note"],
+            })
+
         for comp in compiled_list:
             if comp.kind == "sql":
                 res = _run_sql_assertion(
@@ -1198,6 +1470,8 @@ def verify_contract(
                     con, comp, checked_rows, bases, project_root
                 )
             assertion_results.append(res)
+
+        for res in assertion_results:
             if res["status"] == "failed":
                 f_msg = res["message"]
                 if prov["provenance_note"]:
@@ -1234,12 +1508,7 @@ def verify_contract(
             con.close()
 
     if write_evidence and evidence_records:
-        ev_dir = os.path.join(project_root, ".truequery")
-        os.makedirs(ev_dir, exist_ok=True)
-        ev_path = os.path.join(ev_dir, "evidence.jsonl")
-        with open(ev_path, "a", encoding="utf-8") as handle:
-            for rec in evidence_records:
-                handle.write(json.dumps(rec, sort_keys=True) + "\n")
+        append_evidence(project_root, evidence_records)
 
     summary_bits = [
         r["message"]
@@ -1275,45 +1544,123 @@ def verify_contract(
     }
 
 
+def _runner_errors() -> tuple[type[BaseException], ...]:
+    """Errors that mean "this dataset could not be read", not a bug: a
+    missing or vanished file, an unreadable database, a file DuckDB can't
+    parse, a relation that isn't there."""
+    errs: list[type[BaseException]] = [
+        VerificationError, DuckDBMissingError, OSError, sqlite3.Error,
+        UnicodeDecodeError,
+    ]
+    import sys
+    duckdb = sys.modules.get("duckdb")
+    if duckdb is not None and isinstance(getattr(duckdb, "Error", None), type):
+        errs.append(duckdb.Error)
+    return tuple(errs)
+
+
+def error_text(exc: BaseException) -> str:
+    """A short, private description of why a dataset couldn't be read.
+
+    DuckDB's messages can quote a line of the file, so for its errors only
+    the category before the first colon is kept (`Invalid Input Error`).
+    Our own errors and OS errors name paths, never values."""
+    if isinstance(exc, (VerificationError, DuckDBMissingError)):
+        return str(exc)
+    if isinstance(exc, FileNotFoundError):
+        name = os.path.basename(exc.filename) if exc.filename else "a file"
+        return f"{name} disappeared while it was being read"
+    if isinstance(exc, OSError):
+        return f"couldn't read a file ({exc.strerror or type(exc).__name__})"
+    if isinstance(exc, sqlite3.Error):
+        first = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        return f"SQLite couldn't read it ({first})"
+    if isinstance(exc, UnicodeDecodeError):
+        return "a file isn't valid UTF-8 text"
+    first = str(exc).splitlines()[0] if str(exc) else ""
+    category = first.split(":", 1)[0].strip() if ":" in first else type(exc).__name__
+    return f"the data reader couldn't read it ({category})"
+
+
 def verify_project(
     project_root: str,
     datasets: list[str] | None = None,
     now: datetime | str | None = None,
     write_evidence: bool = False,
+    max_rows: int = DEFAULT_MAX_ROWS,
+    max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> dict[str, Any]:
-    """Verify all local datasets with valid contracts in `project_root`."""
+    """Verify all local datasets with valid contracts in `project_root`.
+
+    One dataset that can't be read never stops the others: it is listed in
+    `not_checked` with the reason (`reader_missing` when DuckDB isn't
+    installed, else `error`). Tables with no local `location.database`
+    (warehouse tables) are listed in `skipped`. `unknown` lists requested
+    dataset names that have no valid contract."""
     config = P.load_config(project_root) or {}
     bases = config.get("bases") or {}
     contracts, invalid_contracts = P.load_contracts_reporting(project_root)
     wanted = {d.lower() for d in datasets} if datasets else None
+    reader = duckdb_status()
 
     reports: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+    not_checked: list[dict[str, Any]] = []
+    matched: set[str] = set()
     for t_key, contract in sorted(contracts.items()):
         ds_name = str(contract.get("dataset") or contract.get("table"))
-        if wanted is not None and t_key not in wanted and ds_name.lower() not in wanted:
-            continue
-        loc = contract.get("location") if isinstance(contract.get("location"), dict) else {}
-        kind = contract.get("kind") or "table"
-        if kind == "table" and not loc.get("database"):
+        if wanted is not None:
+            hits = {t_key, ds_name.lower()} & wanted
+            if not hits:
+                continue
+            matched |= hits
+        if not has_local_data(contract):
             skipped.append({
                 "dataset": ds_name,
-                "reason": "no local location.database declared",
+                "reason": "no location",
             })
             continue
-        reports.append(
-            verify_contract(
-                contract,
-                project_root=project_root,
-                bases=bases,
-                now=now,
-                write_evidence=write_evidence,
+        prov = A._provenance_params(contract)
+        if needs_duckdb(contract) and not reader["installed"]:
+            not_checked.append({
+                "dataset": ds_name,
+                "reason": "reader_missing",
+                "message": (
+                    f"the data reader is too old (DuckDB {reader['version']}; "
+                    f"TrueQuery needs {DUCKDB_SPEC})" if reader["too_old"]
+                    else "the data reader isn't installed"),
+                "provenance_note": prov["provenance_note"],
+            })
+            continue
+        try:
+            reports.append(
+                verify_contract(
+                    contract,
+                    project_root=project_root,
+                    bases=bases,
+                    now=now,
+                    max_rows=max_rows,
+                    max_bytes=max_bytes,
+                    write_evidence=write_evidence,
+                )
             )
-        )
+        except _runner_errors() as exc:
+            not_checked.append({
+                "dataset": ds_name,
+                "reason": ("reader_missing"
+                           if isinstance(exc, DuckDBMissingError) else "error"),
+                "message": error_text(exc),
+                "detail": str(exc),
+                "provenance_note": prov["provenance_note"],
+            })
 
+    unknown = sorted(wanted - matched) if wanted is not None else []
     return {
         "valid": all(r["valid"] for r in reports) and not invalid_contracts,
         "datasets": reports,
         "skipped": skipped,
+        "not_checked": not_checked,
         "invalid_contracts": invalid_contracts,
+        "unknown": unknown,
+        "reader": reader,
     }

@@ -8,7 +8,18 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 # build. Bytecode goes to a cache, never into the plugin folder.
 PYTHONPYCACHEPREFIX="${XDG_CACHE_HOME:-$HOME/.cache}/truequery/pycache"
 export PYTHONPYCACHEPREFIX
+# `truequery setup data` says which installer to use by this variable.
+TRUEQUERY_LAUNCHER=plugin
+export TRUEQUERY_LAUNCHER
+# After `truequery setup data --yes`, the data reader (DuckDB) joins the
+# environment; uv downloads it once into its cache. Hooks don't run this
+# launcher (they use scripts/tq-hook.sh), so they never load it.
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/truequery"
 if command -v uv >/dev/null 2>&1; then
+  if [ -f "$CONF/data-reader" ]; then
+    exec uv run --quiet --no-project --python ">=3.11" \
+      --with-editable "$ROOT/engine" --with "duckdb>=1.2.0" -- truequery "$@"
+  fi
   exec uv run --quiet --no-project --python ">=3.11" \
     --with-editable "$ROOT/engine" -- truequery "$@"
 fi

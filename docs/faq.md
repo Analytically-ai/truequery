@@ -43,4 +43,15 @@ checked, never as clean.
 **Does my code or data leave my machine?**
 The checker makes no network calls and sends no telemetry. Claude Code
 still talks to its model provider as it always does, and TrueQuery doesn't
-change that. TrueQuery never connects to your warehouse.
+change that. `truequery verify` reads local data files on your machine,
+read-only, and never connects to your warehouse. It shows counts and at
+most five key values (and, for a freshness check, the newest timestamp),
+never other values. See [Checking your
+data](data.md).
+
+**Does checking data mean installing something?**
+Only for data files and DuckDB databases, and only when you say yes. SQLite
+needs nothing extra. `truequery setup data` prints the command and what it
+downloads (DuckDB from PyPI, 15–25 MB) and installs it only with `--yes`.
+Until then, `verify` checks what it can and the receipt names what it
+couldn't.

@@ -85,7 +85,7 @@ found and, just as plainly, what wasn't checked. On the full sample file:
 TrueQuery receipt
 Checked      1 SQL file · contracts for 0 of 3 tables
 Found        5 errors · 2 warnings
-Not checked  your data: TrueQuery reads files and never connects to your database
+Not checked  your data: no contract points at a local data file, so none was read (remote databases: not until 0.3)
 No contract  customers, orders, staging_orders
 ```
 
@@ -179,6 +179,13 @@ also run it on its own.
   findings at or above `--fail-on` (default `error`); 2 is a usage or config
   error; 3 means some files couldn't be checked (`--allow-unverified` turns
   3 into 0).
+- **Checks your data too, when you ask.** `truequery verify` (or
+  `truequery review --data`) reads the local files and SQLite or DuckDB
+  databases a contract points to, read-only, and says whether the data
+  matches the contract: keys unique, statuses declared, timestamps in the
+  declared zone, paths under the declared folder, sizes in the declared
+  unit. Files and DuckDB need the data reader, installed only when you say
+  yes (`truequery setup data`). See [Checking your data](docs/data.md).
 
 All 38 checks, with what each one catches: [the checker in
 detail](docs/checker.md).
@@ -371,7 +378,8 @@ running on your machine.
 **Does my code or data leave my machine?**
 The checker makes no network calls and sends no telemetry. Your agent still
 talks to its model provider as it always does, and TrueQuery doesn't change
-that. TrueQuery never connects to your warehouse.
+that. `truequery verify` reads local data files on your machine, read-only,
+and never connects to your warehouse.
 
 More answers (SQLFluff, dialects, false alarms): [FAQ](docs/faq.md).
 
@@ -379,8 +387,8 @@ More answers (SQLFluff, dialects, false alarms): [FAQ](docs/faq.md).
 
 - **Next:** the full skill in Gemini CLI and Codex, then Cursor and GitHub
   Copilot.
-- **Later:** read-only checks against your data (local files first, then
-  warehouses), so the receipt can say "checked against the data"; the rest
+- **Later:** read-only checks against warehouses (local data files and
+  database files are checked already: `truequery verify`); the rest
   of the lifecycle as full commands (data quality, migrations and backfills,
   docs kept in sync, cost); and team-wide definitions shared with every
   developer's agent.
