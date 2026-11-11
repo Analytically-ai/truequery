@@ -395,8 +395,9 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
                             f"under {_base_words(base)}")
             if out:
                 bits.append(f"{_plural(out, 'path')} in {target} "
-                            f"{_verb(out, 'points', 'point')} outside it "
-                            "(absolute, ~ or ..)")
+                            f"{_verb(out, 'points', 'point')} outside "
+                            f"{_base_words(base)}, through an absolute path, "
+                            "~, .. or a link")
             what = "; ".join(bits) or (f"{_plural(count, 'path')} in {target} "
                                        f"{_dont(count)} resolve")
             fix = ("check which folder the paths are relative to (`bases:` in "
@@ -445,8 +446,7 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
     elif name == "freshness":
         if det.get("value_hidden"):
             what = (f"stale: the newest {target} is more than "
-                    f"{det.get('max_age')} before {det.get('checked_at')} "
-                    "(its value isn't shown: marked pii)")
+                    f"{det.get('max_age')} before {det.get('checked_at')}")
         elif det.get("max_timestamp"):
             what = (f"stale: the newest {target} is {det['max_timestamp']}, "
                     f"more than {det.get('max_age')} before "
@@ -458,6 +458,8 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
         what, fix = result.get("message") or name, "check the contract"
     # freshness reports one newest value, a missing column has no rows
     keys = "" if name in ("freshness", "columns_present") else _keys(result)
+    if name == "freshness" and det.get("value_hidden"):
+        keys = "; its value isn't shown: marked pii"
     note = report.get("provenance_note") or ""
     if note.startswith("(") and note.endswith(")"):
         note = "; " + note[1:-1]  # one bracket, not two in a row
@@ -484,12 +486,30 @@ def _inside(path: str, root: str) -> bool:
         return False
 
 
+def _physical_tz_words(result: dict, det: dict) -> str | None:
+    """A time zone that a Parquet or DuckDB column's type can't show, in
+    plain words."""
+    if result["assertion"] != "tz_marker" or not det.get("physical_type"):
+        return None
+    col, tz = result["target"], str(det.get("time_zone") or "")
+    where = ("the Parquet file" if "Parquet" in (result.get("message") or "")
+             else "the database")
+    if tz == "UTC":
+        return (f"{col} is stored with no time zone in {where}, so whether "
+                "its times are UTC can't be told from the data")
+    if tz.startswith("local:"):
+        return (f"{col} is stored as an instant (a time with a zone) in "
+                f"{where}, so the local zone the contract declares "
+                f"({tz.split(':', 1)[1]}) can't be told from the data")
+    return None
+
+
 def _not_verified(report: dict, contract: dict) -> list[str]:
     out = []
     for r in report["assertions"]:
-        if r["status"] == "not_verified":
-            out.append(r["message"])
         det = r.get("details") or {}
+        if r["status"] == "not_verified":
+            out.append(_physical_tz_words(r, det) or r["message"])
         if r["assertion"] == "exists_per_status" and det.get("unconfirmed_todo_rows"):
             statuses = ", ".join(det.get("unconfirmed_todo_statuses") or [])
             out.append(
