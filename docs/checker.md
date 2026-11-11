@@ -92,12 +92,12 @@ A DataFrame is a name the file builds from pandas (`pd.read_*`,
 DataFrame) or annotates as `pd.DataFrame`. A name the checker can't follow
 (a parameter with no annotation, a value from another module) isn't
 reported on. The receipt counts these files as `pandas in N Python files`.
-Checks that need to know what a column means (money, units, time zones)
-come with contracts.
+Checks that need to know what a column means (keys, money, units, time
+zones, statuses) read your contracts: see the next section.
 
 ## Checks that read your contracts
 
-These checks compare SQL with what your contracts in `contracts/` and your
+These checks compare SQL and pandas code with what your contracts in `contracts/` and your
 metric files in `metrics/` declare. Each one speaks only where a contract
 states the fact it needs, so a project without contracts sees nothing new:
 
@@ -115,6 +115,45 @@ states the fact it needs, so a project without contracts sees nothing new:
 - **A metric computed differently from its definition** in `metrics/`, when
   the query names its column after the metric. Filtering the whole query (to
   a run, a date window or a region) isn't a difference.
+
+### In pandas code
+
+The same five facts are checked in pandas code: a status compared with
+`==`, `!=`, `.eq`, `.ne`, `.isin` or inside a `query()` string; a filter
+like `status != "fetched"` that is then counted (`len`, `.shape[0]`,
+`.count()`, or `.sum()` of the test); units added, subtracted or compared;
+two timestamp columns still as read text, in different zones, compared
+(once both are parsed with `pd.to_datetime`, pandas compares the instants
+or raises, so that isn't flagged); a literal folder put in front of a path
+column (`"other/" + df["path"]`, or inside an `apply`), and path columns
+with different bases compared or merged on. And pandas has contract
+checks of its own:
+
+- **A contracted CSV read without a `dtype` for a string key,** so `007`
+  becomes 7 and joins on the key quietly match nothing.
+- **`fillna(0)` on a money column** (minor or major units) that may be
+  empty, which changes `mean()`, `count()` and `min()` (`.fillna(0).sum()`
+  is left alone: the sum doesn't change).
+- **A write that contradicts the output contract's write mode:** an
+  append-only table written with `if_exists="replace"`, a merge-on-key
+  table appended to, or a table overwritten one partition at a time
+  replaced whole.
+
+**Which DataFrame is linked to which contract.** Only an exact link counts,
+so a finding never rests on a guess:
+
+| Linked | Not linked (no finding) |
+|---|---|
+| `pd.read_csv("data/orders.csv")`, `read_table`, `read_fwf`, `read_json`, `read_parquet`, when the path matches one contract's `location.path` glob (from the project folder, or from the declared base's `default`) | A path built from a variable, a parameter or an f-string; a path that matches no contract, or more than one |
+| The same with a constant from the same file (`ORDERS = "data/orders.csv"`, assigned once), `Path("data") / "orders.csv"` or `os.path.join("data", "orders.csv")` | `**kwargs` in the call; `names=` (the code names the columns) |
+| `pd.read_sql("SELECT ... FROM orders")` with one contracted table, or `pd.read_sql_table("orders", con)` | A query with a join or a CTE; a column renamed in the `SELECT` (that column only) |
+| A frame made from a linked one by a row filter, `query`, `head`, `sort_values`, `drop_duplicates`, `dropna`, `copy`, `reset_index` or a column list | `rename`, `assign`, `fillna`, `astype`, `merge`, `concat`; a column assigned (`df["status"] = ...`), `df.columns = ...` |
+| A write: `to_sql("orders", ...)` by table name, `to_csv` / `to_json` / `to_parquet` by path | |
+
+Names are followed inside one function (or the module) at a time, as for
+the other pandas checks. A finding from a v1 contract needs only what v1
+declares (allowed values); units, time zones, paths and write modes need
+`version: 2`.
 
 They're all off by default until they're measured on real projects. Switch
 them on with `truequery rules set <rule> --enabled on`. A finding that relies
@@ -154,7 +193,7 @@ only ignore a single line, and must give a reason
 earns its place on precision: one that misfires gets fixed or switched off
 by default.
 
-## All 38 checks
+## All 41 checks
 
 `immediate` checks run after every edit; `stop` checks run at the end of the
 turn. Checks that are off by default aren't yet precise enough to run
@@ -169,12 +208,15 @@ unasked; switch them on with `truequery rules set`.
 | `model/unique-key-merge-key` | on (stop) | error | Incremental merge models declare a non-null unique merge key |
 | `orch/explicit-catchup-policy` | off (stop) | warning | Scheduled DAGs set catchup explicitly |
 | `py/pandas-dedupe-unstable-sort` | on (stop) | warning | Dedupe after a sort with a unique tiebreaker or a stable sort |
+| `py/pandas-fillna-zero-on-money` | off (stop) | warning | Don't fill missing money amounts with 0 |
 | `py/pandas-groupby-dropna` | off (stop) | warning | Say what happens to missing group keys with dropna= |
 | `py/pandas-groupby-first-mixes-rows` | on (stop) | warning | Pick whole rows per group, not groupby().first() / .last() |
 | `py/pandas-merge-validate` | off (stop) | warning | State the expected cardinality of every merge with validate= |
 | `py/pandas-no-chained-assignment` | on (immediate) | error | Change a DataFrame in one step on the DataFrame itself, never through a chain |
 | `py/pandas-no-row-loop-mutations` | on (stop) | error | Never write to the row of an iterrows() loop |
+| `py/pandas-read-csv-contract-dtype` | off (stop) | warning | Read a contracted file's string keys as strings |
 | `py/pandas-to-sql-replace` | on (stop) | warning | Load into an existing table without to_sql(if_exists="replace") |
+| `py/pandas-write-mode-violation` | off (stop) | error | Write an output the way its contract says it's written |
 | `sem/metric-drift` | off (stop) | error | A column named after a metric in `metrics/` computes it as declared |
 | `sem/relative-path-base-mismatch` | off (stop) | error | Normalize paths with different declared bases before comparing them |
 | `sem/timezone-mismatch` | off (stop) | error | Convert timestamps with different declared time zones before comparing them |

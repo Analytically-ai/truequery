@@ -445,7 +445,7 @@ def check_python_source(text: str, path: str, dialect: str | None = None,
 def pandas_rules(tiers=None, settings=None) -> set:
     """The pandas rules on for this pass (enabled, and in `tiers`)."""
     rules = set()
-    for slug in pandas_checks.RULES:
+    for slug in pandas_checks.ALL_RULES:
         record = std_registry.RECORDS.get(slug)
         if record is None or not record["implemented"]:
             continue
@@ -460,10 +460,17 @@ def pandas_rules(tiers=None, settings=None) -> set:
 
 
 def check_pandas_source(text: str, path: str, mode: str = "build",
-                        tiers=None, settings=None) -> tuple[bool, list]:
+                        tiers=None, settings=None,
+                        root: str | None = None) -> tuple[bool, list]:
     """(ran, findings) for the pandas checks on one .py file. `ran` is
-    True only when the file imports pandas and a pandas check ran on it."""
-    ran, raw = pandas_checks.check(text, pandas_rules(tiers, settings))
+    True only when the file imports pandas and a pandas check ran on it.
+    The project's contracts are read only when a check that reads them
+    is on (and once per run: keylookup caches them)."""
+    rules = pandas_rules(tiers, settings)
+    contracts = None
+    if any(std_registry.RECORDS[r]["evidence"] == "contract" for r in rules):
+        contracts = keylookup.declared_context_for(path, root=root)
+    ran, raw = pandas_checks.check(text, rules, contracts)
     lines = text.splitlines()
     findings = []
     for rule, line, col, why, fix in raw:
@@ -489,7 +496,8 @@ def check_python_file(text: str, path: str, dialect: str | None = None,
     findings, fragments, spans = check_python_source(
         text, path, dialect, mode, tiers, settings, root=root)
     spans = spans + pandas_checks.statement_spans(text)
-    ran, pandas = check_pandas_source(text, path, mode, tiers, settings)
+    ran, pandas = check_pandas_source(text, path, mode, tiers, settings,
+                                      root=root)
     for finding in pandas:
         finding._stmt = stmt_hash_at(spans, finding.line)
     findings = sorted(findings + pandas, key=Finding.sort_key)

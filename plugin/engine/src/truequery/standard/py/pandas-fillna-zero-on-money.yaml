@@ -1,0 +1,68 @@
+id: py/pandas-fillna-zero-on-money
+title: Don't fill missing money amounts with 0
+domain: py
+modes: [build, change, explore]
+applies_to: [any]
+statement: >
+  pandas code doesn't replace missing values in a money column (a contract
+  column in minor or major currency units that may be empty) with 0, unless
+  0 is the true amount and that is stated; missing amounts stay missing, so
+  mean(), count() and the like skip them.
+rationale: >
+  A missing amount means "not known", not "zero". fillna(0) turns every
+  unknown amount into a real one: the mean drops, count() includes rows that
+  have no amount, and minimums become 0. Nothing fails, and the numbers look
+  plausible. sum() is the one aggregate it doesn't change, which is why the
+  habit spreads.
+failure_example: >
+  Refunds not yet priced have an empty amount_cents. A report computes
+  df["amount_cents"].fillna(0).mean() and shows an average refund a third
+  lower than it is.
+enforcement: contract
+evidence: contract
+contract_required: true
+detection_sketch: >
+  Link a DataFrame to a contract through the read that made it (a literal
+  path matching location.path, or read_sql of one contracted table). Flag
+  fillna with 0 on a column the contract declares in money units (`unit:
+  minor` or `major`) and doesn't declare `nullable: false`: on the column
+  (df["amount"].fillna(0)), through a dict ({"amount": 0}), or on the whole
+  DataFrame. Quiet when the result is summed straight away (.fillna(0).sum()
+  equals .sum()), when the column was replaced after the read, or when the
+  DataFrame isn't linked.
+severity_suggestion: warning
+examples:
+  bad: |
+    avg_refund = refunds["amount_cents"].fillna(0).mean()
+  good: |
+    avg_refund = refunds["amount_cents"].mean()  # skips unknown amounts
+sources:
+  - title: "pandas.Series.mean | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.Series.mean.html
+    publisher: pandas
+    accessed: 2026-11-10
+    supports: skipna (default True) excludes NA/null values when computing
+      the result.
+  - title: "pandas.DataFrame.fillna | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.fillna.html
+    publisher: pandas
+    accessed: 2026-11-10
+    supports: fillna replaces NA/NaN values with the given value.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [sem/unit-mismatch]
+proof:
+  engine: pandas
+  setup: |
+    df = pd.DataFrame({"amount_cents": [1000, None, 3000]})
+  bad: |
+    result = [df["amount_cents"].fillna(0).mean(), df["amount_cents"].fillna(0).count()]
+  bad_result: "[1333.3333333333333, 3]"
+  good: |
+    result = [df["amount_cents"].mean(), df["amount_cents"].count()]
+  good_result: "[2000.0, 2]"
+  note: >
+    Two amounts are known (1000 and 3000); one is missing. After fillna(0)
+    the mean is 1333.33 instead of 2000, and three amounts are counted
+    instead of two.

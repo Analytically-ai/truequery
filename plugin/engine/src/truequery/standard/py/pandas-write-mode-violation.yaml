@@ -1,0 +1,82 @@
+id: py/pandas-write-mode-violation
+title: Write an output the way its contract says it's written
+domain: py
+modes: [build, change]
+applies_to: [any]
+statement: >
+  When an output contract declares how the output is written (write_mode:
+  append, overwrite_partition or merge_on_key), pandas code that writes that
+  output doesn't do the opposite: it doesn't replace an append-only table or
+  file, doesn't append blindly to a table that is merged on its key, and
+  doesn't replace a whole table that is overwritten one partition at a time.
+rationale: >
+  The write mode is what keeps reruns and history correct. Replacing an
+  append-only output deletes every earlier load; appending to a merge-on-key
+  output adds a second copy of each key on every rerun; replacing a table
+  that should only have one partition rewritten deletes all the other
+  partitions. Each write succeeds without an error.
+failure_example: >
+  events is declared write_mode: append. A backfill script writes one day
+  with to_sql("events", con, if_exists="replace"), and the table now holds
+  only that day.
+enforcement: contract
+evidence: contract
+contract_required: true
+detection_sketch: |
+  Link a write to a contract by its target: to_sql's table name (a literal
+  or same-file constant) matching the contract's dataset or relation, or
+  to_csv / to_json / to_parquet's path matching location.path. Only clear
+  contradictions are flagged:
+
+  | write_mode          | Flagged                                          | Not flagged                                    |
+  |---------------------|--------------------------------------------------|------------------------------------------------|
+  | append              | to_sql(if_exists="replace")                      | to_sql(if_exists="append"), "fail" or default  |
+  | append              | to_csv/to_json(mode="w", explicit or default) or to_parquet to a single file the contract names (no wildcard) | the same to a new file under a wildcard location; mode="a" |
+  | merge_on_key        | to_sql(if_exists="append")                       | if_exists="replace" into a staging table; any other table |
+  | merge_on_key        | to_csv/to_json(mode="a")                          | mode="w"                                       |
+  | overwrite_partition | to_sql(if_exists="replace")                      | to_sql(if_exists="append") after a DELETE      |
+  | overwrite_partition | to_csv/to_json(mode="w") or to_parquet to a single file the contract names (no wildcard) | to_parquet(partition_cols=...); a file under a wildcard location |
+
+  Quiet when the mode or if_exists isn't a literal, or the call passes
+  **kwargs.
+severity_suggestion: error
+examples:
+  bad: |
+    day.to_sql("events", con, if_exists="replace", index=False)
+  good: |
+    day.to_sql("events", con, if_exists="append", index=False)
+sources:
+  - title: "pandas.DataFrame.to_sql | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_sql.html
+    publisher: pandas
+    accessed: 2026-11-10
+    supports: if_exists="replace" drops the table before inserting new
+      values; "append" inserts new values into the existing table.
+  - title: "pandas.DataFrame.to_csv | pandas docs"
+    url: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_csv.html
+    publisher: pandas
+    accessed: 2026-11-10
+    supports: mode "w" (the default) truncates the file first; "a" appends
+      to the end of the file if it exists.
+confidence: high
+conflicts_with: []
+status: draft
+see_also: [py/pandas-to-sql-replace]
+proof:
+  engine: pandas
+  setup: |
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    pd.DataFrame({"id": [1, 2]}).to_sql("events", con, index=False)
+    day = pd.DataFrame({"id": [3]})
+  bad: |
+    day.to_sql("events", con, if_exists="replace", index=False)
+    result = con.execute("SELECT id FROM events ORDER BY id").fetchall()
+  bad_result: "[(3,)]"
+  good: |
+    day.to_sql("events", con, if_exists="append", index=False)
+    result = con.execute("SELECT id FROM events ORDER BY id").fetchall()
+  good_result: "[(1,), (2,), (3,)]"
+  note: >
+    The events table is append-only. Writing the new day with
+    if_exists="replace" deletes the two earlier rows; "append" keeps them.

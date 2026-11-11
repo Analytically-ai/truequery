@@ -13,7 +13,7 @@ SRC = os.path.join(os.path.dirname(__file__), "..", "plugin", "engine", "src", "
 
 def test_all_records_load():
     records = schema.load_all()
-    assert len(records) == 231
+    assert len(records) == 234
 
 
 def test_ids_match_paths():

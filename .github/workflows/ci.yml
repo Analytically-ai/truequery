@@ -44,7 +44,7 @@ jobs:
           python - <<'PY'
           import glob, zipfile
           names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
-          assert sum(n.endswith(".yaml") for n in names) == 231, "standard missing"
+          assert sum(n.endswith(".yaml") for n in names) == 234, "standard missing"
           assert any(n.endswith("registry_impl.json") for n in names)
           assert any(n.endswith("licenses/LICENSE") for n in names)
           PY

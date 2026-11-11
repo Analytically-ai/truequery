@@ -10,6 +10,8 @@ In scope:
   chained-assignment bugs, writes to iterrows() rows, groupby().first()
   mixing rows, dedupe after an unstable sort, merge cardinality, groupby
   dropping missing keys, to_sql(if_exists="replace").
+- Where a contract describes the data: string keys read without a dtype,
+  fillna(0) on money, writes that contradict the declared write mode.
 - Dependency and pinning hygiene for pipeline deployables.
 - Hook/adapter/client connection code and secret handling.
 
