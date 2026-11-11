@@ -882,8 +882,10 @@ class ContractPass:
                 why = (f"{ds} is appended to, as its contract says, but "
                        f"{target} replaces it with this DataFrame, so every "
                        f"earlier load is lost{draft}")
-                fix = ('append instead (if_exists="append", mode="a", or a new '
-                       "file per load), or ask the user whether the contract's "
+                how_to = {"to_sql": 'write with if_exists="append"',
+                          "to_parquet": "write each load to a new file"}.get(
+                    method, 'write with mode="a", or each load to a new file')
+                fix = (f"{how_to}, or ask the user whether the contract's "
                        "write mode is right")
         elif mode == "merge_on_key":
             if how in ("append", "a"):
