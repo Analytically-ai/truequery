@@ -346,6 +346,22 @@ class ContractPass:
         self.out = out
         self.contracts = contracts
         self.module_consts = _constants(tree.body)
+        # Every parameter name in the file (functions and lambdas, every
+        # kind): a parameter holds whatever it's given, so a constant of
+        # the same name never stands in for it.
+        self.params = {a.arg for node in ast.walk(tree)
+                       if isinstance(node, ast.arguments)
+                       for a in (node.posonlyargs + node.args + node.kwonlyargs
+                                 + [node.vararg, node.kwarg]) if a is not None}
+
+    def const_value(self, name, scope):
+        """The value node a name always holds, or None."""
+        if name in self.params:
+            return None
+        target = scope.consts.get(name)
+        if target is None and name not in scope.assigned:
+            target = self.module_consts.get(name)
+        return target
 
     # -- reporting -------------------------------------------------------
     def report(self, rule, node, why, fix):
@@ -362,10 +378,8 @@ class ContractPass:
         if isinstance(value, str):
             return value
         if isinstance(node, ast.Name):
-            target = scope.consts.get(node.id)
-            if target is None and node.id not in scope.assigned:
-                target = self.module_consts.get(node.id)
-            return self.literal(target, scope, depth + 1)
+            return self.literal(self.const_value(node.id, scope), scope,
+                                depth + 1)
         if isinstance(node, ast.BinOp):
             left = self.literal(node.left, scope, depth + 1)
             right = self.literal(node.right, scope, depth + 1)
@@ -395,9 +409,7 @@ class ContractPass:
         """A same-file constant's value node (`VALID = ["paid"]`), else
         the node itself."""
         if isinstance(node, ast.Name):
-            target = scope.consts.get(node.id)
-            if target is None and node.id not in scope.assigned:
-                target = self.module_consts.get(node.id)
+            target = self.const_value(node.id, scope)
             if isinstance(target, (ast.Constant, ast.List, ast.Tuple, ast.Set)):
                 return target
         return node
@@ -406,7 +418,7 @@ class ContractPass:
         while isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             node = node.left
         if isinstance(node, ast.Name):
-            node = scope.consts.get(node.id) or self.module_consts.get(node.id)
+            node = self.const_value(node.id, scope)
         return isinstance(node, ast.Call) and (
             getattr(node.func, "attr", None) or getattr(node.func, "id", None)
         ) in ("Path", "PurePath", "PurePosixPath")
@@ -1123,6 +1135,8 @@ class ContractPass:
         default = self._declared_default(col.spec.get("relative_to"))
         if default is None or _same_dir(literal, default):
             return False
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", literal):
+            return False  # a URL (s3://, https://, file://): another place
         if literal.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", literal):
             if not default.startswith(("/", "~")):
                 return False  # an absolute path may be where the base is

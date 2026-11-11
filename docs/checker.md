@@ -126,7 +126,8 @@ two timestamp columns still as read text, in different zones, compared
 (once both are parsed with `pd.to_datetime`, pandas compares the instants
 or raises, so that isn't flagged); a literal folder put in front of a path
 column (`"other/" + df["path"]`, or inside an `apply`), and path columns
-with different bases compared or merged on. And pandas has contract
+with different bases compared or merged on (a URL in front, such as
+`s3://…`, is another place, not a wrong folder). And pandas has contract
 checks of its own:
 
 - **A contracted CSV read without a `dtype` for a string key,** so `007`

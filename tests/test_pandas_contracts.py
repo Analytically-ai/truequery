@@ -652,3 +652,38 @@ def test_pandas_rules_include_the_contract_checks():
     assert set(PC.NEW_RULES) <= set(pc.RULES)
     assert set(PC.EXTENDED_RULES) <= set(pc.ALL_RULES)
     assert set(PC.EXTENDED_RULES).isdisjoint(pc.RULES)  # they have SQL proofs
+
+
+# -- review of C2: a parameter is never a constant --------------------------------
+
+@pytest.mark.parametrize("code", [
+    "path = 'data/orders.csv'\ndef load(path):\n    return pd.read_csv(path)\n",
+    "path = 'data/orders.csv'\ndef load(*, path):\n    return pd.read_csv(path)\n",
+    "path = 'data/orders.csv'\ndef load(path, /):\n    return pd.read_csv(path)\n",
+    "path = 'data/orders.csv'\ndef load(*path):\n    return pd.read_csv(path)\n",
+    "path = 'data/orders.csv'\ndef load(**path):\n    return pd.read_csv(path)\n",
+    "p = 'data/orders.csv'\nframes = list(map(lambda p: pd.read_csv(p), files))\n",
+    "path = 'data/orders.csv'\ndef load(path=None):\n"
+    "    if path is None:\n        path = 'data/orders.csv'\n"
+    "    return pd.read_csv(path)\n",
+    "table = 'events'\ndef save(d, con, table):\n"
+    "    d.to_sql(table, con, if_exists='replace')\n",
+    "VALID = ['payed']\ndef pick(VALID):\n"
+    "    o = pd.read_csv('data/orders.csv', dtype=str)\n"
+    "    return o[o.status.isin(VALID)]\n",
+])
+def test_a_parameter_named_like_a_constant_is_not_linked(tmp_path, code):
+    assert fired(tmp_path, code) == []
+
+
+def test_the_constant_still_links_where_no_parameter_shadows_it(tmp_path):
+    code = ("path = 'data/orders.csv'\ndef load():\n"
+            "    return pd.read_csv(path)\n")
+    assert fired(tmp_path, code) == [PC.READ_DTYPE]
+
+
+@pytest.mark.parametrize("prefix", ["s3://bucket/raw/", "gs://b/", "https://cdn.example.org/",
+                                    "file:///srv/"])
+def test_a_url_in_front_of_a_path_is_another_place(tmp_path, prefix):
+    code = BOTH + f"p = '{prefix}' + log['local_path']\n"
+    assert fired(tmp_path, code) == []
