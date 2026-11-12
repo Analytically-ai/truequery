@@ -621,8 +621,8 @@ def _setup_duckdb_files_view(
                      if delim in contract_v2.CSV_DELIMITERS else "")
         con.execute(
             f"CREATE OR REPLACE TEMP VIEW {quoted_view} AS "
-            f"SELECT * FROM read_csv({files_sql}, all_varchar=true"
-            f"{delim_sql});"
+            f"SELECT * FROM read_csv({files_sql}, all_varchar=true, "
+            f"union_by_name=true{delim_sql});"
         )
     elif fmt in ("jsonl", "json"):
         desc = con.execute(
@@ -656,7 +656,7 @@ def _setup_duckdb_files_view(
     elif fmt == "parquet":
         con.execute(
             f"CREATE OR REPLACE TEMP VIEW {quoted_view} AS "
-            f"SELECT * FROM read_parquet({files_sql});"
+            f"SELECT * FROM read_parquet({files_sql}, union_by_name=true);"
         )
     else:
         raise VerificationError(f"unsupported file format {fmt!r}")

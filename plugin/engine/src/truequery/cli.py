@@ -351,6 +351,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
 def cmd_init(args: argparse.Namespace) -> int:
     root = os.path.abspath(args.path or ".")
     drafts = None
+    if args.from_paths and args.force:
+        # --force rewrites DATA.md, dropping its `bases:`, which the drafts
+        # would point at: they'd fail `truequery contract validate`.
+        print("truequery: init: --force and --from can't be used together "
+              "(--force rewrites DATA.md and would drop the bases the drafts "
+              "use). Run `truequery init --force` first, then `--from`",
+              file=sys.stderr)
+        return EXIT_ERROR
     if args.from_paths:
         from truequery import initfrom  # not loaded by hooks
         try:
@@ -1027,7 +1035,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="also write draft contracts (version 2, status: "
                              "draft) from the CSV, JSONL and Parquet files "
                              "in these files or folders; they must be inside "
-                             "the project or a base declared in DATA.md")
+                             "the project or a base declared in DATA.md. A "
+                             "relative path is looked up in the project "
+                             "folder first, then in the current folder")
     p_init.add_argument("--json", action="store_true")
     p_init.add_argument("--sarif", action="store_true")
     p_init.set_defaults(func=cmd_init)

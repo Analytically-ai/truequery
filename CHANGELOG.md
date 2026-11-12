@@ -61,21 +61,30 @@
   partition folders), column types (an ID with leading zeros stays text),
   time zones (naive or mixed timestamps become questions), candidate keys,
   status values (`means: TODO` next to a path column), units from column
-  names, and path bases declared in `DATA.md`. Columns that look like
-  personal data get `pii: true`, and their values are never written. It
-  never writes over a contract, refuses paths outside the project or a
-  declared base, and every draft passes `truequery contract validate`. The
+  names, and path bases declared in `DATA.md`. Every fact read from the
+  sample that needs a person (a status's meaning, a zone, a unit, a values
+  list, a column some files lack) is a draft column with a question.
+  Columns that look like personal data (by name, a person's role such as
+  `assignee`, or values that look like emails, phone numbers or names) get
+  `pii: true`, and their values are never written. It never writes over a
+  contract, refuses paths outside the project or a declared base, can't be
+  combined with `--force`, and every draft passes `truequery contract
+  validate`. The
   same files give the same bytes. It doesn't read READMEs or data
   dictionaries yet. See `docs/pipelines.md`.
 - **`truequery scaffold <contract>` writes a pipeline's boundaries in plain
   pandas:** a typed reader (a dtype for every column, only empty fields
   missing, timestamps parsed in the declared zone), an output check (keys,
   types, accepted values, time zones) and pytest tests on synthetic rows.
+  A CSV row with more fields than the header raises instead of shifting
+  the columns.
   The code never imports TrueQuery, and files aren't written over without
   `--force`.
 - Contracts: a column can be `status: draft` (only in a draft contract),
   and a CSV location can name its `delimiter` (`,` `;` tab or `|`), which
-  `truequery verify` now uses.
+  `truequery verify` now uses. `verify` matches the columns of a dataset's
+  CSV and Parquet files by name, so files that lack a column or order them
+  differently are read.
 - `/truequery init` runs `init --from` when the project has data files and
   no contracts, then asks only what it couldn't settle; `/truequery build`
   scaffolds the boundaries before writing the transform.

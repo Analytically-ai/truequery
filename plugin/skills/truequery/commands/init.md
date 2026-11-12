@@ -61,8 +61,10 @@ only (steps 1–5) — for scripts and CI.
    A confirmed answer goes into the contract and removes that column's
    `status: draft` and its `# TODO` comment; an unanswered one stays a
    draft. Never fill a `means`, zone or unit the user didn't confirm.
-   Remove the contract's own `status: draft` only when the grain and keys
-   are confirmed and no column is still a draft.
+   A `values` list read from the sample is a draft too: ask whether it's
+   complete before it becomes a rule. Remove the contract's own `status:
+   draft` (and the header comment `init --from` wrote) only when the grain
+   and keys are confirmed and no column is still a draft.
    Write the answers into `DATA.md` as house definitions, into
    `contracts/*.yaml` (`version: 2`), and into `metrics/*.yaml` where
    they define a governed metric, then run `truequery contract validate`.

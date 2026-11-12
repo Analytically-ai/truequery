@@ -262,8 +262,11 @@ def test_jsonl_with_mixed_keys(tmp_path):
     assert list(contract["columns"]) == ["id", "v", "w", "nested"]
     assert col(contract, "id")["type"] == "string"
     assert col(contract, "v")["type"] == "number"
-    assert col(contract, "w")["type"] == "boolean"
-    assert contract["columns"]["nested"] == {}
+    assert col(contract, "w") == {"type": "boolean", "nullable": True,
+                                  "status": "draft"}
+    assert contract["columns"]["nested"] == {"nullable": True,
+                                             "status": "draft"}
+    assert col(contract, "id")["nullable"] is False  # the key
     for note in ("1 line in the sample is not valid JSON",
                  "1 line in the sample is not a JSON object",
                  "w is in 1 of 3 sampled rows"):
@@ -654,3 +657,199 @@ def test_hooks_never_load_init_from_or_scaffold():
         with open(os.path.join(folder, name), encoding="utf-8") as handle:
             text = handle.read()
         assert "initfrom" not in text and "scaffold" not in text, name
+
+
+# -- review findings (REVIEW-0.2-E-RESULT.md) --------------------------------
+
+@pytest.mark.skipif(not V.duckdb_status()["installed"],
+                    reason="the data reader isn't installed")
+def test_parquet_columns_are_matched_by_name_in_each_file(tmp_path):
+    """Finding 1: files of one dataset with the columns in another order
+    (or one more column) never put one column's values in another."""
+    import duckdb
+    folder = tmp_path / "data" / "cust"
+    folder.mkdir(parents=True)
+    con = duckdb.connect()
+    names = ["Ann Lee", "Bo Li", "Carol White", "Dan Brown"]
+    for name, order in (("a", "customer_id, status, customer_name"),
+                        ("b", "customer_name, customer_id, status, extra")):
+        rows = " UNION ALL ".join(
+            f"SELECT '{name}{i}' AS customer_id, "
+            f"'{['active', 'closed'][i % 2]}' AS status, "
+            f"'{names[i]}' AS customer_name, {i} AS extra"
+            for i in range(4))
+        target = str(folder / f"{name}.parquet").replace("'", "''")
+        con.execute(f"COPY (SELECT {order} FROM ({rows})) TO '{target}' "
+                    "(FORMAT parquet)")
+    con.close()
+    entry = IF.plan(str(tmp_path), [str(tmp_path / "data")])["drafts"][0]
+    contract = entry["contract"]
+    assert col(contract, "status")["values"] == ["active", "closed"]
+    assert col(contract, "customer_name")["pii"] is True
+    assert contract["keys"] == ["customer_id"]
+    text = IF.render(contract, entry["comments"], [])
+    for name in names:
+        assert name not in text
+
+
+@pytest.mark.parametrize("header,rows,column,reason", [
+    ("ticket_id,assignee", ["1,Alice Smith", "2,Bob Jones", "3,Alice Smith",
+                            "4,Bob Jones"], "assignee", "by its name"),
+    ("ticket_id,created_by", ["1,ann", "2,bo", "3,ann", "4,bo"],
+     "created_by", "by its name"),
+    ("ticket_id,cell", ["1,+1 415 555 0100", "2,+1 415 555 0101",
+                        "3,+1 415 555 0100", "4,+1 415 555 0101"], "cell",
+     "by its name"),
+    ("ticket_id,on_call", ["1,+1 415 555 0100", "2,(415) 555-0101",
+                           "3,+1 415 555 0100", "4,(415) 555-0101"],
+     "on_call", "its values look like phone numbers"),
+    ("ticket_id,handled", ["1,Carol White", "2,Dan Brown", "3,Carol White",
+                           "4,Dan Brown"], "handled",
+     "its values look like people's names"),
+])
+def test_names_and_phone_numbers_are_personal_data(tmp_path, header, rows,
+                                                   column, reason):
+    """Finding 3: names and phone numbers never reach `values`."""
+    write(tmp_path / "d" / "t.csv", header + "\n" + "\n".join(rows) + "\n")
+    entry = IF.plan(str(tmp_path), [str(tmp_path / "d")])["drafts"][0]
+    spec = col(entry["contract"], column)
+    assert spec["pii"] is True and "values" not in spec
+    assert any(f"looks like personal data ({reason})" in q
+               for q in entry["questions"])
+    text = IF.render(entry["contract"], entry["comments"], [])
+    for row in rows:
+        assert row.split(",", 1)[1] not in text
+
+
+@pytest.mark.parametrize("name,ctype,values,pii", [
+    ("email_sent", "boolean", [True], False),
+    ("has_email", "boolean", [False], False),
+    ("email_opened_count", "integer", [3], False),
+    ("is_phone_verified", "boolean", [True], False),
+    ("address_verified", "boolean", [True], False),
+    ("mail_count", "integer", [1], False),
+    ("street_type", "string", ["Ave", "St"], False),
+    ("zip_file", "string", ["a.zip"], False),
+    ("customer_id", "string", ["c1", "c2"], False),
+    ("user_agent", "string", ["Mozilla/5.0"], False),
+    ("city", "string", ["New York", "Los Angeles"], False),
+    ("subregion1_name", "string", ["New South Wales", "South Australia"],
+     False),
+    ("handler", "string", ["Carol White", "Dan Brown"], True),
+    ("customer", "string", ["acme"], True),
+    ("contact", "string", ["a@x.org", "b@y.org"], True),
+    ("zip_code", "string", ["10001"], True),
+])
+def test_personal_data_rules(name, ctype, values, pii):
+    """Findings 3 and 9: by name only for text columns; never for an id."""
+    assert (IF.personal_data_reason(name, ctype, values) is not None) is pii
+
+
+def test_drifting_columns_are_optional_and_both_consumers_read_them(
+        tmp_path, monkeypatch, capsys):
+    """Finding 4: a column some files lack is nullable (a question), the
+    scaffolded reader reads those files, and `verify` reads them all."""
+    pd = pytest.importorskip("pandas")
+    for name, extra in (("a", ""), ("b", ""), ("c", ",boosters")):
+        write(tmp_path / "d" / f"{name}.csv",
+              f"location,date,total{extra}\nX{name},2026-10-01,1"
+              + (",2" if extra else "") + "\n")
+    monkeypatch.chdir(tmp_path)
+    run(tmp_path, "d", capsys=capsys)
+    contract = drafts(tmp_path)["d"]
+    assert col(contract, "boosters")["nullable"] is True
+    assert col(contract, "boosters")["status"] == "draft"
+    assert cli.main(["scaffold", "d"]) == 0
+    from truequery import scaffold as SC
+    sp = SC.spec_of(P.load_contract(str(tmp_path / "contracts" / "d.yaml")),
+                    "contracts/d.yaml")
+    namespace: dict = {}
+    exec(compile(SC.render_module(sp), "d_io.py", "exec"), namespace)
+    frame = namespace["read_d"](tmp_path / "d" / "a.csv")
+    assert pd.isna(frame["boosters"].iloc[0])
+    if V.duckdb_status()["installed"]:
+        capsys.readouterr()
+        cli.main(["verify"])
+        out = capsys.readouterr().out
+        assert "Verified     d (3 files, 3 rows)" in out
+
+
+def test_init_force_with_from_is_refused(tmp_path, monkeypatch, capsys):
+    """Finding 5: --force would drop the bases the drafts point at."""
+    write(tmp_path / "DATA.md", "# Data\n\n```tq-config\nbases:\n"
+          "  data_root: ./data\n```\n")
+    write(tmp_path / "data" / "x.csv", "id\n1\n2\n")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["init", "--force", "--from", "data"]) == 2
+    assert "--force and --from can't be used together" in \
+        capsys.readouterr().err
+    assert "data_root" in (tmp_path / "DATA.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "contracts").exists()
+
+
+def test_sample_values_are_drafts_with_a_question(tmp_path):
+    """Finding 7: a `values` list from a sample isn't confirmed by default."""
+    write(tmp_path / "d" / "x.csv", "id,currency\n1,EUR\n2,USD\n3,EUR\n"
+          "4,USD\n")
+    entry = IF.plan(str(tmp_path), [str(tmp_path / "d")])["drafts"][0]
+    spec = col(entry["contract"], "currency")
+    assert spec["values"] == ["EUR", "USD"] and spec["status"] == "draft"
+    assert any(q.startswith("currency: values seen in the sample: EUR, USD."
+                            " Are these all of them?")
+               for q in entry["questions"])
+
+
+@pytest.mark.parametrize("name,unit", [
+    ("kb_article_id", None), ("tb_count", None), ("ms_count", None),
+    ("revenue_gb", None), ("sales_gb", None), ("size_gb", "GB"),
+    ("bytes_saved", "bytes"), ("total_gib", "GiB"), ("latency_ms", "ms"),
+])
+def test_units_skip_ids_counts_and_money(name, unit):
+    """Finding 10."""
+    assert IF._unit_from_name(name) == unit
+
+
+def test_an_outside_base_is_named_not_its_path(tmp_path):
+    """Finding 11: no absolute path in what's written."""
+    project = tmp_path / "project"
+    store = tmp_path / "store"
+    write(store / "files" / "a.bin", "x")
+    write(store / "logs" / "x.csv", "id,local_path\n1,files/a.bin\n"
+          "2,files/b.bin\n")
+    write(project / "DATA.md", "# Data\n\n```tq-config\nbases:\n  store: "
+          + str(store).replace("\\", "/") + "\n```\n")
+    entry = IF.plan(str(project), [str(store / "logs")])["drafts"][0]
+    assert str(tmp_path) not in entry["text"]
+    assert "exist under store: is that their base?" in entry["text"]
+
+
+def test_from_paths_are_looked_up_in_the_project_first(tmp_path, monkeypatch,
+                                                        capsys):
+    """Finding 12: `truequery init proj --from data`."""
+    write(tmp_path / "proj" / "data" / "x.csv", "id\n1\n2\n")
+    monkeypatch.chdir(tmp_path)
+    code, out = run("proj", "data", capsys=capsys)
+    assert code == 0
+    assert (tmp_path / "proj" / "contracts" / "x.yaml").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks")
+def test_a_linked_folder_is_named_not_skipped_silently(tmp_path):
+    """Finding 12."""
+    write(tmp_path / "other" / "y.csv", "id\n1\n")
+    write(tmp_path / "d" / "x.csv", "id\n1\n2\n")
+    os.symlink(tmp_path / "other", tmp_path / "d" / "linked")
+    result = IF.plan(str(tmp_path), [str(tmp_path / "d")])
+    assert {"path": f"{tmp_path / 'd'}/linked",
+            "reason": "it's a link to a folder, which isn't followed"} in \
+        result["not_inferred"]
+
+
+def test_jsonl_values_include_numbers(tmp_path):
+    """Finding 12: `"007"` and `5` in one column: both are listed."""
+    write(tmp_path / "d" / "x.jsonl", "".join(
+        f'{{"id": {i}, "code": {v}}}\n'
+        for i, v in enumerate(['"007"', "5", '"007"', "5"])))
+    contract = IF.plan(str(tmp_path), [str(tmp_path / "d")])["drafts"][0][
+        "contract"]
+    assert col(contract, "code")["values"] == ["007", "5"]

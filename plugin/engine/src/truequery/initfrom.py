@@ -70,6 +70,10 @@ _TS_RE = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d{1,9})?)?"
     r" ?(Z|z|[+-]\d{2}(?::?\d{2})?)?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+_PHONE_RE = re.compile(r"^\+?[\d\s().\-]{7,}$")
+_DATE_LIKE_RE = re.compile(r"^\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}$")
+_PERSON_RE = re.compile(r"^[A-Z][a-z]+(?:['-][A-Za-z]+)?"
+                        r"(?: [A-Z][a-z]+(?:['-][A-Za-z]+)?){1,2}$")
 _PART_RE = re.compile(r"^([^=]+)=(.*)$")
 _EXT_RE = re.compile(r"[^/\\]+\.[A-Za-z0-9]{1,8}$")
 _PLAIN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -91,6 +95,23 @@ PII_NAME_PREFIXES = frozenset({"first", "last", "full", "given", "family",
 PII_PHRASES = (("date", "of", "birth"), ("birth", "date"), ("ip", "address"),
                ("card", "number"), ("account", "number"), ("national", "id"),
                ("postal", "code"))
+# Who did something: a person, so personal data (finding: names in
+# `assignee`). Not applied to id-named columns (customer_id is a key).
+ROLE_WORDS = frozenset({"assignee", "author", "owner", "reviewer",
+                        "requester", "approver", "creator", "editor",
+                        "recipient", "sender", "customer", "client",
+                        "patient", "employee", "user", "contact", "member",
+                        "manager", "cell", "tel", "ipv4", "ipv6"})
+ROLE_PHRASES = (("created", "by"), ("updated", "by"), ("modified", "by"),
+                ("assigned", "to"), ("submitted", "by"))
+NOT_PERSONAL_LAST = frozenset({"type", "kind", "count", "file", "files",
+                               "status", "flag", "verified", "sent", "opened",
+                               "format", "template", "domain", "agent"})
+PLACE_WORDS = frozenset({"city", "town", "county", "district", "place",
+                         "location", "product", "brand", "company", "team",
+                         "department", "store", "vendor", "merchant",
+                         "organization", "org", "site", "venue", "stadium",
+                         "college", "school", "university", "airport"})
 STATUS_WORDS = frozenset({"status", "state", "stage", "outcome", "result",
                           "disposition", "lifecycle"})
 CATEGORY_WORDS = STATUS_WORDS | frozenset({"type", "kind", "category",
@@ -325,7 +346,12 @@ def resolve_sources(root: str, sources: list[str], conts) -> list[tuple]:
     InitFromError naming every source that is missing or outside."""
     out, problems = [], []
     for src in sources:
+        # A relative path is looked up in the project folder first, then
+        # in the current folder (`truequery init proj --from data`).
         absolute = os.path.abspath(src)
+        in_project = os.path.join(os.path.abspath(root), src)
+        if not os.path.isabs(src) and os.path.exists(in_project):
+            absolute = os.path.abspath(in_project)
         if not os.path.exists(absolute):
             problems.append(f"{src}: no such file or folder")
             continue
@@ -345,15 +371,22 @@ def resolve_sources(root: str, sources: list[str], conts) -> list[tuple]:
 
 # -- finding and grouping files ----------------------------------------------
 
-def _walk(real: str):
+def _walk(real: str, links: list[str]):
+    """Files under `real`, sorted. A linked folder isn't followed: its path
+    goes into `links`, so the output can say it wasn't read."""
     if os.path.isfile(real):
         yield real
         return
     for dirpath, dirnames, filenames in os.walk(real):
-        dirnames[:] = sorted(
-            d for d in dirnames
-            if not d.startswith(".") and d not in SKIP_DIRS
-            and not os.path.islink(os.path.join(dirpath, d)))
+        kept = []
+        for d in sorted(dirnames):
+            if d.startswith(".") or d in SKIP_DIRS:
+                continue
+            if os.path.islink(os.path.join(dirpath, d)):
+                links.append(os.path.join(dirpath, d))
+                continue
+            kept.append(d)
+        dirnames[:] = kept
         for name in sorted(filenames):
             if not name.startswith("."):
                 yield os.path.join(dirpath, name)
@@ -383,7 +416,8 @@ def collect(sources: list[tuple]) -> dict:
     capped = False
     count = 0
     for src, real_src, base, folder in sources:
-        for path in _walk(real_src):
+        links: list[str] = []
+        for path in _walk(real_src, links):
             real = os.path.realpath(path)
             fmt, reason = _suffix(os.path.basename(path))
             if not fmt and not reason:
@@ -437,6 +471,11 @@ def collect(sources: list[tuple]) -> dict:
                       "ext": ext, "format": fmt, "files": []})
             group["files"].append({"rel": rel, "real": real,
                                    "partitions": partitions})
+        for link in links:
+            shown = _slash(os.path.relpath(link, real_src))
+            skipped.append({"path": f"{src.rstrip('/')}/{shown}",
+                            "reason": "it's a link to a folder, which "
+                                      "isn't followed"})
     for group in groups.values():
         group["files"].sort(key=lambda f: f["rel"])
     return {"groups": [groups[k] for k in sorted(groups)],
@@ -709,7 +748,9 @@ def parquet_sample(files: list[dict], header: list[str],
                 if len(rows) >= limit:
                     more = True
                     break
-                row = dict(zip(header, record))
+                # Each file by its own columns: files of one dataset may
+                # order them differently, or lack one.
+                row = dict(zip(info.get("own_header") or header, record))
                 for key, value in info["partitions"]:
                     row.setdefault(key, value)
                 rows.append(row)
@@ -945,6 +986,45 @@ def is_pii_name(name: str) -> bool:
     return False
 
 
+def _mostly(values: list, test) -> bool:
+    texts = [v for v in values if isinstance(v, str)]
+    return bool(texts) and sum(1 for v in texts if test(v)) * 2 >= len(texts)
+
+
+def _is_phone(text: str) -> bool:
+    if not _PHONE_RE.match(text) or _DATE_LIKE_RE.match(text.strip()):
+        return False
+    digits = sum(ch.isdigit() for ch in text)
+    return 7 <= digits <= 15 and any(ch in text for ch in "+ ()-")
+
+
+def personal_data_reason(name: str, ctype: str | None,
+                         values: list) -> str | None:
+    """Why a column looks like personal data, or None. Text columns only:
+    a boolean `email_sent` or a count `mail_count` isn't personal data."""
+    if ctype not in (None, "string", "path"):
+        return None
+    words = _words(name)
+    by_name = not (set(words) & KEY_WORDS) and not (
+        words and words[-1] in NOT_PERSONAL_LAST)
+    if by_name and (is_pii_name(name) or set(words) & ROLE_WORDS
+                    or any(_has_phrase(words, p) for p in ROLE_PHRASES)):
+        return "by its name"
+    if _looks_like_emails(values):
+        return "its values look like email addresses"
+    if _mostly(values, _is_phone):
+        return "its values look like phone numbers"
+    distinct = {v for v in values if isinstance(v, str)}
+    # `country_name`, `subregion1_name`: the name of a thing, not a person.
+    thing_name = (len(words) >= 2 and words[-1] == "name"
+                  and words[-2] not in PII_NAME_PREFIXES)
+    if (len(distinct) >= 2 and not thing_name
+            and not set(words) & (CATEGORY_WORDS | PLACE_WORDS)
+            and _mostly(sorted(distinct), lambda v: bool(_PERSON_RE.match(v)))):
+        return "its values look like people's names"
+    return None
+
+
 def _looks_like_emails(values: list) -> bool:
     texts = [v for v in values if isinstance(v, str)]
     if not texts:
@@ -970,12 +1050,27 @@ LEADING_UNITS = frozenset({"bytes", "KB", "KiB", "MB", "MiB", "GB", "GiB",
                            "TB", "TiB", "ms", "s", "min", "h", "d"})
 
 
+COUNT_WORDS = frozenset({"count", "cnt", "num", "number", "n"})
+MONEY_WORDS = frozenset({"revenue", "sales", "price", "cost", "amount",
+                         "spend", "profit", "income", "fee", "fees"})
+
+
 def _unit_from_name(name: str) -> str | None:
     """The unit a column's name gives: its last word (`size_gib`), or its
-    first word for sizes and durations (`bytes_saved`)."""
+    first word for sizes and durations (`bytes_saved`). Never for an ID or
+    a count (`kb_article_id`, `tb_count`), and no size unit next to money
+    (`revenue_gb` is Great Britain)."""
     words = _words(name)
-    if not words:
+    if not words or set(words) & (KEY_WORDS | COUNT_WORDS):
         return None
+    unit = _unit_word(words)
+    if unit in UNIT_TWINS or unit == "bytes":
+        if set(words) & MONEY_WORDS:
+            return None
+    return unit
+
+
+def _unit_word(words: list[str]) -> str | None:
     for suffix, unit in UNIT_SUFFIXES:
         if (words[-1],) == suffix:
             return unit
@@ -1106,11 +1201,16 @@ def infer_dataset(ds: dict, root: str, config: dict | None) -> dict:
     for col in names:
         spec: dict = {}
         values = [r.get(col) for r in rows]
+        optional_reason = None
         if fmt == "jsonl":
             present = sum(1 for r in rows if col in r)
             if rows and present < len(rows) and col not in partition_keys:
                 quirks.append(f"{col} is in {_n(present)} of "
                               f"{_plural(len(rows), 'sampled row')}")
+                optional_reason = (f"it's in {_n(present)} of "
+                                   f"{_plural(len(rows), 'sampled row')}")
+        if col in (ds.get("optional") or {}):
+            optional_reason = ds["optional"][col]
         col_fmt = fmt
         if fmt == "parquet" and col not in (ds.get("types") or {}):
             col_fmt = "csv"  # a partition column: text from folder names
@@ -1133,16 +1233,23 @@ def infer_dataset(ds: dict, root: str, config: dict | None) -> dict:
             types[col] = ctype
         if zone is not None:
             spec["time_zone"] = zone
-        pii = is_pii_name(col) or (ctype == "string"
-                                   and _looks_like_emails(prof["non_null"]))
+        reason = personal_data_reason(col, ctype, prof["non_null"])
+        pii = reason is not None
         if pii:
             spec["pii"] = True
             draft_reasons.append(
-                "looks like personal data (by its name or values): keep "
-                "pii: true? Its values are never listed")
+                f"looks like personal data ({reason}): keep pii: true? Its "
+                "values are never listed")
         if ctype == "string" and not pii and _path_like(prof["non_null"], col):
             spec["type"] = "path"
             types[col] = "path"
+        if optional_reason:
+            # Not in every file (or line): empty where it's missing, so
+            # `verify` and the scaffolded reader accept the files without it.
+            spec["nullable"] = True
+            draft_reasons.append(
+                f"{optional_reason}: is it optional (empty where it's "
+                "missing)? Written as nullable: true")
         if draft_reasons:
             spec["status"] = "draft"
         columns[col] = spec
@@ -1215,7 +1322,8 @@ def infer_dataset(ds: dict, root: str, config: dict | None) -> dict:
                 key or []) or col in partition_keys:
             continue
         non_null = profiles[col]["non_null"]
-        distinct = sorted({v for v in non_null if isinstance(v, str)})
+        distinct = sorted({_as_text(v) for v in non_null
+                           if isinstance(v, (str, int, float))})
         if not distinct or len(distinct) > MAX_VALUES or any(
                 len(v) > MAX_VALUE_CHARS for v in distinct):
             continue
@@ -1240,8 +1348,12 @@ def infer_dataset(ds: dict, root: str, config: dict | None) -> dict:
                                          "the file; there may be other values")
         else:
             spec["values"] = distinct
-            comments[(col, "values")] = ("seen in the sample; any other value "
-                                         "fails `truequery verify`")
+            spec["status"] = "draft"
+            comments[(col, "values")] = ("TODO: seen in the sample; are these "
+                                         "all? Any other value fails "
+                                         "`truequery verify`")
+            ask(col, f"values seen in the sample: {shown}. Are these all of "
+                "them? Any other value will fail `truequery verify`")
 
     # One status column with meanings to fill in: it says whether each
     # path's file should exist. Until the meanings are filled in, `verify`
@@ -1278,6 +1390,13 @@ def infer_dataset(ds: dict, root: str, config: dict | None) -> dict:
     return {"name": ds["name"], "contract": contract, "comments": comments,
             "questions": questions, "suggestions": suggestions,
             "notes": list(dict.fromkeys(quirks))}
+
+
+def _as_text(value) -> str:
+    """A scalar as the data reader shows it in text (JSON true is `true`)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value if isinstance(value, str) else str(value)
 
 
 def _currency_values(values: list) -> bool:
@@ -1318,11 +1437,15 @@ def _infer_base(col, prof, spec, ds, root, bases, comments, ask,
     folder_of = dict(folders)
 
     def rel_folder(label):
+        """How a folder is named in a question or comment: relative to the
+        project, or by the base's name alone when it's outside (an absolute
+        path would make the contract differ from machine to machine)."""
         if label == "":
             return "the project folder"
         real = folder_of[label]
-        shown = _slash(os.path.relpath(real, root_real)) if _inside(
-            real, root_real) else _slash(real)
+        if not _inside(real, root_real):
+            return "the data's own folder" if label == "@" else label
+        shown = _slash(os.path.relpath(real, root_real))
         return f"{shown}/" if label == "@" else f"{label} ({shown}/)"
 
     if best_base[0] and best_base[1] and best_base[1] >= others:
@@ -1414,6 +1537,7 @@ def _datasets(collected: dict, not_inferred: list, reader: bool) -> list[dict]:
                 not_inferred.append({"path": label, "reason": head["error"]})
                 continue
             sig = (sig_extra, tuple(head["header"]))
+            info["own_header"] = list(head["header"])  # this file's columns
             heads.setdefault(sig, []).append(info)
             info_by_sig[sig] = head
         sigs = sorted(heads, key=lambda s: heads[s][0]["rel"])
@@ -1483,10 +1607,13 @@ def _merge_heads(cluster: list[tuple], heads: dict, info_by_sig: dict) -> dict:
         merged["types"] = types
     total = sum(len(heads[s]) for s in cluster)
     drift = []
+    optional: dict[str, str] = {}
     for col in header:
         count = sum(len(heads[s]) for s in cluster if col in s[1])
         if count < total:
             drift.append(f"{col} is in {_n(count)} of {_n(total)} files")
+            optional[col] = f"it's in {_n(count)} of {_n(total)} files"
+    merged["optional"] = optional
     if drift:
         merged["drift"] = "; ".join(drift[:5]) + (
             f"; and {len(drift) - 5} more columns differ"
@@ -1538,7 +1665,7 @@ def _dataset(group: dict, members: list[dict], head: dict, path: str,
         location["delimiter"] = head["delimiter"]
     return {"group": group, "files": members, "header": head.get("header"),
             "types": head.get("types"), "delimiter": head.get("delimiter"),
-            "drift": head.get("drift"),
+            "drift": head.get("drift"), "optional": head.get("optional"),
             "location": location, "format": group["format"],
             "partitioned": partitioned, "base": group["base"]}
 
@@ -1653,7 +1780,8 @@ HEADER = [
     "inferred from a sample of the data; nobody has confirmed it yet. The",
     "TODO lines are the questions: answer them in the /truequery init",
     "interview (or edit this file), then remove `status: draft` from what",
-    "you confirmed. The contract stays a draft until the grain is confirmed.",
+    "you confirmed. The contract stays a draft until the grain is confirmed",
+    "and no column is a draft; then delete this comment too.",
 ]
 
 

@@ -177,9 +177,14 @@ def test_the_generated_tests_pass_on_the_pinned_pandas(project):
         timeout=300)
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-2000:]
     passed = re.search(r"(\d+) passed", proc.stdout)
-    # At least the read-back and missing-column tests for each contract
-    # (a Parquet one is skipped without pyarrow).
+    # At least the read-back and missing-column tests for each contract.
     assert passed and int(passed.group(1)) >= 2 * len(every_contract())
+    try:
+        import pyarrow  # noqa: F401  (in the test extra: Parquet runs too)
+    except ImportError:
+        pass
+    else:
+        assert "skipped" not in proc.stdout, proc.stdout[-2000:]
     assert " failed" not in proc.stdout and " error" not in proc.stdout
 
 
@@ -330,3 +335,92 @@ def test_a_partition_column_comes_from_the_folder_name(tmp_path):
     assert str(df["dt"].iloc[0].date()) == "2026-01-02"
     assert df["id"].iloc[0] == "007"
     namespace["check_class_"](df)
+
+
+
+# -- review findings (REVIEW-0.2-E-RESULT.md) --------------------------------
+
+def _module(contract_text: str, path: str = "contracts/c.yaml") -> dict:
+    sp = SC.spec_of(yaml.safe_load(contract_text), path)
+    namespace: dict = {}
+    exec(compile(SC.render_module(sp), "m.py", "exec"), namespace)
+    return namespace
+
+
+ORDERS_CSV = """version: 2
+dataset: orders
+kind: files
+location: {path: data/orders.csv, format: csv}
+grain: one row per order
+keys: [order_id]
+columns:
+  order_id: {type: integer}
+  amount: {type: integer}
+"""
+
+
+def test_a_trailing_delimiter_never_shifts_the_columns(tmp_path):
+    """Finding 2: an Excel-style trailing comma reads right; a real extra
+    field raises instead of moving every column left."""
+    pytest.importorskip("pandas")
+    ns = _module(ORDERS_CSV)
+    path = tmp_path / "orders.csv"
+    path.write_text("order_id,amount\n1,10,\n2,20,\n3,30,\n",
+                    encoding="utf-8")
+    df = ns["read_orders"](path)
+    assert list(df["order_id"]) == [1, 2, 3]
+    assert list(df["amount"]) == [10, 20, 30]
+    ns["check_orders"](df)
+    path.write_text("order_id,amount\n1,10,99\n2,20\n", encoding="utf-8")
+    with pytest.raises(Exception):
+        ns["read_orders"](path)
+    path.write_text("order_id,amount\n1,10\n2,20,99\n", encoding="utf-8")
+    with pytest.raises(Exception):
+        ns["read_orders"](path)
+
+
+@pytest.mark.parametrize("folder", ['odd"""dir',
+                                    'x"""+__import__("os").getcwd()+"""',
+                                    "a\\N"])
+def test_a_contract_path_is_never_code(tmp_path, monkeypatch, folder):
+    """Finding 6: quotes or a backslash in the contract's folder name."""
+    if os.name == "nt" and ('"' in folder or "\\" in folder):
+        pytest.skip("not a valid Windows folder name")
+    target = tmp_path / folder
+    target.mkdir()
+    (target / "c.yaml").write_text(EXTRA["json_doc"], encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    result = SC.plan([os.path.join(folder, "c.yaml")], "out", str(tmp_path))
+    for key in ("module_text", "tests_text"):
+        tree = ast.parse(result[0][key])
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", "") == "__import__"]
+        assert not calls
+        assert ast.get_docstring(tree).count('"""') == 0
+
+
+def test_an_optional_column_a_file_lacks_reads_as_empty(tmp_path):
+    """Finding 4: `nullable: true` columns may be absent from a file."""
+    pd = pytest.importorskip("pandas")
+    ns = _module(ORDERS_CSV + "  boosters: {type: integer, nullable: true}\n")
+    assert ns["OPTIONAL"] == ["boosters"]
+    path = tmp_path / "orders.csv"
+    path.write_text("order_id,amount\n1,10\n", encoding="utf-8")
+    df = ns["read_orders"](path)
+    assert pd.isna(df["boosters"].iloc[0])
+    path.write_text("amount\n10\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing column"):
+        ns["read_orders"](path)  # a key column is never optional
+
+
+def test_a_lowercase_z_is_utc(tmp_path):
+    """Finding 12: `init --from` takes `z` as UTC; so does the reader."""
+    pytest.importorskip("pandas")
+    ns = _module(EXTRA["jsonl_events"].replace(
+        '"local:Europe/Prague"', "UTC"))
+    path = tmp_path / "e.jsonl"
+    path.write_text('{"source": "web", "seq": 1, "ok": true, '
+                    '"seen_at": "2026-10-01T08:00:00z", "note": "a"}\n',
+                    encoding="utf-8")
+    df = ns["read_jsonl_events"](path)
+    assert str(df["seen_at"].dt.tz) == "UTC"

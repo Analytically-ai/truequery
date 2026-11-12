@@ -74,14 +74,14 @@ question has `status: draft` and a `# TODO` comment.
 
 | From | It writes |
 |---|---|
-| Folder layout | One dataset per folder of files that share a header: a glob (`logs/fetch/*.csv`), the format, and partition keys from `key=value/` folders (`events/dt=*/*.csv`, `partition_key: dt`). Files with different headers in one folder become separate datasets. The dataset is named after the folder, or the file |
+| Folder layout | One dataset per folder of files that share a header: a glob (`logs/fetch/*.csv`), the format, and partition keys from `key=value/` folders (`events/dt=*/*.csv`, `partition_key: dt`). Files in one folder whose headers share at least half their columns are one dataset (files drift: a column added one month); a column some files lack is written `nullable: true` as a question. Files with mostly different headers become separate datasets. The dataset is named after the folder, or the file |
 | CSV text | Column types: `integer`, `number`, `boolean`, `date`, `timestamp`, `string`. A number with leading zeros (`007`) or more than 18 digits is a `string`, so it isn't read as a number. A number with a decimal comma (`1,5`) stays a `string`. A delimiter other than a comma is recorded (`location.delimiter`) |
 | Timestamps | All marked `Z` or `+00:00`: `time_zone: UTC`. None marked: `time_zone: naive`, a question. A mix: no `time_zone`, a question and the counts in `quirks` |
 | Keys | The first column (an `id`-named one first), or else the first pair of columns, that is unique and never empty in the sample. The grain stays `TODO …` until someone confirms it |
-| Low-cardinality text | Up to 20 distinct values as `values`, when the column is named like a category (`status`, `type`, `region`, …) or its values repeat (on average twice or more in the sample), and it isn't an `id`-named column. A status-like column (`status`, `state`, `outcome`, …) in a dataset with a path column gets `means: TODO` for each value, and the path column gets `status_column`, so `truequery verify` reports those rows as "not judged" until the meanings are filled in |
-| Column names | Units, flagged for confirmation, from the name's last word (or its first, for sizes and durations: `bytes_saved`): `_bytes`, `_kb`/`_kib` … `_tb`/`_tib`, `_ms`, `_seconds`, `_minutes`, `_hours`, `_days`, `_pct`, `_bps`, `_ratio`, and `_cents` (with a currency column, `unit: minor` and `currency_column`). Never from the size of the values. Bytes or cents written with a decimal point (`1.00`) become a question instead |
+| Low-cardinality text | Up to 20 distinct values as `values`, when the column is named like a category (`status`, `type`, `region`, …) or its values repeat (on average twice or more in the sample), and it isn't an `id`-named column. The list is a draft with a question ("are these all of them?"): any other value fails `truequery verify`. A status-like column (`status`, `state`, `outcome`, …) in a dataset with a path column gets `means: TODO` for each value, and the path column gets `status_column`, so `truequery verify` reports those rows as "not judged" until the meanings are filled in |
+| Column names | Units, flagged for confirmation, from the name's last word (or its first, for sizes and durations: `bytes_saved`), never for an ID or a count (`kb_article_id`, `tb_count`) or a size next to money (`revenue_gb`): `_bytes`, `_kb`/`_kib` … `_tb`/`_tib`, `_ms`, `_seconds`, `_minutes`, `_hours`, `_days`, `_pct`, `_bps`, `_ratio`, and `_cents` (with a currency column, `unit: minor` and `currency_column`). Never from the size of the values. Bytes or cents written with a decimal point (`1.00`) become a question instead |
 | Path columns | `type: path`. Sampled paths are looked up (read-only, never outside the folder) under each base declared in `DATA.md`, the project folder and the data's own folder. `relative_to` is written only for a declared base that finds the most of them; otherwise the output suggests a base. When every path starts with the base folder's own name, it says so: that's the wrong-base error |
-| Personal data | A column named like personal data (`email`, `phone`, `name`, `first_name`, `address`, `date_of_birth`, …) or holding email addresses gets `pii: true` as a draft. Its values are never written to the contract or printed |
+| Personal data | A text column gets `pii: true` as a draft when its name says so (`email`, `phone`, `name`, `first_name`, `address`, `date_of_birth`, or a person's role: `assignee`, `author`, `owner`, `customer`, `created_by`, `cell`, …; not an `id`-named column) or its values look like email addresses, phone numbers (`+1 415 555 0100`) or people's names (two or three capitalised words, outside place and category columns). Its values are never written to the contract or printed. Name detection by value can't be complete: check the columns it lists |
 
 The sample is the first 2,000 rows of each dataset (files in sorted
 order), and at most 64 MB of text; a line over 1 MB stops the sample. A
@@ -96,10 +96,13 @@ every OS.
 ### What it never does
 
 - **Overwrite a contract.** A dataset whose name or location already has a
-  contract is listed as kept.
+  contract is listed as kept. `--force` (which rewrites `DATA.md`) can't be
+  combined with `--from`.
 - **Read outside the project.** A path outside the project folder, and
   outside every base declared in `DATA.md`, is refused before anything is
-  written. A file that links out of the folder is listed as not read.
+  written. A file that links out of the folder, or a linked folder, is
+  listed as not read. A relative `--from` path is looked up in the project
+  folder first, then in the current folder.
 - **Write a contract that doesn't validate.** Every draft passes
   `truequery contract validate`.
 - **Read your docs.** READMEs and data dictionaries aren't read yet, so no
@@ -149,7 +152,10 @@ For each contract (version 2, with columns) it writes:
     (an ID like `007` stays text), only empty fields as missing (`NA` and
     `null` stay text), timestamps parsed in the declared zone (a naive value
     in a UTC column raises instead of being read as UTC), and partition
-    columns from `key=value` folders;
+    columns from `key=value` folders. A CSV row with more fields than the
+    header raises instead of shifting the columns (a trailing comma is
+    fine), and a `nullable: true` column (not a key) that a file lacks is
+    read as empty;
   - `coerce_<dataset>(df)`: the same types for a frame read some other way
     (for a `kind: table` contract, there's no file reader);
   - `check_<dataset>(df)`: raises `ValueError` naming every column missing,

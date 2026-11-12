@@ -59,8 +59,10 @@ lists files (`kind: files`, `location: {path: logs/*.csv, format: csv}`;
 CSV, JSONL, JSON or Parquet) or names a database file
 (`kind: table`, `location: {database: app.sqlite, relation: users}`; SQLite
 or DuckDB). A CSV separated by something other than a comma says so:
-`delimiter: ";"` (or a tab, or `|`) in its `location`. From what the
-contract declares:
+`delimiter: ";"` (or a tab, or `|`) in its `location`. The files of one
+dataset are matched by column name, so a file that lacks a column (or
+orders them differently) is read too; a missing column reads as empty.
+From what the contract declares:
 
 | The contract says | `verify` checks |
 |---|---|
