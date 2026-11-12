@@ -10,6 +10,14 @@ only (steps 1–5) — for scripts and CI.
    dialect (dbt `profiles.yml`, SQLMesh config, else auto) and writes
    `DATA.md` with mode globs, plus `contracts/` seeds from schema YAML
    if any.
+   **Data files and no contracts for them** (`.csv`, `.tsv`, `.jsonl`,
+   `.parquet` in the repo, and no contract whose `location` covers them):
+   run `truequery init --from <the folders that hold them>` instead. It
+   also writes draft contracts (`status: draft`, with `inferred_from`):
+   types, keys, time zones, status values, units and path bases from a
+   2,000-row sample, read as text. It never writes over a contract and
+   refuses paths outside the project or a declared base. Its output lists
+   the open questions; keep them for step 6.
 2. Read back `DATA.md`. Fill in owners, layer conventions and SLAs —
    the generator leaves TODO markers, never invented facts.
 3. For each seeded contract, confirm grain and keys with the team or
@@ -41,11 +49,27 @@ only (steps 1–5) — for scripts and CI.
    toward the five: when (a)–(e) are all still open, don't ask it; end
    init with one line offering the data reader instead. In a
    non-interactive session, run neither command: nobody answered.
+   After `init --from`, the interview asks only what it couldn't settle,
+   from its question list and the `# TODO` lines in the drafts: the grain
+   and key, what each `means: TODO` status value means for the file
+   (`present`, `absent_expected`, `absent_unexpected`), the zone of
+   `time_zone: naive` or mixed timestamps, a unit taken from a column's
+   name (GB or GiB?), a path base, and `pii: true` guesses. These replace
+   (b)–(e) where they overlap; group them per dataset, and when there are
+   more than the five slots, ask the ones that change results first
+   (statuses, zones, units) and list the rest as open in the output.
+   A confirmed answer goes into the contract and removes that column's
+   `status: draft` and its `# TODO` comment; an unanswered one stays a
+   draft. Never fill a `means`, zone or unit the user didn't confirm.
+   A `values` list read from the sample is a draft too: ask whether it's
+   complete before it becomes a rule. Remove the contract's own `status:
+   draft` (and the header comment `init --from` wrote) only when the grain
+   and keys are confirmed and no column is still a draft.
    Write the answers into `DATA.md` as house definitions, into
    `contracts/*.yaml` (`version: 2`), and into `metrics/*.yaml` where
    they define a governed metric, then run `truequery contract validate`.
    In a non-interactive session, record the defaults as assumptions
-   instead and say so.
+   instead and say so; leave `init --from` drafts as drafts.
 
 7. Updates. TrueQuery ships improvements often, and Claude Code doesn't
    auto-update third-party plugins unless asked. Tell the user once, in
@@ -58,5 +82,6 @@ only (steps 1–5) — for scripts and CI.
    Skip this step when TrueQuery was installed from a local clone: there,
    `git pull` is the update.
 
-Output: `DATA.md` + `contracts/` present, house definitions recorded,
-baseline receipt quoted, the update setting explained.
+Output: `DATA.md` + `contracts/` present (drafts named as drafts, with
+their open questions), house definitions recorded, baseline receipt
+quoted, the update setting explained.

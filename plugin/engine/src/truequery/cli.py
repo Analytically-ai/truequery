@@ -42,6 +42,7 @@ VERIFY_EXIT_HELP = (
     "with --allow-unverified.")
 
 FAIL_LEVELS = ("error", "warning", "advisory")
+SCAFFOLD_OUT = "pipeline"  # truequery scaffold --out default
 
 
 def _dump(args, text: str, json_doc: str, sarif_doc: str) -> None:
@@ -349,6 +350,23 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 def cmd_init(args: argparse.Namespace) -> int:
     root = os.path.abspath(args.path or ".")
+    drafts = None
+    if args.from_paths and args.force:
+        # --force rewrites DATA.md, dropping its `bases:`, which the drafts
+        # would point at: they'd fail `truequery contract validate`.
+        print("truequery: init: --force and --from can't be used together "
+              "(--force rewrites DATA.md and would drop the bases the drafts "
+              "use). Run `truequery init --force` first, then `--from`",
+              file=sys.stderr)
+        return EXIT_ERROR
+    if args.from_paths:
+        from truequery import initfrom  # not loaded by hooks
+        try:
+            # Every source is checked before anything is written.
+            drafts = initfrom.plan(root, args.from_paths)
+        except (initfrom.InitFromError, P.ContextError, ValueError) as exc:
+            print(f"truequery: init --from: {exc}", file=sys.stderr)
+            return EXIT_ERROR
     stack = P.detect_stack(root)
     dialect = P.detect_dialect(root, stack)
     config = P.default_config(stack, dialect)
@@ -368,6 +386,10 @@ def cmd_init(args: argparse.Namespace) -> int:
         wrote.append(path)
     summary = {"stack": stack, "dialect": dialect, "wrote": wrote,
                "kept": kept}
+    drafted: list[str] = []
+    if drafts is not None:
+        drafted = initfrom.write(root, drafts)
+        summary["from"] = initfrom.public(drafts, drafted)
     if args.sarif:
         print(RP.render_sarif([], ENGINE_VERSION))
     elif args.json:
@@ -379,6 +401,38 @@ def cmd_init(args: argparse.Namespace) -> int:
             print(f"kept existing {path} (use --force to overwrite)")
         print(f"init: stack={stack} dialect={dialect or 'auto'} "
               f"({len(wrote)} wrote, {len(kept)} kept)")
+        if drafts is not None:
+            for line in initfrom.render_text(drafts, drafted):
+                print(line)
+    return EXIT_CLEAN
+
+
+def cmd_scaffold(args: argparse.Namespace) -> int:
+    from truequery import scaffold as SC  # not loaded by hooks
+    root = os.path.abspath(".")
+    try:
+        result = SC.plan(args.contracts, args.out, root)
+        written = SC.write(result, args.force)
+    except SC.ScaffoldError as exc:
+        print(f"truequery: scaffold: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if args.json:
+        print(json.dumps({"written": [P._rel(os.path.abspath(p), root)
+                                      for p in written],
+                          "contracts": [{"contract": r["contract"],
+                                         "dataset": r["dataset"],
+                                         "draft": r["draft"]}
+                                        for r in result]},
+                         indent=2, sort_keys=True))
+        return EXIT_CLEAN
+    for item in result:
+        note = " (from a draft contract: confirm it, then regenerate)" \
+            if item["draft"] else ""
+        for key in ("module", "tests"):
+            print(f"wrote {P._rel(os.path.abspath(item[key]), root)}{note}")
+    print(f"scaffold: {RP._plural(len(result), 'contract')}. Write the "
+          "transform between read_<dataset>() and check_<dataset>(); run "
+          "the tests with pytest")
     return EXIT_CLEAN
 
 
@@ -969,15 +1023,38 @@ def build_parser() -> argparse.ArgumentParser:
     p_sdata.set_defaults(func=cmd_setup)
 
     p_init = sub.add_parser(
-        "init", help="detect stack/dialect; write DATA.md; seed contracts/")
+        "init", help="detect stack/dialect; write DATA.md; seed contracts/ "
+                     "(--from: draft contracts from data files)")
     p_init.add_argument("path", nargs="?", default=".",
                         help="project root (default .)")
     p_init.add_argument("--force", action="store_true",
                         help="rewrite DATA.md (contracts are never "
                              "overwritten)")
+    p_init.add_argument("--from", dest="from_paths", nargs="+", default=None,
+                        metavar="PATH",
+                        help="also write draft contracts (version 2, status: "
+                             "draft) from the CSV, JSONL and Parquet files "
+                             "in these files or folders; they must be inside "
+                             "the project or a base declared in DATA.md. A "
+                             "relative path is looked up in the project "
+                             "folder first, then in the current folder")
     p_init.add_argument("--json", action="store_true")
     p_init.add_argument("--sarif", action="store_true")
     p_init.set_defaults(func=cmd_init)
+
+    p_scaffold = sub.add_parser(
+        "scaffold", help="generate a pipeline's boundaries in plain pandas "
+                         "from contracts: typed readers, output checks, "
+                         "pytest tests")
+    p_scaffold.add_argument("contracts", nargs="+", metavar="CONTRACT",
+                            help="contract files (or dataset names in "
+                                 "contracts/); version 2, with columns")
+    p_scaffold.add_argument("--out", default=SCAFFOLD_OUT, metavar="DIR",
+                            help=f"where to write (default: {SCAFFOLD_OUT})")
+    p_scaffold.add_argument("--force", action="store_true",
+                            help="replace files a previous scaffold wrote")
+    p_scaffold.add_argument("--json", action="store_true")
+    p_scaffold.set_defaults(func=cmd_scaffold)
 
     p_context = sub.add_parser(
         "context", help="DATA.md summary + referenced contracts + directives")

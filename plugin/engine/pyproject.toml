@@ -41,7 +41,10 @@ Issues = "https://github.com/Analytically-ai/truequery/issues"
 data = ["duckdb>=1.2.0"]
 # pandas and numpy run the pandas proofs in the tests (pinned: the
 # versions the proofs were checked against). Never a runtime dependency.
-test = ["duckdb>=1.2.0", "pytest", "pandas==3.1.0", "numpy==2.4.6", "jsonschema"]
+# pyarrow runs the Parquet half of `truequery scaffold`'s generated tests
+# (pandas writes and reads Parquet with it); without it they're skipped.
+test = ["duckdb>=1.2.0", "pytest", "pandas==3.1.0", "numpy==2.4.6", "jsonschema",
+        "pyarrow==26.0.1"]
 
 [project.scripts]
 truequery = "truequery.cli:main"

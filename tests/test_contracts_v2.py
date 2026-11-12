@@ -1048,6 +1048,31 @@ NON_JSON_SCHEMA_CONTRACT_CASES = {
     ),
 }
 
+NON_JSON_SCHEMA_CONTRACT_CASES["draft_column_in_confirmed_contract"] = (
+    {"version": 2, "dataset": "orders", "grain": "one row", "keys": ["id"],
+     "columns": {"id": {"type": "string", "status": "draft"}}},
+    "columns.id.status is draft, so the contract is a draft too",
+)
+
+
+def test_v2_column_status_and_csv_delimiter_are_accepted():
+    doc = {"version": 2, "dataset": "x", "kind": "files", "status": "draft",
+           "inferred_from": "a sample", "grain": "TODO: per id",
+           "keys": ["id"],
+           "location": {"path": "a.csv", "format": "csv", "delimiter": ";"},
+           "columns": {"id": {"type": "string", "status": "draft"},
+                       "v": {"type": "string", "status": "confirmed"}}}
+    assert C2.validate_contract_v2(doc, "x.yaml")["columns"]["id"][
+        "status"] == "draft"
+    for delim in C2.CSV_DELIMITERS:
+        doc["location"]["delimiter"] = delim
+        C2.validate_contract_v2(doc, "x.yaml")
+    doc["location"] = {"path": "a.parquet", "format": "parquet",
+                       "delimiter": ","}
+    with pytest.raises(ValueError, match="delimiter is only for format: csv"):
+        C2.validate_contract_v2(doc, "x.yaml")
+
+
 NON_JSON_SCHEMA_METRIC_CASES = {
     "where_sql_ast_function": (
         {"version": 1, "metric": "m", "kind": "simple", "dataset": "d",
@@ -1213,6 +1238,15 @@ def test_published_json_schemas_with_real_jsonschema_validator():
                             "currency": "USD", "currency_column": "c"}}},
         {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
          "columns": {"id": {"relative_to": "root"}}},
+        {"version": 2, "dataset": "x", "grain": "g", "keys": ["id"],
+         "columns": {"id": {"type": "string", "status": "maybe"}}},
+        {"version": 2, "dataset": "x", "kind": "files",
+         "location": {"path": "a.csv", "format": "csv", "delimiter": ":"},
+         "grain": "g", "keys": ["id"]},
+        {"version": 2, "dataset": "x", "kind": "files",
+         "location": {"path": "a.jsonl", "format": "jsonl",
+                      "delimiter": ";"},
+         "grain": "g", "keys": ["id"]},
     ]
     for bad in schema_rejected_contracts:
         assert not c_validator.is_valid(bad), f"expected schema to reject: {bad}"
