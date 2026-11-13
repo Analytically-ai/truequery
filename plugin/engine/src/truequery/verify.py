@@ -40,6 +40,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 from typing import Any
 
 from sqlglot import exp
@@ -386,6 +387,80 @@ def resolve_path_within_base(row_path: str, real_base: str,
         if cur is None:
             return None
     return cur
+
+
+def without_base_name(row_path: str, real_base: str,
+                      name: str | None = None) -> str | None:
+    """`row_path` with its first folder removed when that folder has the
+    base folder's own name (`data/2026/x.warc` under a base `…/data`), or
+    None when it doesn't start that way. The wrong-base pattern: whatever
+    wrote the path added the base folder twice. Text only: nothing on disk
+    is looked at. `\\` counts as `/`, as in `resolve_path_within_base`."""
+    if not isinstance(row_path, str):
+        return None
+    if name is None:
+        name = os.path.basename(os.path.normpath(real_base))
+    head, sep, rest = row_path.strip().replace("\\", "/").partition("/")
+    rest = rest.lstrip("/")
+    if not name or not sep or head != name or not rest:
+        return None
+    return rest
+
+
+def found_without_base_name(row_path: str, real_base: str,
+                            cache: dict | None = None) -> bool:
+    """True when `row_path` starts with the base folder's own name and the
+    file is there once that name is removed. Looked up only inside
+    `real_base`, as `resolve_path_within_base` does; a link out is refused
+    (False), never followed."""
+    if cache is None:
+        cache = {}
+    own = cache.get(("base_name", real_base))
+    if own is None:
+        own = cache[("base_name", real_base)] = os.path.basename(
+            os.path.normpath(real_base))
+    rest = without_base_name(row_path, real_base, own)
+    if rest is None or "\x00" in rest:
+        return False
+    folder, _, name = rest.rpartition("/")
+    if (name in ("", ".", "..", "~") or name.startswith("~")
+            or (not folder and re.match(r"^[A-Za-z]:", name))):
+        return False
+    base_real = cache.get(("base", real_base))
+    if base_real is None:
+        base_real = cache[("base", real_base)] = os.path.realpath(real_base)
+    # The folder is resolved once per check (a big log has a few hundred
+    # folders and a million files), with the same rules as any path: a
+    # link out, `..` or `~` is refused. A folder that isn't there settles
+    # every file in it without touching the disk again.
+    key = ("without_base_name", base_real, folder)
+    if key in cache:
+        parent = cache[key]
+    else:
+        parent = base_real
+        if folder:
+            parent = resolve_path_within_base(folder, base_real, cache)
+            if parent is not None and not os.path.isdir(parent):
+                parent = None
+        if len(cache) > PATH_CACHE_LIMIT:  # bounded memory
+            cache.clear()
+            cache[("base", real_base)] = base_real
+            cache[("base_name", real_base)] = own
+        cache[key] = parent
+    if parent is None:
+        return False
+    if os.name != "posix":  # junctions: always through realpath
+        target = _resolve_one(base_real, parent, name)
+        return target is not None and os.path.exists(target)
+    candidate = os.path.join(parent, name)
+    try:
+        mode = os.lstat(candidate).st_mode
+    except OSError:
+        return False
+    if not stat.S_ISLNK(mode):
+        return True
+    target = _resolve_one(base_real, parent, name)  # a link: inside only
+    return target is not None and os.path.exists(target)
 
 
 def _resolve_one(base_real: str, parent_real: str, part: str) -> str | None:
@@ -1042,10 +1117,14 @@ def _run_filesystem_assertion(
         failed_count = 0
         escaped_count = 0
         wrong_base_count = 0
+        doubled_count = 0  # start with the base folder's own name
         present_checked = 0
         present_existing = 0
+        present_doubled = 0
         present_unflagged_keys: list[Any] = []
         sample_keys: list[Any] = []
+        escaped_keys: list[Any] = []
+        doubled_keys: list[Any] = []
         paths_compared = 0
         for row in rows:
             raw_path = row[pk_len]
@@ -1059,25 +1138,40 @@ def _run_filesystem_assertion(
             )
             means = status_means.get(status_val) if status_val is not None else None
             # Step 1: containment check — NEVER stat/exists a path that escapes real_base
+            # This check alone reports a path outside the base (every row, any
+            # status): `exists_per_status` leaves those rows to it.
             real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
             if real_target is None:
                 failed_count += 1
                 escaped_count += 1
-                if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
-                    sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
+                if pk_len and not pii_redacted and len(escaped_keys) < MAX_SAMPLE_KEYS:
+                    escaped_keys.append(_format_sample_key(tuple(row[:pk_len])))
                 continue
             # Step 2: for paths without a status lifecycle (or when zero `present`
             # rows exist under `real_base`), flag wrong base resolution.
             if status_col is None:
                 if not os.path.exists(real_target):
                     failed_count += 1
-                    wrong_base_count += 1
-                    if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
-                        sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
+                    keys_to = sample_keys
+                    if found_without_base_name(str(raw_path), real_base,
+                                               path_cache):
+                        doubled_count += 1
+                        keys_to = doubled_keys
+                    else:
+                        wrong_base_count += 1
+                    if pk_len and not pii_redacted and len(keys_to) < MAX_SAMPLE_KEYS:
+                        keys_to.append(_format_sample_key(tuple(row[:pk_len])))
             elif means == "present":
                 present_checked += 1
                 if os.path.exists(real_target):
                     present_existing += 1
+                elif (not present_existing and not present_doubled
+                      and found_without_base_name(str(raw_path), real_base,
+                                                  path_cache)):
+                    # The files are under this base; only the paths carry
+                    # its name twice. `exists_per_status` names that. (Asked
+                    # only while it can still decide the wrong-base rule.)
+                    present_doubled += 1
                 else:
                     present_unflagged_keys.append(
                         _format_sample_key(tuple(row[:pk_len])) if pk_len else None
@@ -1086,7 +1180,8 @@ def _run_filesystem_assertion(
         # If `rel_to` was declared and `present` rows were checked and NOT ONE
         # resolved under `real_base`, the base directory itself does not match
         # the data's paths.
-        if rel_to and present_checked > 0 and present_existing == 0 and present_unflagged_keys:
+        if (rel_to and present_checked > 0 and present_existing == 0
+                and not present_doubled and present_unflagged_keys):
             failed_count += len(present_unflagged_keys)
             wrong_base_count += len(present_unflagged_keys)
             if pk_len and not pii_redacted:
@@ -1094,6 +1189,8 @@ def _run_filesystem_assertion(
                     if len(sample_keys) < MAX_SAMPLE_KEYS:
                         sample_keys.append(k)
 
+        # the rest first, then outside the base, then doubled
+        sample_keys = sample_keys + escaped_keys + doubled_keys
         passed = failed_count == 0
         msg = (
             f"paths in {col_name!r} resolve under {base_label}{s_suffix}"
@@ -1113,7 +1210,15 @@ def _run_filesystem_assertion(
             "details": {
                 "base": base_label,
                 "escaped_count": escaped_count,
+                "escaped_sample_keys": escaped_keys,
                 "unresolved_base_count": wrong_base_count,
+                "doubled_base_count": doubled_count,
+                "doubled_sample_keys": doubled_keys,
+                "base_name": os.path.basename(os.path.normpath(real_base)),
+                # with a status column, each file is judged by
+                # `exists_per_status`; this check proves containment (and
+                # that the base isn't wrong for every row)
+                "by_status": bool(status_col),
                 "compared": paths_compared,
             },
             "provenance_note": prov_note,
@@ -1124,15 +1229,21 @@ def _run_filesystem_assertion(
         status_means = params.get("status_means") or {}
         failed_count = 0
         present_missing = 0
-        unexpected_absent = 0
-        escaped_count = 0
+        doubled_count = 0  # present, but the path repeats the base's name
+        outside_count = 0  # not judged: `path_resolves` reports them
         absent_expected_count = 0
         absent_expected_statuses: set[str] = set()
+        # `means` says what an absence means, not whether verify fails:
+        # a status that means a failure (absent_unexpected) with no file is
+        # what the status says, so it's counted and reported, never failed.
+        absent_unexpected_count = 0
+        absent_unexpected_statuses: set[str] = set()
         todo_statuses: set[str] = set()
         todo_rows = 0
         present_compared = 0
         failure_compared = 0
         sample_keys = []
+        doubled_keys = []
 
         for row in rows:
             raw_path = row[pk_len]
@@ -1151,23 +1262,27 @@ def _run_filesystem_assertion(
             if not has_path:
                 exists = False
             else:
-                # Never touch the filesystem if the row path escapes `real_base`;
-                # count the escaping path as a failure of `exists_per_status`.
+                # Never touch the filesystem if the row path escapes `real_base`.
+                # `path_resolves` reports it (once, with its own fix); here the
+                # row isn't judged.
                 real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
                 if real_target is None:
-                    failed_count += 1
-                    escaped_count += 1
-                    if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
-                        sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
+                    outside_count += 1
                     continue
                 exists = os.path.exists(real_target)
             if means == "present":
                 present_compared += 1
                 if not exists:
                     failed_count += 1
-                    present_missing += 1
-                    if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
-                        sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
+                    keys_to = sample_keys
+                    if has_path and found_without_base_name(
+                            str(raw_path), real_base, path_cache):
+                        doubled_count += 1
+                        keys_to = doubled_keys
+                    else:
+                        present_missing += 1
+                    if pk_len and not pii_redacted and len(keys_to) < MAX_SAMPLE_KEYS:
+                        keys_to.append(_format_sample_key(tuple(row[:pk_len])))
             elif means == "absent_expected":
                 if not exists:
                     absent_expected_count += 1
@@ -1175,32 +1290,30 @@ def _run_filesystem_assertion(
             elif means == "absent_unexpected":
                 failure_compared += 1
                 if not exists:
-                    failed_count += 1
-                    unexpected_absent += 1
-                    if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
-                        sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
+                    absent_unexpected_count += 1
+                    absent_unexpected_statuses.add(sval)
 
+        sample_keys = sample_keys + doubled_keys  # the doubled ones last
         passed = failed_count == 0
-        absent_note = ""
+        notes = []
         if absent_expected_count:
-            statuses_str = ", ".join(sorted(absent_expected_statuses))
-            absent_note = (
-                f" ({absent_expected_count} rows absent as expected: "
-                f"{statuses_str})"
-            )
+            notes.append(f"{absent_expected_count} rows absent as expected: "
+                         + ", ".join(sorted(absent_expected_statuses)))
+        if absent_unexpected_count:
+            notes.append(f"{absent_unexpected_count} rows whose status means "
+                         "a failure, with no file: "
+                         + ", ".join(sorted(absent_unexpected_statuses)))
+        absent_note = f" ({'; '.join(notes)})" if notes else ""
         if passed:
             msg = f"file existence matches status in {col_name!r}{absent_note}{s_suffix}"
         else:
             bits = []
             if present_missing:
                 bits.append(f"{present_missing} 'present' row(s) missing on disk")
-            if unexpected_absent:
+            if doubled_count:
                 bits.append(
-                    f"{unexpected_absent} 'absent_unexpected' row(s) missing on disk"
-                )
-            if escaped_count:
-                bits.append(
-                    f"{escaped_count} path(s) escape base {base_label!r}"
+                    f"{doubled_count} 'present' path(s) start with the base "
+                    "folder's own name; the files are there without it"
                 )
             msg = "; ".join(bits) + absent_note + s_suffix
 
@@ -1215,14 +1328,21 @@ def _run_filesystem_assertion(
             "message": msg,
             "details": {
                 "present_missing": present_missing,
-                "absent_unexpected": unexpected_absent,
-                "escaped_count": escaped_count,
+                "doubled_base_count": doubled_count,
+                "doubled_sample_keys": doubled_keys,
+                "base": base_label,
+                "base_name": os.path.basename(os.path.normpath(real_base)),
+                "outside_base_not_judged": outside_count,
                 "absent_expected_count": absent_expected_count,
                 "absent_expected_statuses": sorted(absent_expected_statuses),
+                "absent_unexpected_count": absent_unexpected_count,
+                "absent_unexpected_statuses": sorted(absent_unexpected_statuses),
                 "unconfirmed_todo_statuses": sorted(todo_statuses),
                 "unconfirmed_todo_rows": todo_rows,
                 "present_compared": present_compared,
-                "compared": present_compared + failure_compared,
+                "failure_compared": failure_compared,
+                # only `present` rows are judged; the rest are counted
+                "compared": present_compared,
             },
             "provenance_note": prov_note,
         }

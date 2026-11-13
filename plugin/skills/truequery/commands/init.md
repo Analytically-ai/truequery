@@ -52,7 +52,10 @@ only (steps 1–5) — for scripts and CI.
    After `init --from`, the interview asks only what it couldn't settle,
    from its question list and the `# TODO` lines in the drafts: the grain
    and key, what each `means: TODO` status value means for the file
-   (`present`, `absent_expected`, `absent_unexpected`), the zone of
+   (is it there: `present`; absent on purpose: `absent_expected`; or
+   absent because something went wrong: `absent_unexpected`. Only a
+   missing `present` file fails `truequery verify`; the other two are
+   counted), the zone of
    `time_zone: naive` or mixed timestamps, a unit taken from a column's
    name (GB or GiB?), a path base, and `pii: true` guesses. These replace
    (b)–(e) where they overlap; group them per dataset, and when there are

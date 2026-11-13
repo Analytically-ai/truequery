@@ -89,11 +89,16 @@ def orders_csv(root: Path, body: str = "order_id,status\n1,paid\n2,paid\n",
 class TestVerifyCommand:
     def test_reviewer2_projects_broken_fail_fixed_pass(self, tmp_path, capsys):
         expected = {
-            "base": "1 path in local_path doesn't exist under data_root",
+            "base": ("1 path in local_path starts with data/, the base "
+                     "folder's own name, so it points to data/data/…; the "
+                     "file is there without it"),
             "sizes": "2 values of bytes_logged are in GB, the contract says GiB",
             "tz": "2 timestamps in fetched_at aren't UTC",
-            "lifecycle": ("1 file missing where the status says present; 1 "
-                          "file missing where the status means a failure"),
+            # The `failed` row has no file, as its status says: counted, not
+            # failed (`means` says what an absence means, not whether verify
+            # fails). The `fetched` row with no file still fails.
+            "lifecycle": ("1 file missing where the status says present "
+                          "(logs/fetch/*.csv; e.g. key (r1, https://ex.org/5))"),
         }
         for case in R2.CASES:
             broken = R2.build(tmp_path / f"{case}-broken", case, True)
@@ -102,6 +107,7 @@ class TestVerifyCommand:
             assert "Found        " in out and expected[case] in out, out
             assert "fix: " in out
             assert err == ""
+            assert "1 data failure in 1 of 1 dataset read" in out, out
             fixed = R2.build(tmp_path / f"{case}-fixed", case, False)
             code, out, _ = tq(capsys, fixed, "verify", "--now", NOW)
             assert code == 0, out
@@ -112,6 +118,11 @@ class TestVerifyCommand:
                        "--now", NOW)
         assert ("3 rows absent as expected (refetchable, released, "
                 "removed_on_purpose)") in out
+        _, out, _ = tq(capsys, tmp_path / "lifecycle-broken", "verify",
+                       "--now", NOW)
+        assert ("1 row whose status means a failure (failed): no file, as "
+                "the status says") in out, out
+        assert "ex.org/6" not in out  # the failed row isn't a failure
 
     def test_failure_lines_name_the_problem_not_the_assertion(self, tmp_path, capsys):
         orders_csv(tmp_path, "order_id,status\n1,paid\n1,paid\n2,lost\n,paid\n")
@@ -854,8 +865,7 @@ class TestReviewFixes:
         assert "files exist where the status says present" not in out
         assert "(0 files)" not in out
         assert "1 row absent as expected (removed_on_purpose)" in out
-        assert "files per status (no row whose status means present or a " \
-               "failure)" in out
+        assert "files per status (no row whose status says present)" in out
 
     def test_wal_sqlite_leaves_no_files_beside_it(self, tmp_path, capsys):
         import sqlite3

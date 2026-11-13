@@ -1342,7 +1342,8 @@ def infer_dataset(ds: dict, root: str, config: dict | None) -> dict:
             target = path_cols[0] if len(path_cols) == 1 else "the path columns"
             ask(col, f"for each value ({shown}), is the file in {target} "
                 "there (present), absent on purpose (absent_expected), or "
-                "missing by mistake (absent_unexpected)? Values from "
+                "absent because something went wrong (absent_unexpected)? "
+                "Values from "
                 f"{sample_words}: there may be others")
             comments[(col, "values")] = ("TODO: what each value means for "
                                          "the file; there may be other values")
@@ -1464,15 +1465,17 @@ def _infer_base(col, prof, spec, ds, root, bases, comments, ask,
             "project folder or a declared base: which folder are they "
             "relative to?")
         return
-    first_parts = {v.replace("\\", "/").split("/")[0] for v in probes}
-    base_names = {os.path.basename(folder_of[n]): n for n, _ in declared}
-    wrong = (len(first_parts) == 1 and next(iter(first_parts)) in base_names)
+    # The wrong-base pattern, as `verify` reports it: every path starts
+    # with a declared base folder's own name.
+    name = next((n for n, _ in declared
+                 if all(V.without_base_name(v, folder_of[n]) is not None
+                        for v in probes)), None)
     lead = f"{col}: of {_plural(total, 'sampled path')}, " + ", ".join(found)
-    if wrong:
-        name = base_names[next(iter(first_parts))]
+    if name:
+        own = os.path.basename(os.path.normpath(folder_of[name]))
         suggestions.append(
             f"{lead}; none under {rel_folder(name)}. Every path starts with "
-            f"{next(iter(first_parts))}/, the base folder's own name: if they "
+            f"{own}/, the base folder's own name: if they "
             f"are meant to be relative to {name}, whatever writes them adds "
             "the folder twice")
         spec["status"] = "draft"

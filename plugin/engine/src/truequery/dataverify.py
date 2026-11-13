@@ -274,12 +274,11 @@ def _pass_phrases(report: dict, contract: dict) -> tuple[list[str], list[str]]:
             phrases.append(f"{target} timestamps {_tz_words(tz)}" if tz
                            else f"{target} timestamps as declared")
         elif name == "path_resolves":
-            phrases.append(f"every {target} under {_base_words(det.get('base'))}")
+            base = _base_words(det.get("base"))
+            phrases.append(f"no {target} outside {base}" if det.get("by_status")
+                           else f"every {target} under {base}")
         elif name == "exists_per_status":
-            if det.get("present_compared", 1):
-                phrases.append("files exist where the status says present")
-            else:
-                phrases.append("no file missing where the status means a failure")
+            phrases.append("files exist where the status says present")
         elif name == "size_matches_disk":
             phrases.append(f"{target} matches the size on disk"
                            f" ({_plural(det.get('files_compared', 0), 'file')})")
@@ -298,8 +297,7 @@ def _nothing_words(name: str, target) -> str:
     if name == "path_resolves":
         return f"{target} (all empty)"
     if name == "exists_per_status":
-        return ("files per status (no row whose status means present or "
-                "a failure)")
+        return "files per status (no row whose status says present)"
     if name == "size_matches_disk":
         return f"{target} sizes (none of the files was found)"
     return f"{name} on {_key_label(target)} (nothing to compare)"
@@ -312,13 +310,71 @@ NOTHING_CHECKABLE = (
 
 
 def _absent_note(report: dict) -> str:
+    """Rows with no file that the status accounts for: counted, never
+    failed. `means` says what an absence means, not whether verify fails."""
+    out = ""
     for r in report["assertions"]:
         det = r.get("details") or {}
-        if r["assertion"] == "exists_per_status" and det.get("absent_expected_count"):
+        if r["assertion"] != "exists_per_status":
+            continue
+        if det.get("absent_expected_count"):
             statuses = ", ".join(det.get("absent_expected_statuses") or [])
-            return (f" · {_plural(det['absent_expected_count'], 'row')} "
+            out += (f" · {_plural(det['absent_expected_count'], 'row')} "
                     f"absent as expected ({statuses})")
-    return ""
+        if det.get("absent_unexpected_count"):
+            n = det["absent_unexpected_count"]
+            statuses = ", ".join(det.get("absent_unexpected_statuses") or [])
+            out += (f" · {_plural(n, 'row')} whose status means a failure "
+                    f"({statuses}): no file, as the status says")
+    return out
+
+
+def _doubled_words(count: int, target, det: dict) -> tuple[str, str]:
+    """The wrong-base error, as its own failure: the paths repeat the base
+    folder's own name. Never resolved quietly: the paths as written are
+    wrong."""
+    name = det.get("base_name") or "data"
+    what = (f"{_plural(count, 'path')} in {target} "
+            f"{_verb(count, 'starts', 'start')} with {name}/, the base "
+            f"folder's own name, so {_verb(count, 'it points', 'they point')} "
+            f"to {name}/{name}/…; the {_verb(count, 'file is', 'files are')} "
+            "there without it")
+    fix = ("correct the paths where they're written, or check how "
+           f"`relative_to` is declared for {target}")
+    return what, fix
+
+
+def _failures(result: dict, report: dict, contract: dict, root: str) -> list[dict]:
+    """The failures one failed assertion reports. Paths outside the base
+    folder, and paths that repeat the base folder's own name, are each
+    their own failure, apart from the files that are really missing: the
+    fix differs. (`sample_keys` holds the rest's keys first, then the
+    outside ones, then the doubled ones.)"""
+    det = result.get("details") or {}
+    escaped = int(det.get("escaped_count") or 0)
+    doubled = int(det.get("doubled_base_count") or 0)
+    if not (escaped or doubled):
+        return [_failure(result, report, contract, root)]
+    keys = list(result.get("sample_keys") or [])
+    escaped_keys = list(det.get("escaped_sample_keys") or [])
+    doubled_keys = list(det.get("doubled_sample_keys") or [])
+    rest_keys = keys[:len(keys) - len(escaped_keys) - len(doubled_keys)]
+    rest = int(result.get("failed_count") or 0) - escaped - doubled
+    out = []
+    for count, part, part_keys in ((escaped, "escaped_part", escaped_keys),
+                                   (doubled, "doubled_part", doubled_keys)):
+        if count:
+            out.append(_failure({**result, "failed_count": count,
+                                 "sample_keys": part_keys,
+                                 "details": {**det, part: True}},
+                                report, contract, root))
+    if rest > 0:
+        out.append(_failure({**result, "failed_count": rest,
+                             "sample_keys": rest_keys,
+                             "details": {**det, "escaped_count": 0,
+                                         "doubled_base_count": 0}},
+                            report, contract, root))
+    return out
 
 
 def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
@@ -377,6 +433,15 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
                     "but the contract says naive")
         fix = ("write the zone marker where the data is written, or declare "
                f"the zone the data really uses (`time_zone` for {target})")
+    elif det.get("doubled_part"):  # path_resolves or exists_per_status
+        what, fix = _doubled_words(count, target, det)
+    elif det.get("escaped_part"):  # path_resolves
+        base = _base_words(det.get("base"))
+        what = (f"{_plural(count, 'path')} in {target} "
+                f"{_verb(count, 'points', 'point')} outside {base}, through "
+                "an absolute path, ~, .. or a link")
+        fix = (f"write each path relative to {base}, with no absolute path, "
+               "~ or ..; a link that leaves the folder is never followed")
     elif name == "path_resolves":
         base = det.get("base")
         real = det.get("real_base")
@@ -386,20 +451,11 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
             fix = (f"create it, or point `bases: {base}` in DATA.md at the "
                    "folder the paths are relative to")
         else:
-            bits = []
             gone = det.get("unresolved_base_count") or 0
-            out = det.get("escaped_count") or 0
-            if gone:
-                bits.append(f"{_plural(gone, 'path')} in {target} "
-                            f"{_dont(gone)} exist "
-                            f"under {_base_words(base)}")
-            if out:
-                bits.append(f"{_plural(out, 'path')} in {target} "
-                            f"{_verb(out, 'points', 'point')} outside "
-                            f"{_base_words(base)}, through an absolute path, "
-                            "~, .. or a link")
-            what = "; ".join(bits) or (f"{_plural(count, 'path')} in {target} "
-                                       f"{_dont(count)} resolve")
+            what = (f"{_plural(gone, 'path')} in {target} {_dont(gone)} "
+                    f"exist under {_base_words(base)}" if gone else
+                    f"{_plural(count, 'path')} in {target} "
+                    f"{_dont(count)} resolve")
             fix = ("check which folder the paths are relative to (`bases:` in "
                    "DATA.md, `relative_to` in the contract) and how the paths "
                    "are written")
@@ -408,12 +464,6 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
         if det.get("present_missing"):
             bits.append(f"{_plural(det['present_missing'], 'file')} missing "
                         "where the status says present")
-        if det.get("absent_unexpected"):
-            bits.append(f"{_plural(det['absent_unexpected'], 'file')} missing "
-                        "where the status means a failure")
-        if det.get("escaped_count"):
-            bits.append(f"{_plural(det['escaped_count'], 'path')} outside "
-                        f"{_base_words(det.get('base'))}")
         what = "; ".join(bits) or f"{_plural(count, 'row')} {_dont(count)} match the status"
         fix = ("fetch the missing files again, or correct the status of "
                "those rows")
@@ -521,8 +571,8 @@ def _not_verified(report: dict, contract: dict) -> list[str]:
 
 def _entry(report: dict, contract: dict, root: str) -> dict:
     empty = report["source"]["rows"] == 0
-    fails = [_failure(r, report, contract, root)
-             for r in report["assertions"] if r["status"] == "failed"]
+    fails = [f for r in report["assertions"] if r["status"] == "failed"
+             for f in _failures(r, report, contract, root)]
     note = report.get("provenance_note")
     phrases, nothing = ([], []) if empty else _pass_phrases(report, contract)
     not_verified = [] if empty else _not_verified(report, contract)

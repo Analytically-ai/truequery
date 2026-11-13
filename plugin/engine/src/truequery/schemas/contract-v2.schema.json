@@ -275,7 +275,8 @@
                 "properties": {
                   "means": {
                     "type": ["string", "null"],
-                    "enum": ["present", "absent_expected", "absent_unexpected", null]
+                    "enum": ["present", "absent_expected", "absent_unexpected", null],
+                    "description": "What a row with this status and no file means. present: the file should be there; a row with no file fails truequery verify. absent_expected: no file, on purpose (removed, released, refetchable); counted. absent_unexpected: no file because something went wrong (a failed fetch); counted and reported, not failed: it says what an absence means, not whether verify fails."
                   }
                 }
               }
@@ -356,7 +357,8 @@
                 "properties": {
                   "means": {
                     "type": ["string", "null"],
-                    "enum": ["present", "absent_expected", "absent_unexpected", "TODO", null]
+                    "enum": ["present", "absent_expected", "absent_unexpected", "TODO", null],
+                    "description": "What a row with this status and no file means. present: the file should be there; a row with no file fails truequery verify. absent_expected: no file, on purpose (removed, released, refetchable); counted. absent_unexpected: no file because something went wrong (a failed fetch); counted and reported, not failed: it says what an absence means, not whether verify fails. TODO: not answered yet (a draft only); verify reports those rows as not judged."
                   },
                   "meaning": {
                     "type": ["string", "null"]
