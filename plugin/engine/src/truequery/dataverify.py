@@ -345,25 +345,34 @@ def _doubled_words(count: int, target, det: dict) -> tuple[str, str]:
 
 
 def _failures(result: dict, report: dict, contract: dict, root: str) -> list[dict]:
-    """The failures one failed assertion reports. Paths that repeat the base
-    folder's own name are their own failure, apart from the files that are
-    really missing: the fix differs."""
+    """The failures one failed assertion reports. Paths outside the base
+    folder, and paths that repeat the base folder's own name, are each
+    their own failure, apart from the files that are really missing: the
+    fix differs. (`sample_keys` holds the rest's keys first, then the
+    outside ones, then the doubled ones.)"""
     det = result.get("details") or {}
+    escaped = int(det.get("escaped_count") or 0)
     doubled = int(det.get("doubled_base_count") or 0)
-    if not doubled:
+    if not (escaped or doubled):
         return [_failure(result, report, contract, root)]
     keys = list(result.get("sample_keys") or [])
+    escaped_keys = list(det.get("escaped_sample_keys") or [])
     doubled_keys = list(det.get("doubled_sample_keys") or [])
-    rest_keys = keys[:len(keys) - len(doubled_keys)]
-    out = [_failure({**result, "failed_count": doubled,
-                     "sample_keys": doubled_keys,
-                     "details": {**det, "doubled_part": True}},
-                    report, contract, root)]
-    rest = int(result.get("failed_count") or 0) - doubled
+    rest_keys = keys[:len(keys) - len(escaped_keys) - len(doubled_keys)]
+    rest = int(result.get("failed_count") or 0) - escaped - doubled
+    out = []
+    for count, part, part_keys in ((escaped, "escaped_part", escaped_keys),
+                                   (doubled, "doubled_part", doubled_keys)):
+        if count:
+            out.append(_failure({**result, "failed_count": count,
+                                 "sample_keys": part_keys,
+                                 "details": {**det, part: True}},
+                                report, contract, root))
     if rest > 0:
         out.append(_failure({**result, "failed_count": rest,
                              "sample_keys": rest_keys,
-                             "details": {**det, "doubled_base_count": 0}},
+                             "details": {**det, "escaped_count": 0,
+                                         "doubled_base_count": 0}},
                             report, contract, root))
     return out
 
@@ -426,6 +435,13 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
                f"the zone the data really uses (`time_zone` for {target})")
     elif det.get("doubled_part"):  # path_resolves or exists_per_status
         what, fix = _doubled_words(count, target, det)
+    elif det.get("escaped_part"):  # path_resolves
+        base = _base_words(det.get("base"))
+        what = (f"{_plural(count, 'path')} in {target} "
+                f"{_verb(count, 'points', 'point')} outside {base}, through "
+                "an absolute path, ~, .. or a link")
+        fix = (f"write each path relative to {base}, with no absolute path, "
+               "~ or ..; a link that leaves the folder is never followed")
     elif name == "path_resolves":
         base = det.get("base")
         real = det.get("real_base")
@@ -435,20 +451,11 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
             fix = (f"create it, or point `bases: {base}` in DATA.md at the "
                    "folder the paths are relative to")
         else:
-            bits = []
             gone = det.get("unresolved_base_count") or 0
-            out = det.get("escaped_count") or 0
-            if gone:
-                bits.append(f"{_plural(gone, 'path')} in {target} "
-                            f"{_dont(gone)} exist "
-                            f"under {_base_words(base)}")
-            if out:
-                bits.append(f"{_plural(out, 'path')} in {target} "
-                            f"{_verb(out, 'points', 'point')} outside "
-                            f"{_base_words(base)}, through an absolute path, "
-                            "~, .. or a link")
-            what = "; ".join(bits) or (f"{_plural(count, 'path')} in {target} "
-                                       f"{_dont(count)} resolve")
+            what = (f"{_plural(gone, 'path')} in {target} {_dont(gone)} "
+                    f"exist under {_base_words(base)}" if gone else
+                    f"{_plural(count, 'path')} in {target} "
+                    f"{_dont(count)} resolve")
             fix = ("check which folder the paths are relative to (`bases:` in "
                    "DATA.md, `relative_to` in the contract) and how the paths "
                    "are written")
@@ -457,9 +464,6 @@ def _failure(result: dict, report: dict, contract: dict, root: str) -> dict:
         if det.get("present_missing"):
             bits.append(f"{_plural(det['present_missing'], 'file')} missing "
                         "where the status says present")
-        if det.get("escaped_count"):
-            bits.append(f"{_plural(det['escaped_count'], 'path')} outside "
-                        f"{_base_words(det.get('base'))}")
         what = "; ".join(bits) or f"{_plural(count, 'row')} {_dont(count)} match the status"
         fix = ("fetch the missing files again, or correct the status of "
                "those rows")

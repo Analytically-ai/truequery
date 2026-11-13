@@ -169,7 +169,8 @@ class TestDoubledBase:
         project(root, rows, ["d/1.warc"])
         code, out, _ = tq(capsys, root, "verify", "--now", NOW)
         assert code == 1
-        assert "1 path outside data_root" in out
+        assert "1 path in local_path points outside data_root" in out
+        assert len(found_lines(out)) == 1, out
 
     def test_windows_separators_count_as_slashes(self, tmp_path, capsys):
         """`data\\d\\1.warc` is read as `data/d/1.warc`, as every path in the
@@ -271,7 +272,8 @@ class TestFailureStatusCounted:
         root = project(tmp_path, rows, ["d/1.warc"])
         code, out, _ = tq(capsys, root, "verify", "--now", NOW)
         assert code == 1
-        assert "1 path outside data_root" in out
+        assert "1 path in local_path points outside data_root" in out
+        assert len(found_lines(out)) == 1, out
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +318,11 @@ class TestContextData:
         _, out, _ = tq(capsys, root, "context", "--target", "f.sql")
         assert "EVIDENCE_AVAILABLE: file, data" in out
         assert "truequery verify fetch_log" in out
+        # a target that reads no table names no dataset
+        write(root / "none.sql", "SELECT 1\n")
+        _, out, _ = tq(capsys, root, "context", "--target", "none.sql")
+        assert "EVIDENCE_AVAILABLE: file\n" in out
+        assert "\nDATA" not in out
 
     def test_reader_missing(self, tmp_path, capsys, monkeypatch):
         root = project(tmp_path, [("u1", "fetched", "d/1.warc")], ["d/1.warc"])
@@ -364,3 +371,138 @@ class TestContextData:
         sys.modules.pop("duckdb", None)
         tq(capsys, root, "context")
         assert "duckdb" not in sys.modules
+
+
+# ---------------------------------------------------------------------------
+# A path outside the base folder: reported once, with its own fix
+# ---------------------------------------------------------------------------
+
+OUTSIDE_WHAT = ("1 path in local_path points outside data_root, through an "
+                "absolute path, ~, .. or a link")
+OUTSIDE_FIX = ("fix: write each path relative to data_root, with no absolute "
+               "path, ~ or ..; a link that leaves the folder is never followed")
+
+
+class TestOutsideBase:
+    def forms(self, tmp_path):
+        outside = tmp_path / "outside"
+        write(outside / "x.warc", "secret")
+        forms = {"dotdot-after-name": "data/../x.warc",
+                 "dotdot": "../x.warc",
+                 "absolute": str(outside / "x.warc"),
+                 "home": "~/x.warc",
+                 "drive": "C:\\x.warc"}
+        if os.name == "posix":
+            forms["link-out"] = "out/x.warc"
+        return outside, forms
+
+    @pytest.mark.parametrize("status,row_status", [
+        (True, "fetched"), (True, "failed"), (False, "fetched")],
+        ids=["status-present", "status-failure", "no-status-column"])
+    def test_each_form_once(self, tmp_path, capsys, status, row_status):
+        outside, forms = self.forms(tmp_path)
+        contract = (CONTRACT if status
+                    else CONTRACT.replace(", status_column: status", ""))
+        for name, path in forms.items():
+            rows = [("u1", "fetched", "d/1.warc"), ("u2", row_status, path)]
+            root = project(tmp_path / name, rows, ["d/1.warc"], contract)
+            if name == "link-out":
+                os.symlink(outside, root / "data" / "out")
+            code, out, _ = tq(capsys, root, "verify", "--now", NOW)
+            assert code == 1, (name, out)
+            found = found_lines(out)
+            assert len(found) == 1, (name, out)
+            assert OUTSIDE_WHAT in found[0], (name, out)
+            assert OUTSIDE_FIX in out, (name, out)
+            assert "fetch the missing files" not in out, (name, out)
+            assert "1 data failure in 1 of 1 dataset read" in out, (name, out)
+            assert "secret" not in out
+
+    def test_outside_and_missing_are_separate(self, tmp_path, capsys):
+        """With a status column: the path outside comes from the path check,
+        the missing file from the status check, each with its own fix."""
+        rows = [("u1", "fetched", "d/1.warc"), ("u2", "fetched", "../x.warc"),
+                ("u3", "fetched", "d/gone.warc")]
+        root = project(tmp_path, rows, ["d/1.warc"])
+        code, out, _ = tq(capsys, root, "verify", "--now", NOW)
+        assert code == 1
+        found = found_lines(out)
+        assert len(found) == 2, out
+        assert (OUTSIDE_WHAT + " (logs/*.csv; e.g. key u2)") in found[0]
+        assert ("1 file missing where the status says present (logs/*.csv; "
+                "e.g. key u3)") in found[1]
+        assert OUTSIDE_FIX in out
+        assert "fix: fetch the missing files again" in out
+
+    def test_outside_missing_and_doubled_without_status(self, tmp_path, capsys):
+        """No status column: three failures from one check, each with its own
+        count, keys and fix."""
+        contract = CONTRACT.replace(", status_column: status", "")
+        rows = [("u1", "fetched", "d/1.warc"), ("u2", "fetched", "/etc/x"),
+                ("u3", "fetched", "d/gone.warc"),
+                ("u4", "fetched", "data/d/1.warc")]
+        root = project(tmp_path, rows, ["d/1.warc"], contract)
+        code, out, _ = tq(capsys, root, "verify", "--now", NOW)
+        assert code == 1
+        found = found_lines(out)
+        assert len(found) == 3, out
+        assert (OUTSIDE_WHAT + " (logs/*.csv; e.g. key u2)") in found[0]
+        assert "1 path in local_path starts with data/" in found[1]
+        assert "e.g. key u4" in found[1]
+        assert ("1 path in local_path doesn't exist under data_root "
+                "(logs/*.csv; e.g. key u3)") in found[2]
+        assert "3 data failures in 1 of 1 dataset read" in out
+
+
+# ---------------------------------------------------------------------------
+# `context` names at most 10 datasets
+# ---------------------------------------------------------------------------
+
+
+def many_datasets(root: Path, n: int) -> list[str]:
+    write(root / "DATA.md", DATA_MD)
+    names = [f"d{i:02d}" for i in range(n)]
+    for name in names:
+        write(root / "contracts" / f"{name}.yaml",
+              f"version: 2\ndataset: {name}\nkind: files\n"
+              f"location: {{path: logs/{name}.csv, format: csv}}\n"
+              "grain: one row per id\nkeys: [id]\ncolumns:\n"
+              "  id: {type: string}\n")
+    return names
+
+
+class TestContextCap:
+    def test_ten_are_all_named(self, tmp_path, capsys):
+        names = many_datasets(tmp_path, 10)
+        _, out, _ = tq(capsys, tmp_path, "context")
+        assert (f"DATA: {', '.join(names)} (local data; check it before "
+                f"writing code: truequery verify {' '.join(names)})") in out
+        assert "more" not in out
+
+    def test_more_than_ten(self, tmp_path, capsys):
+        names = many_datasets(tmp_path, 15)
+        _, out, _ = tq(capsys, tmp_path, "context")
+        assert (f"DATA: {', '.join(names[:10])} and 5 more (truequery verify "
+                "checks them all); local data, so run truequery verify before "
+                "writing code\n") in out
+        assert "d10" not in out and "d14" not in out
+        _, out, _ = tq(capsys, tmp_path, "context", "--json")
+        assert json.loads(out)["data"]["datasets"] == names  # JSON: all
+
+    def test_reader_missing_capped_too(self, tmp_path, capsys, monkeypatch):
+        many_datasets(tmp_path, 12)
+        no_reader(monkeypatch)
+        _, out, _ = tq(capsys, tmp_path, "context")
+        assert ("DATA_READER_MISSING: d00, d01, d02, d03, d04, d05, d06, d07, "
+                "d08, d09 and 2 more (truequery verify checks them all); local "
+                "data, but the data reader isn't installed; with the user's "
+                "yes, run: truequery setup data\n") in out
+
+    def test_target_lists_only_what_it_uses(self, tmp_path, capsys):
+        many_datasets(tmp_path, 15)
+        write(tmp_path / "q.sql",
+              "SELECT a.id FROM d03 a JOIN d12 b ON a.id = b.id\n")
+        _, out, _ = tq(capsys, tmp_path, "context", "--target", "q.sql")
+        assert ("DATA: d03, d12 (local data; check it before writing code: "
+                "truequery verify d03 d12)") in out
+        assert "d00" not in out and "more" not in out

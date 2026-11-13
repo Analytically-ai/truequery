@@ -1530,10 +1530,11 @@ class TestPRBReviewFixes:
     ):
         """Review §4:
         When a `type: path` column has `status_column` but no `relative_to`,
-        a row with `../../etc/hosts` is never dropped silently: both
-        `path_resolves` (compiled with `project_root` as base) and
-        `exists_per_status` report the escaping row, and `exists_per_status`
-        counts both `../../etc/hosts` and `missing.bin` (`failed_count == 2`)."""
+        a row with `../../etc/hosts` is never dropped silently:
+        `path_resolves` (compiled with `project_root` as base) reports the
+        escaping row. It is reported once: `exists_per_status` leaves it to
+        `path_resolves` (counted as not judged) and fails only on
+        `missing.bin`."""
         csv_file = tmp_path / "files.csv"
         csv_file.write_text(
             "id,status,local_path\n"
@@ -1571,7 +1572,7 @@ class TestPRBReviewFixes:
 
         ex = _find_assertion(rep, "exists_per_status", "local_path")
         assert ex["status"] == "failed"
-        assert ex["failed_count"] == 2
+        assert ex["failed_count"] == 1
         assert ex["details"]["present_missing"] == 1
-        assert ex["details"]["escaped_count"] == 1
-        assert ex["sample_keys"] == ["r1", "r2"]
+        assert ex["details"]["outside_base_not_judged"] == 1
+        assert ex["sample_keys"] == ["r2"]

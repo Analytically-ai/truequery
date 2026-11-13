@@ -470,23 +470,32 @@ def cmd_context(args: argparse.Namespace) -> int:
     scoped_metrics = (P.metrics_for_tables(tables, contracts, metrics)
                       if args.target else {m["metric"]: m
                                            for _, m in sorted(metrics.items())})
-    data = _context_data(root, tables, contracts, config)
+    data = _context_data(root, tables if args.target else None, contracts,
+                         config)
     evidence = ["file", "data"] if data["readable"] else ["file"]
     directives = [f"MODE: {mode}", "STANDARD: 0.1",
                   "EVIDENCE_AVAILABLE: " + ", ".join(evidence)]
     if data["readable"]:
         names = data["readable"]
-        directives.append(
-            f"DATA: {', '.join(names)} (local data; check it before writing "
-            f"code: truequery verify {' '.join(names)})")
+        if len(names) <= CONTEXT_DATA_LIMIT:
+            directives.append(
+                f"DATA: {_context_names(names)} (local data; check it before "
+                f"writing code: truequery verify {' '.join(names)})")
+        else:  # one bracket, not two in a row
+            directives.append(
+                f"DATA: {_context_names(names)}; local data, so run "
+                "truequery verify before writing code")
     if data["reader_missing"]:
         names = data["reader_missing"]
         why = ("DATA.md says this project doesn't want it (`setup: data: "
                "false`)" if data["reader_declined"]
                else "with the user's yes, run: truequery setup data")
+        tail = f"the data reader isn't installed; {why}"
         directives.append(
-            f"DATA_READER_MISSING: {', '.join(names)} (local data, but the "
-            f"data reader isn't installed; {why})")
+            f"DATA_READER_MISSING: {_context_names(names)} (local data, but "
+            f"{tail})" if len(names) <= CONTEXT_DATA_LIMIT else
+            f"DATA_READER_MISSING: {_context_names(names)}; local data, but "
+            f"{tail}")
     for table in tables:
         key = P.match_contract(table, contracts)
         if key is None:
@@ -547,14 +556,26 @@ def cmd_context(args: argparse.Namespace) -> int:
     return EXIT_CLEAN
 
 
-def _context_data(root: str, tables: list[str], contracts: dict,
+CONTEXT_DATA_LIMIT = 10  # datasets named on one directive line
+
+
+def _context_names(names: list[str]) -> str:
+    """At most CONTEXT_DATA_LIMIT names, then how many more."""
+    if len(names) <= CONTEXT_DATA_LIMIT:
+        return ", ".join(names)
+    more = len(names) - CONTEXT_DATA_LIMIT
+    return (", ".join(names[:CONTEXT_DATA_LIMIT])
+            + f" and {more} more (truequery verify checks them all)")
+
+
+def _context_data(root: str, tables: list[str] | None, contracts: dict,
                   config: dict | None) -> dict:
-    """The local data `context` names: with a target, the contracts it
-    references that point at local data; without one (or when the target
-    references no table), every such contract in the project. Split into
-    what `truequery verify` can read now and what needs the data reader."""
+    """The local data `context` names: with a target (`tables` not None),
+    only the contracts it references that point at local data; without
+    one, every such contract in the project. Split into what `truequery
+    verify` can read now and what needs the data reader."""
     from truequery import verify as V  # light: DuckDB isn't imported
-    if tables:
+    if tables is not None:
         keys = [P.match_contract(t, contracts) for t in tables]
         scoped = {k: contracts[k] for k in keys if k is not None}
     else:

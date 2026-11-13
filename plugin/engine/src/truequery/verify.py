@@ -1123,6 +1123,7 @@ def _run_filesystem_assertion(
         present_doubled = 0
         present_unflagged_keys: list[Any] = []
         sample_keys: list[Any] = []
+        escaped_keys: list[Any] = []
         doubled_keys: list[Any] = []
         paths_compared = 0
         for row in rows:
@@ -1137,12 +1138,14 @@ def _run_filesystem_assertion(
             )
             means = status_means.get(status_val) if status_val is not None else None
             # Step 1: containment check — NEVER stat/exists a path that escapes real_base
+            # This check alone reports a path outside the base (every row, any
+            # status): `exists_per_status` leaves those rows to it.
             real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
             if real_target is None:
                 failed_count += 1
                 escaped_count += 1
-                if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
-                    sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
+                if pk_len and not pii_redacted and len(escaped_keys) < MAX_SAMPLE_KEYS:
+                    escaped_keys.append(_format_sample_key(tuple(row[:pk_len])))
                 continue
             # Step 2: for paths without a status lifecycle (or when zero `present`
             # rows exist under `real_base`), flag wrong base resolution.
@@ -1186,7 +1189,8 @@ def _run_filesystem_assertion(
                     if len(sample_keys) < MAX_SAMPLE_KEYS:
                         sample_keys.append(k)
 
-        sample_keys = sample_keys + doubled_keys  # the doubled ones last
+        # the rest first, then outside the base, then doubled
+        sample_keys = sample_keys + escaped_keys + doubled_keys
         passed = failed_count == 0
         msg = (
             f"paths in {col_name!r} resolve under {base_label}{s_suffix}"
@@ -1206,6 +1210,7 @@ def _run_filesystem_assertion(
             "details": {
                 "base": base_label,
                 "escaped_count": escaped_count,
+                "escaped_sample_keys": escaped_keys,
                 "unresolved_base_count": wrong_base_count,
                 "doubled_base_count": doubled_count,
                 "doubled_sample_keys": doubled_keys,
@@ -1225,7 +1230,7 @@ def _run_filesystem_assertion(
         failed_count = 0
         present_missing = 0
         doubled_count = 0  # present, but the path repeats the base's name
-        escaped_count = 0
+        outside_count = 0  # not judged: `path_resolves` reports them
         absent_expected_count = 0
         absent_expected_statuses: set[str] = set()
         # `means` says what an absence means, not whether verify fails:
@@ -1257,14 +1262,12 @@ def _run_filesystem_assertion(
             if not has_path:
                 exists = False
             else:
-                # Never touch the filesystem if the row path escapes `real_base`;
-                # count the escaping path as a failure of `exists_per_status`.
+                # Never touch the filesystem if the row path escapes `real_base`.
+                # `path_resolves` reports it (once, with its own fix); here the
+                # row isn't judged.
                 real_target = resolve_path_within_base(str(raw_path), real_base, path_cache)
                 if real_target is None:
-                    failed_count += 1
-                    escaped_count += 1
-                    if pk_len and not pii_redacted and len(sample_keys) < MAX_SAMPLE_KEYS:
-                        sample_keys.append(_format_sample_key(tuple(row[:pk_len])))
+                    outside_count += 1
                     continue
                 exists = os.path.exists(real_target)
             if means == "present":
@@ -1312,10 +1315,6 @@ def _run_filesystem_assertion(
                     f"{doubled_count} 'present' path(s) start with the base "
                     "folder's own name; the files are there without it"
                 )
-            if escaped_count:
-                bits.append(
-                    f"{escaped_count} path(s) escape base {base_label!r}"
-                )
             msg = "; ".join(bits) + absent_note + s_suffix
 
         return {
@@ -1333,7 +1332,7 @@ def _run_filesystem_assertion(
                 "doubled_sample_keys": doubled_keys,
                 "base": base_label,
                 "base_name": os.path.basename(os.path.normpath(real_base)),
-                "escaped_count": escaped_count,
+                "outside_base_not_judged": outside_count,
                 "absent_expected_count": absent_expected_count,
                 "absent_expected_statuses": sorted(absent_expected_statuses),
                 "absent_unexpected_count": absent_unexpected_count,

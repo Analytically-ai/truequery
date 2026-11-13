@@ -35,7 +35,9 @@
   (`absent_unexpected`, such as a failed fetch) are counted, not flagged;
   only a missing file where the status says `present` fails. Paths that
   start with the base folder's own name (`data/…` under a base `data/`) are
-  named as that, apart from files that are really missing. Failures say
+  named as that, apart from files that are really missing; a path that
+  leaves the base folder (absolute, `~`, `..` or a link out) is reported
+  once, as such. Failures say
   what's wrong and what to do. Each
   run is logged to `.truequery/evidence.jsonl` (moved to `.1` past 5 MB;
   git-ignored). Exit codes: 0 verified, 1 the data breaks a contract, 2 a
@@ -59,7 +61,8 @@
 - `truequery context` prints `EVIDENCE_AVAILABLE: file, data` and a `DATA`
   line naming the datasets when a contract in scope points at local data
   (or `DATA_READER_MISSING` when the data reader is needed and isn't
-  installed). The skill runs `truequery verify` on them before writing code,
+  installed): with `--target`, only the datasets the target uses; without
+  it, the project's, at most 10 named. The skill runs `truequery verify` on them before writing code,
   and `review --data` at the receipt step; `/truequery init` offers the
   data reader when the project has data files.
 - **`truequery init --from <files or folders>` drafts contracts from data

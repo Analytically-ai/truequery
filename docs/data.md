@@ -81,7 +81,7 @@ From what the contract declares:
 | `nullable: false` | no empty values in that column |
 | `values` | every value in the data is a declared one |
 | `time_zone` | timestamps carry the declared zone (`UTC`: `Z` or `+00:00`; `local:<zone>`: not marked UTC; `naive`: no marker) |
-| `type: path` + `relative_to` | every path resolves under the declared base folder (`bases:` in `DATA.md`), never outside it |
+| `type: path` + `relative_to` | every path resolves under the declared base folder (`bases:` in `DATA.md`), never outside it. A path that leaves it (absolute, `~`, `..` or a link out) is one failure, with its own fix, and is never read |
 | `values` with `means` + `status_column` | rows whose status means present have their file; rows absent on purpose, and rows whose status means a failure, are counted, not flagged |
 | `unit` + `size_of` | each size matches the file on disk; GiB written as GB (and the other binary/decimal twins) is named as such |
 | `freshness_sla: {column, max_age}` | the newest timestamp is within `max_age` of now (`--now` sets "now") |
