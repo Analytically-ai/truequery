@@ -470,8 +470,23 @@ def cmd_context(args: argparse.Namespace) -> int:
     scoped_metrics = (P.metrics_for_tables(tables, contracts, metrics)
                       if args.target else {m["metric"]: m
                                            for _, m in sorted(metrics.items())})
+    data = _context_data(root, tables, contracts, config)
+    evidence = ["file", "data"] if data["readable"] else ["file"]
     directives = [f"MODE: {mode}", "STANDARD: 0.1",
-                  "EVIDENCE_AVAILABLE: file"]
+                  "EVIDENCE_AVAILABLE: " + ", ".join(evidence)]
+    if data["readable"]:
+        names = data["readable"]
+        directives.append(
+            f"DATA: {', '.join(names)} (local data; check it before writing "
+            f"code: truequery verify {' '.join(names)})")
+    if data["reader_missing"]:
+        names = data["reader_missing"]
+        why = ("DATA.md says this project doesn't want it (`setup: data: "
+               "false`)" if data["reader_declined"]
+               else "with the user's yes, run: truequery setup data")
+        directives.append(
+            f"DATA_READER_MISSING: {', '.join(names)} (local data, but the "
+            f"data reader isn't installed; {why})")
     for table in tables:
         key = P.match_contract(table, contracts)
         if key is None:
@@ -482,7 +497,9 @@ def cmd_context(args: argparse.Namespace) -> int:
     if stale:
         directives.append("CONTEXT_STALE")
     doc = {"mode": mode, "standard": "0.1",
-           "evidence_available": ["file"],
+           "evidence_available": evidence,
+           "data": {"datasets": data["readable"],
+                    "reader_missing": data["reader_missing"]},
            "config": config, "target": rel,
            "tables_referenced": tables,
            "contracts": {t: contracts[P.match_contract(t, contracts)]
@@ -528,6 +545,36 @@ def cmd_context(args: argparse.Namespace) -> int:
         for directive in directives:
             print(directive)
     return EXIT_CLEAN
+
+
+def _context_data(root: str, tables: list[str], contracts: dict,
+                  config: dict | None) -> dict:
+    """The local data `context` names: with a target, the contracts it
+    references that point at local data; without one (or when the target
+    references no table), every such contract in the project. Split into
+    what `truequery verify` can read now and what needs the data reader."""
+    from truequery import verify as V  # light: DuckDB isn't imported
+    if tables:
+        keys = [P.match_contract(t, contracts) for t in tables]
+        scoped = {k: contracts[k] for k in keys if k is not None}
+    else:
+        scoped = contracts
+    local = [c for c in scoped.values() if V.has_local_data(c)]
+    reader_ok = None
+    readable, missing = [], []
+    for contract in local:
+        name = str(contract.get("dataset") or contract.get("table"))
+        if V.needs_duckdb(contract):
+            if reader_ok is None:
+                reader_ok = V.duckdb_status()["installed"]
+            if not reader_ok:
+                missing.append(name)
+                continue
+        readable.append(name)
+    declined = ((config or {}).get("setup") or {}).get("data") is False
+    return {"readable": sorted(set(readable)),
+            "reader_missing": sorted(set(missing)),
+            "reader_declined": declined}
 
 
 def _format_location_short(loc) -> str:

@@ -13,6 +13,11 @@ is a gap in the standard instead of improvising one.
 - Run `truequery context --target <path>`; read the relevant models, YAML and
   DAGs; inspect the schema read-only if a warehouse connection or file
   (e.g. DuckDB) is available.
+- If it prints `EVIDENCE_AVAILABLE: file, data`, run the `truequery verify`
+  line it gives **before** writing code, and read what it finds: the data's
+  failures shape the code (the receipt, step 6, reads it again). If it prints
+  `DATA_READER_MISSING`, offer `truequery setup data` (never install without
+  the user's yes).
 - Write down what was discovered: stack, the tables/contracts in scope,
   grain and keys where known. Discover, don't ask (step 2 is only for
   what cannot be discovered).

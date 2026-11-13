@@ -17,7 +17,7 @@ which follow `flow.md` (look → ask in one call → contract first → build
 `truequery context [--target <path>]` before touching data code. It returns the project truth (stack, dialect, modes), only the
 contracts your target references, and directives (`MODE`,
 `CONTRACT_MISSING`: no contract for that table; `CONTEXT_STALE`: no
-`DATA.md`, so suggest `/truequery init`). Obey them; don't reload them.
+`DATA.md`, so suggest `/truequery init`; `DATA`: run its `truequery verify` before code). Obey them; don't reload them.
 
 ## Invocation
 

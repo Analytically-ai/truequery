@@ -22,7 +22,7 @@ Questions for the interview (/truequery init), or answer them in the contracts:
   fetch: grain: one row per url? It is unique and never empty in all 7 rows read. Confirm the grain and the key
   fetch.local_path: 1 of 6 sampled paths exist under data_root (data/): is that their base?
   fetch.bytes_saved: the name says bytes, but values are written with a decimal point: which unit is it?
-  fetch.status: for each value (failed, fetched, refetchable, released, removed_on_purpose), is the file in local_path there (present), absent on purpose (absent_expected), or missing by mistake (absent_unexpected)? Values from all 7 rows: there may be others
+  fetch.status: for each value (failed, fetched, refetchable, released, removed_on_purpose), is the file in local_path there (present), absent on purpose (absent_expected), or absent because something went wrong (absent_unexpected)? Values from all 7 rows: there may be others
 init --from: 1 draft contract written, 0 kept, 0 not inferred. Not read: READMEs and data dictionaries (init --from doesn't link docs yet)
 ```
 
@@ -80,7 +80,7 @@ question has `status: draft` and a `# TODO` comment.
 | Keys | The first column (an `id`-named one first), or else the first pair of columns, that is unique and never empty in the sample. The grain stays `TODO …` until someone confirms it |
 | Low-cardinality text | Up to 20 distinct values as `values`, when the column is named like a category (`status`, `type`, `region`, …) or its values repeat (on average twice or more in the sample), and it isn't an `id`-named column. The list is a draft with a question ("are these all of them?"): any other value fails `truequery verify`. A status-like column (`status`, `state`, `outcome`, …) in a dataset with a path column gets `means: TODO` for each value, and the path column gets `status_column`, so `truequery verify` reports those rows as "not judged" until the meanings are filled in |
 | Column names | Units, flagged for confirmation, from the name's last word (or its first, for sizes and durations: `bytes_saved`), never for an ID or a count (`kb_article_id`, `tb_count`) or a size next to money (`revenue_gb`): `_bytes`, `_kb`/`_kib` … `_tb`/`_tib`, `_ms`, `_seconds`, `_minutes`, `_hours`, `_days`, `_pct`, `_bps`, `_ratio`, and `_cents` (with a currency column, `unit: minor` and `currency_column`). Never from the size of the values. Bytes or cents written with a decimal point (`1.00`) become a question instead |
-| Path columns | `type: path`. Sampled paths are looked up (read-only, never outside the folder) under each base declared in `DATA.md`, the project folder and the data's own folder. `relative_to` is written only for a declared base that finds the most of them; otherwise the output suggests a base. When every path starts with the base folder's own name, it says so: that's the wrong-base error |
+| Path columns | `type: path`. Sampled paths are looked up (read-only, never outside the folder) under each base declared in `DATA.md`, the project folder and the data's own folder. `relative_to` is written only for a declared base that finds the most of them; otherwise the output suggests a base. When every path starts with the base folder's own name, it says so: that's the wrong-base error, which `truequery verify` also names |
 | Personal data | A text column gets `pii: true` as a draft when its name says so (`email`, `phone`, `name`, `first_name`, `address`, `date_of_birth`, or a person's role: `assignee`, `author`, `owner`, `customer`, `created_by`, `cell`, …; not an `id`-named column) or its values look like email addresses, phone numbers (`+1 415 555 0100`) or people's names (two or three capitalised words, outside place and category columns). Its values are never written to the contract or printed. Name detection by value can't be complete: check the columns it lists |
 
 The sample is the first 2,000 rows of each dataset (files in sorted
@@ -127,12 +127,13 @@ is a draft.
 In a terminal, edit the contract yourself. With the answers above
 (`fetched` is `present`, `failed` is `absent_unexpected`, the other three
 are `absent_expected`; sizes are in KB; the key is `(run_id, url)`),
-`truequery verify` finds the two files that are really missing and leaves
-the three absent on purpose alone:
+`truequery verify` finds the file that is really missing (a `fetched` row),
+leaves the three absent on purpose alone, and counts the failed fetch, which
+has no file, as its status says:
 
 ```
-Verified     fetch (2 files, 7 rows): no empty run_id and url, key (run_id, url) unique, status values all declared, every local_path under data_root, bytes_saved matches the size on disk (2 files) · 3 rows absent as expected (refetchable, released, removed_on_purpose)
-Found        fetch: 1 file missing where the status says present; 1 file missing where the status means a failure (logs/fetch/*.csv; e.g. key (r1, https://ex.org/5), (r1, https://ex.org/6))
+Verified     fetch (2 files, 7 rows): no empty run_id and url, key (run_id, url) unique, status values all declared, no local_path outside data_root, bytes_saved matches the size on disk (2 files) · 3 rows absent as expected (refetchable, released, removed_on_purpose) · 1 row whose status means a failure (failed): no file, as the status says
+Found        fetch: 1 file missing where the status says present (logs/fetch/*.csv; e.g. key (r1, https://ex.org/5))
              fix: fetch the missing files again, or correct the status of those rows
 ```
 

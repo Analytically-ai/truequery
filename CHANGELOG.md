@@ -29,8 +29,14 @@
   files a contract points to, read-only, and says in plain words whether the
   data matches: keys unique and filled, statuses declared, timestamps in the
   declared zone, paths under the declared folder, files present where the
-  status says so (expected absences are counted, not flagged), sizes in the
-  declared unit, freshness. Failures say what's wrong and what to do. Each
+  status says so, sizes in the declared unit, freshness. A status's `means`
+  says what a missing file means, not whether `verify` fails: rows absent on
+  purpose (`absent_expected`) and rows whose status means a failure
+  (`absent_unexpected`, such as a failed fetch) are counted, not flagged;
+  only a missing file where the status says `present` fails. Paths that
+  start with the base folder's own name (`data/…` under a base `data/`) are
+  named as that, apart from files that are really missing. Failures say
+  what's wrong and what to do. Each
   run is logged to `.truequery/evidence.jsonl` (moved to `.1` past 5 MB;
   git-ignored). Exit codes: 0 verified, 1 the data breaks a contract, 2 a
   usage error, 3 some data couldn't be verified. See `docs/data.md`.
@@ -50,9 +56,12 @@
   `--require data` makes that fail in CI.
 - `truequery status` says whether the data reader is installed, whether this
   project needs it, and the command.
-- The skill runs `review --data` at the receipt step when a contract points
-  at local data, and `/truequery init` offers the data reader when the
-  project has data files.
+- `truequery context` prints `EVIDENCE_AVAILABLE: file, data` and a `DATA`
+  line naming the datasets when a contract in scope points at local data
+  (or `DATA_READER_MISSING` when the data reader is needed and isn't
+  installed). The skill runs `truequery verify` on them before writing code,
+  and `review --data` at the receipt step; `/truequery init` offers the
+  data reader when the project has data files.
 - **`truequery init --from <files or folders>` drafts contracts from data
   files that already exist.** It reads CSV and JSONL with Python's standard
   library and Parquet with the data reader (without it, Parquet is listed as

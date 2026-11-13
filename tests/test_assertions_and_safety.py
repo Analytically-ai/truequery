@@ -422,8 +422,9 @@ class TestReviewer2Fixtures:
         """Rows with `removed_on_purpose`, `released`, or `refetchable`
         (`means: absent_expected`) do NOT exist on disk and must pass
         `path_resolves`, `exists_per_status`, and `size_matches_disk` with
-        zero false alarms. A missing `fetched` (`means: present`) or `failed`
-        (`means: absent_unexpected`) row must fail `exists_per_status`."""
+        zero false alarms. A missing `fetched` (`means: present`) row must
+        fail `exists_per_status`; a `failed` (`means: absent_unexpected`) row
+        with no file is what its status says: counted, never failed."""
         _write_data_md(tmp_path, "bases:\n  data_root: ./data")
         present_file = tmp_path / "data" / "run1" / "ok.warc"
         present_file.parent.mkdir(parents=True, exist_ok=True)
@@ -491,11 +492,12 @@ class TestReviewer2Fixtures:
         ]
         assert "3 rows absent as expected" in ex_clean["message"]
 
-        # Broken twin: a `fetched` (`present`) row (including one in a new
-        # subdir `run2/` and one with an empty path) and a `failed`
-        # (`absent_unexpected`) row are missing on disk -> `path_resolves`
+        # Broken twin: two `fetched` (`present`) rows (one in a new subdir
+        # `run2/`, one with an empty path) are missing on disk, and a
+        # `failed` (`absent_unexpected`) row has no file -> `path_resolves`
         # still passes (since `run1/ok.warc` proves `data_root` is the right
-        # base), while `exists_per_status` fails on the 3 missing rows.
+        # base), while `exists_per_status` fails on the 2 `fetched` rows
+        # only: the `failed` row is counted, not failed.
         broken_csv = tmp_path / "logs" / "lifecycle_broken.csv"
         broken_csv.write_text(
             "run_id,url,status,local_path,bytes_saved\n"
@@ -519,13 +521,13 @@ class TestReviewer2Fixtures:
         assert _find_assertion(rep_broken, "path_resolves", "local_path")["status"] == "passed"
         ex_broken = _find_assertion(rep_broken, "exists_per_status", "local_path")
         assert ex_broken["status"] == "failed"
-        assert ex_broken["failed_count"] == 3
+        assert ex_broken["failed_count"] == 2
         assert ex_broken["details"]["present_missing"] == 2
-        assert ex_broken["details"]["absent_unexpected"] == 1
+        assert ex_broken["details"]["absent_unexpected_count"] == 1
+        assert ex_broken["details"]["absent_unexpected_statuses"] == ["failed"]
         assert ex_broken["details"]["absent_expected_count"] == 1
         assert ex_broken["sample_keys"] == [
             ["r1", "https://ex.org/5"],
-            ["r1", "https://ex.org/6"],
             ["r1", "https://ex.org/7"],
         ]
 

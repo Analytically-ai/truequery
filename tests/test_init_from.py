@@ -164,8 +164,11 @@ def test_answering_the_interview_lets_verify_catch_reviewer2s_errors(
     path.write_text(text, encoding="utf-8")
     assert cli.main(["verify"]) == 1
     out = capsys.readouterr().out
-    assert ("1 file missing where the status says present; 1 file missing "
-            "where the status means a failure") in out
+    assert "1 file missing where the status says present (" in out
+    # `failed` means a failure: no file is what the status says, so it's
+    # counted, not failed
+    assert ("1 row whose status means a failure (failed): no file, as the "
+            "status says") in out
 
 
 # -- the inputs the prompt lists ---------------------------------------------

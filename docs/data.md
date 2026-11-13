@@ -22,9 +22,9 @@ On a project with two data errors:
 ```
 $ truequery verify
 TrueQuery data check
-Verified     fetch_log (1 file, 6 rows): no empty run_id and url, key (run_id, url) unique, status values all declared, every local_path under data_root, bytes_saved matches the size on disk (1 file) · 3 rows absent as expected (refetchable, released, removed_on_purpose)
+Verified     fetch_log (1 file, 6 rows): no empty run_id and url, key (run_id, url) unique, status values all declared, no local_path outside data_root, bytes_saved matches the size on disk (1 file) · 3 rows absent as expected (refetchable, released, removed_on_purpose) · 1 row whose status means a failure (failed): no file, as the status says
 Verified     shards (1 file, 2 rows): no empty shard_id, key shard_id unique, every local_path under data_root
-Found        fetch_log: 1 file missing where the status says present; 1 file missing where the status means a failure (logs/fetch/*.csv; e.g. key (r1, https://ex.org/5), (r1, https://ex.org/6))
+Found        fetch_log: 1 file missing where the status says present (logs/fetch/*.csv; e.g. key (r1, https://ex.org/5))
              fix: fetch the missing files again, or correct the status of those rows
 Found        shards: 2 values of bytes_logged are in GB, the contract says GiB (logs/shards.csv; e.g. key s1, s2)
              fix: if the data really is in GB, set `unit: GB` in the contract; else convert the sizes where they're written
@@ -32,9 +32,20 @@ Evidence     .truequery/evidence.jsonl (+11 records)
 2 data failures in 2 of 2 datasets read
 ```
 
-The rows removed on purpose, released or refetchable have no file on disk,
-and the contract says that's expected (`means: absent_expected`), so they're
-counted, not flagged.
+Each status value's `means` in the contract says what a missing file means
+for that status, not whether `verify` fails:
+
+- `present`: the file should be there. A row with no file is a data
+  failure (the log says the file is there, and it isn't).
+- `absent_expected`: no file, on purpose (removed, released,
+  refetchable). Counted, not flagged.
+- `absent_unexpected`: no file because something went wrong (a failed
+  fetch). Counted and reported, not flagged: the data says what the status
+  says. A query that counts failures counts these rows, not every row
+  that isn't `present` (practice `dq/expected-absence-counted-as-missing`).
+
+So above, the `fetched` row whose file is gone is a failure, and the
+`failed` row with no file is only counted.
 
 `truequery review --data` puts the same lines in the receipt:
 
@@ -44,7 +55,7 @@ Checked      1 SQL file · contracts for 1 of 1 table
 Verified     against the data: fetch_log (1 file, 6 rows): no empty run_id and url, …
              shards (1 file, 2 rows): no empty shard_id, key shard_id unique, every local_path under data_root
 Found        2 data failures:
-             fetch_log: 1 file missing where the status says present; … Fix: fetch the missing files again, or correct the status of those rows
+             fetch_log: 1 file missing where the status says present (…). Fix: fetch the missing files again, or correct the status of those rows
              shards: 2 values of bytes_logged are in GB, the contract says GiB (logs/shards.csv; e.g. key s1, s2). Fix: …
 ```
 
@@ -71,11 +82,25 @@ From what the contract declares:
 | `values` | every value in the data is a declared one |
 | `time_zone` | timestamps carry the declared zone (`UTC`: `Z` or `+00:00`; `local:<zone>`: not marked UTC; `naive`: no marker) |
 | `type: path` + `relative_to` | every path resolves under the declared base folder (`bases:` in `DATA.md`), never outside it |
-| `values` with `means` + `status_column` | rows whose status means present have their file; rows absent on purpose are counted, not flagged |
+| `values` with `means` + `status_column` | rows whose status means present have their file; rows absent on purpose, and rows whose status means a failure, are counted, not flagged |
 | `unit` + `size_of` | each size matches the file on disk; GiB written as GB (and the other binary/decimal twins) is named as such |
 | `freshness_sla: {column, max_age}` | the newest timestamp is within `max_age` of now (`--now` sets "now") |
 
 Column types (`type: number`, …) aren't checked yet.
+
+Paths that start with the base folder's own name (`data/2026-10-17/x.warc`
+under a base `data/`) point to `data/data/…`. When the file is there
+without that first folder, `verify` says so as its own failure, apart from
+the files that are really missing:
+
+```
+Found        fetch_log: 3 paths in local_path start with data/, the base folder's own name, so they point to data/data/…; the files are there without it (logs/*.csv; e.g. key u3, u4, u5)
+             fix: correct the paths where they're written, or check how `relative_to` is declared for local_path
+```
+
+It stays a failure: the paths as written are wrong, and `verify` never
+reads them as if they were right. The file is looked for only inside the
+base folder, as every path is. `\` in a path counts as `/`.
 
 A check is called verified only when it compared at least one value. One
 that had nothing to compare (every `ts` empty, no file found to measure) is
