@@ -41,7 +41,7 @@ checked, never as clean.
    switch it off just for you).
 
 **Does my code or data leave my machine?**
-The checker makes no network calls and sends no telemetry. Claude Code
+The checker makes no network calls and sends no telemetry. Your agent
 still talks to its model provider as it always does, and TrueQuery doesn't
 change that. `truequery verify` reads local data files on your machine,
 read-only, and never connects to your warehouse. It shows counts and at

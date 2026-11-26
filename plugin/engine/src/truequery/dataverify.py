@@ -616,7 +616,7 @@ def _entry(report: dict, contract: dict, root: str) -> dict:
 def skipped_lines(doc: dict) -> list[str]:
     return [f"{item['dataset']}: the contract doesn't say where the data is "
             "(add `location.database` for a local database file; remote "
-            "databases aren't read until 0.3)" for item in doc["skipped"]]
+            "databases aren't read yet)" for item in doc["skipped"]]
 
 
 def not_checked_lines(doc: dict, include_invalid: bool = True,

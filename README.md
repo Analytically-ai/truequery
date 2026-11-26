@@ -85,7 +85,7 @@ found and, just as plainly, what wasn't checked. On the full sample file:
 TrueQuery receipt
 Checked      1 SQL file · contracts for 0 of 3 tables
 Found        5 errors · 2 warnings
-Not checked  your data: no contract points at a local data file, so none was read (remote databases: not until 0.3)
+Not checked  your data: no contract points at a local data file, so none was read (remote databases: not yet)
 No contract  customers, orders, staging_orders
 ```
 
@@ -326,12 +326,12 @@ That installs `truequery` and the short alias `tq`.
 ```yaml
 repos:
   - repo: https://github.com/Analytically-ai/truequery
-    rev: v0.1.7
+    rev: v0.2.0
     hooks:
       - id: truequery
 ```
 
-**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.1.7` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
+**GitHub Actions:** run `uses: Analytically-ai/truequery@v0.2.0` to check pull requests and write the receipt to the job summary. Full options and SARIF setup: [`docs/ci-and-pre-commit.md`](docs/ci-and-pre-commit.md).
 
 ### Try it on the demo shop
 

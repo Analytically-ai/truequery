@@ -29,7 +29,7 @@ PROJECT_LIMIT = ("dbt, incremental-model and Airflow rules beyond the 4 "
 # data files and database files a contract points to (`review --data`,
 # `truequery verify`); it doesn't connect to remote databases yet.
 DATA_LIMIT = ("your data: no contract points at a local data file, so none "
-              "was read (remote databases: not until 0.3)")
+              "was read (remote databases: not yet)")
 DATA_NOT_READ = ("your data: not read in this run. Run `truequery review "
                  "--data` to check {names} against the contracts")
 PANDAS_LIMIT = ("pandas: only DataFrames a file builds or annotates "

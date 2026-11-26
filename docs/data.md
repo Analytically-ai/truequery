@@ -179,8 +179,7 @@ truequery verify --require data
   contract names, with everything else (writing, other files, the network,
   extension downloads) switched off and the settings locked. SQLite is
   opened read-only.
-- **No network.** It reads local files. Remote databases aren't read until
-  0.3.
+- **No network.** It reads local files. Remote databases aren't read yet.
 - **Private.** It reports counts and at most five failing key values, and
   for a freshness check the newest timestamp; never other values. Keys of a
   column marked `pii: true` are never shown, and neither is the newest
@@ -209,6 +208,6 @@ the log never takes more than about 10 MB, even with a daily run.
 
 ## Not yet
 
-- Remote databases (Postgres, BigQuery, Snowflake): 0.3.
+- Remote databases (Postgres, BigQuery, Snowflake).
 - Checking that a pipeline's output kept every input row.
 - Excel files.
