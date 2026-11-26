@@ -316,7 +316,7 @@ class TestVerifyCommand:
         assert code == 0
         assert ("Skipped      orders: the contract doesn't say where the data "
                 "is (add `location.database` for a local database file; remote "
-                "databases aren't read until 0.3)") in out
+                "databases aren't read yet)") in out
         assert "1 skipped (no location)" in out
         shutil.rmtree(tmp_path / "contracts")
         code, out, _ = tq(capsys, tmp_path, "verify", "--now", NOW)

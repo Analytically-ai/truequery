@@ -1,70 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-26)
 
-- A second contract for the same table is now reported as a duplicate, and its
-  keys are no longer used.
-- Six checks read your contracts and metric files: a status compared to an
-  undeclared value, expected absences counted as missing, units or
-  currencies combined without a conversion, time zones or path bases compared
-  without one, and a metric computed differently from `metrics/`. They're off
-  by default until they're measured on real projects.
-- If a contract or metric file changes during an agent session (from the
-  session's first check on), the hook says so once per change, and the
-  receipt names the file. The agent is told to confirm the change with you.
-- **The contract checks reach pandas code.** A DataFrame read from a file or
-  table a contract describes (a literal path matching its location, or
-  `read_sql` of one contracted table) is checked against the contract: a
-  status compared to an undeclared value, expected absences counted as
-  missing, units combined, text timestamps in different zones compared, and
-  a wrong folder put in front of a path. Three new pandas checks: a
-  contracted CSV read without a `dtype` for its string key (`007` becomes
-  7), `fillna(0)` on a money column that may be empty, and a write that
-  contradicts the output contract's `write_mode`. All off by default. See
-  "Checks that read your contracts" in `docs/checker.md` for what links a
-  DataFrame to a contract.
-- The standard has 234 practices (was 225) and the checker 41 checks (was 32).
-- **`truequery verify` checks your data against your contracts.** It reads
-  the local files (CSV, JSONL, JSON, Parquet) and SQLite or DuckDB database
-  files a contract points to, read-only, and says in plain words whether the
-  data matches: keys unique and filled, statuses declared, timestamps in the
-  declared zone, paths under the declared folder, files present where the
-  status says so, sizes in the declared unit, freshness. A status's `means`
-  says what a missing file means, not whether `verify` fails: rows absent on
-  purpose (`absent_expected`) and rows whose status means a failure
-  (`absent_unexpected`, such as a failed fetch) are counted, not flagged;
-  only a missing file where the status says `present` fails. Paths that
-  start with the base folder's own name (`data/…` under a base `data/`) are
-  named as that, apart from files that are really missing; a path that
-  leaves the base folder (absolute, `~`, `..` or a link out) is reported
-  once, as such. Failures say
-  what's wrong and what to do. Each
-  run is logged to `.truequery/evidence.jsonl` (moved to `.1` past 5 MB;
-  git-ignored). Exit codes: 0 verified, 1 the data breaks a contract, 2 a
-  usage error, 3 some data couldn't be verified. See `docs/data.md`.
-- `truequery review --data` adds `Verified     against the data` lines to
-  the receipt, and data failures under `Found`. Without `--data`, the
-  receipt's data line now says whether any contract points at local data
-  and the command that would read it (it used to say TrueQuery never reads
-  data).
-- **The data reader is optional.** SQLite needs nothing extra. Data files
-  and DuckDB databases need DuckDB 1.2.0 or later: `pip install
-  "truequery[data]"`, or `truequery setup data`, which picks the right
-  command for how TrueQuery was installed (pip, uv tool, pipx, uvx or the
-  Claude Code plugin) and runs it only with `--yes`. `--no` records that the
-  project doesn't want it. The answer is kept in `DATA.md`
-  (`setup: data: true|false`; the `tq-config` block now has a JSON Schema).
-  Without the reader, `verify` checks what it can and names the rest;
-  `--require data` makes that fail in CI.
-- `truequery status` says whether the data reader is installed, whether this
-  project needs it, and the command.
-- `truequery context` prints `EVIDENCE_AVAILABLE: file, data` and a `DATA`
-  line naming the datasets when a contract in scope points at local data
-  (or `DATA_READER_MISSING` when the data reader is needed and isn't
-  installed): with `--target`, only the datasets the target uses; without
-  it, the project's, at most 10 named. The skill runs `truequery verify` on them before writing code,
-  and `review --data` at the receipt step; `/truequery init` offers the
-  data reader when the project has data files.
+Contracts for your data, checked against the data itself.
+
+**Describe your data**
+
 - **`truequery init --from <files or folders>` drafts contracts from data
   files that already exist.** It reads CSV and JSONL with Python's standard
   library and Parquet with the data reader (without it, Parquet is listed as
@@ -81,25 +22,114 @@
   `pii: true`, and their values are never written. It never writes over a
   contract, refuses paths outside the project or a declared base, can't be
   combined with `--force`, and every draft passes `truequery contract
-  validate`. The
-  same files give the same bytes. It doesn't read READMEs or data
-  dictionaries yet. See `docs/pipelines.md`.
+  validate`. The same files give the same bytes. It doesn't read READMEs or
+  data dictionaries yet. See `docs/pipelines.md`.
+- `/truequery init` runs `init --from` when the project has data files and
+  no contracts, then asks only what it couldn't settle. It offers the data
+  reader when the project has data files.
+- `truequery init --from` suggests `absent_unexpected` for status values that
+  name a failure (`failed`, `error`, `timeout`, `lost`, …), in its question
+  and the draft's TODO comment; `means` stays `TODO` until you answer. The
+  interview and the docs now say what decides it: `absent_expected` means
+  nobody wants the file, `absent_unexpected` means we wanted it and didn't
+  get it, so a failed download is `absent_unexpected` even when nothing was
+  stored.
+- **Contracts, version 2,** and metric definitions in `metrics/*.yaml`
+  (version 1), each with a JSON Schema. A contract can declare path bases
+  (`bases:` in `DATA.md`), units, time zones and what each status value
+  means. A column can be `status: draft` (only in a draft contract), and a
+  CSV location can name its `delimiter` (`,` `;` tab or `|`). The
+  `tq-config` block in `DATA.md` has a JSON Schema too.
+- **`truequery contract validate`** checks `contracts/*.yaml`,
+  `metrics/*.yaml` and the bases in `DATA.md` (text, `--json` or
+  `--sarif`).
+- A second contract for the same table is now reported as a duplicate, and
+  its keys are no longer used. **Heads-up:** a project with two contracts
+  for one table may see new findings (exit 1), where the second contract's
+  keys used to quiet them.
+
+**Check the data**
+
+- **`truequery verify` checks your data against your contracts.** It reads
+  the local files (CSV, JSONL, JSON, Parquet) and SQLite or DuckDB database
+  files a contract points to, read-only, and says in plain words whether the
+  data matches: keys unique and filled, statuses declared, timestamps in the
+  declared zone, paths under the declared folder, files present where the
+  status says so, sizes in the declared unit, freshness.
+  - A status's `means` says what a missing file means, not whether `verify`
+    fails: rows absent on purpose (`absent_expected`) and rows whose status
+    means a failure (`absent_unexpected`, such as a failed fetch) are
+    counted, not flagged. Only a missing file where the status says
+    `present` fails.
+  - Paths that start with the base folder's own name (`data/…` under a base
+    `data/`) are named as that, apart from files that are really missing. A
+    path that leaves the base folder (absolute, `~`, `..` or a link out) is
+    reported once, as such.
+  - A dataset's CSV and Parquet files are matched by column name, so files
+    that lack a column or order them differently are read. A CSV's declared
+    `delimiter` is used.
+  - Failures say what's wrong and what to do.
+  - Each run is logged to `.truequery/evidence.jsonl` (moved to `.1` past
+    5 MB; git-ignored).
+  - Exit codes: 0 verified, 1 the data breaks a contract, 2 a usage error,
+    3 some data couldn't be verified. See `docs/data.md`.
+- **The data reader is optional.** SQLite needs nothing extra. Data files
+  and DuckDB databases need DuckDB 1.2.0 or later: `pip install
+  "truequery[data]"`, or `truequery setup data`, which picks the right
+  command for how TrueQuery was installed (pip, uv tool, pipx, uvx or the
+  Claude Code plugin) and runs it only with `--yes`. `--no` records that the
+  project doesn't want it. The answer is kept in `DATA.md` (`setup: data:
+  true|false`). Without the reader, `verify` checks what it can and names
+  the rest; `--require data` makes that fail in CI.
+- `truequery status` says whether the data reader is installed, whether this
+  project needs it, and the command.
+
+**Write code against it**
+
 - **`truequery scaffold <contract>` writes a pipeline's boundaries in plain
   pandas:** a typed reader (a dtype for every column, only empty fields
   missing, timestamps parsed in the declared zone), an output check (keys,
-  types, accepted values, time zones) and pytest tests on synthetic rows.
-  A CSV row with more fields than the header raises instead of shifting
-  the columns.
-  The code never imports TrueQuery, and files aren't written over without
-  `--force`.
-- Contracts: a column can be `status: draft` (only in a draft contract),
-  and a CSV location can name its `delimiter` (`,` `;` tab or `|`), which
-  `truequery verify` now uses. `verify` matches the columns of a dataset's
-  CSV and Parquet files by name, so files that lack a column or order them
-  differently are read.
-- `/truequery init` runs `init --from` when the project has data files and
-  no contracts, then asks only what it couldn't settle; `/truequery build`
-  scaffolds the boundaries before writing the transform.
+  types, accepted values, time zones) and pytest tests on synthetic rows. A
+  CSV row with more fields than the header raises instead of shifting the
+  columns. The code never imports TrueQuery, and files aren't written over
+  without `--force`. `/truequery build` scaffolds the boundaries before
+  writing the transform.
+- **Nine checks read your contracts and metric files, in SQL and pandas
+  code.** All are off by default until they're measured on real projects.
+  - In SQL and pandas: a status compared to an undeclared value, expected
+    absences counted as missing, units or currencies combined without a
+    conversion, time zones compared without one (in pandas: timestamps still
+    as text), and path bases compared without one (in pandas: also a wrong
+    folder put in front of a path).
+  - In SQL: a metric computed differently from `metrics/`.
+  - In pandas: a contracted CSV read without a `dtype` for its string key
+    (`007` becomes 7), `fillna(0)` on a money column that may be empty, and
+    a write that contradicts the output contract's `write_mode`.
+  - A DataFrame is linked to a contract only by a literal path matching its
+    location, or `read_sql` of one contracted table. See "Checks that read
+    your contracts" in `docs/checker.md`.
+- `truequery context` prints `EVIDENCE_AVAILABLE: file, data` and a `DATA`
+  line naming the datasets when a contract in scope points at local data
+  (or `DATA_READER_MISSING` when the data reader is needed and isn't
+  installed): with `--target`, only the datasets the target uses; without
+  it, the project's, at most 10 named. The skill runs `truequery verify` on
+  them before writing code.
+- The standard has 234 practices (was 225) and the checker 41 checks (was
+  32). 20 are on by default, as before.
+
+**Review**
+
+- `truequery review --data` adds `Verified     against the data` lines to
+  the receipt, and data failures under `Found`. The skill runs it at the
+  receipt step. Without `--data`, the receipt's data line now says whether
+  any contract points at local data and the command that would read it (it
+  used to say TrueQuery never reads data). Remote databases aren't read yet.
+- If a contract or metric file changes during an agent session (from the
+  session's first check on), the hook says so once per change, and the
+  receipt names the file. The agent is told to confirm the change with you.
+
+**Fewer false alarms in existing checks**
+
 - **`sql/group-by-bare-column` (on by default) is quiet when the column's
   table has its key in the GROUP BY**, directly (`event_name … GROUP BY
   event_id`) or through one join on that key (`JOIN drivers d ON
@@ -122,13 +152,6 @@
 - `sem/relative-path-base-mismatch` in SQL is quiet on a URL or an absolute
   path in front of a path relative to a declared base, as the pandas check
   already was: the absolute path may be where the base is.
-- `truequery init --from` suggests `absent_unexpected` for status values that
-  name a failure (`failed`, `error`, `timeout`, `lost`, …), in its question
-  and the draft's TODO comment; `means` stays `TODO` until you answer. The
-  interview and the docs now say what decides it: `absent_expected` means
-  nobody wants the file, `absent_unexpected` means we wanted it and didn't
-  get it, so a failed download is `absent_unexpected` even when nothing was
-  stored.
 
 ## 0.1.7 (2026-11-07)
 

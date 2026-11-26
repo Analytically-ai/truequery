@@ -208,7 +208,7 @@ def test_review_receipt_golden(tmp_path):
         "contracts for 0 of 3 tables\n"
         "Found        2 errors\n"
         "Not checked  your data: no contract points at a local data file, "
-        "so none was read (remote databases: not until 0.3)\n"
+        "so none was read (remote databases: not yet)\n"
         "Not checked  dbt, incremental-model and Airflow rules beyond the 4 "
         "project checks\n"
         "No contract  a, b, t\n")
