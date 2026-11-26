@@ -22,7 +22,7 @@ Questions for the interview (/truequery init), or answer them in the contracts:
   fetch: grain: one row per url? It is unique and never empty in all 7 rows read. Confirm the grain and the key
   fetch.local_path: 1 of 6 sampled paths exist under data_root (data/): is that their base?
   fetch.bytes_saved: the name says bytes, but values are written with a decimal point: which unit is it?
-  fetch.status: for each value (failed, fetched, refetchable, released, removed_on_purpose), is the file in local_path there (present), absent on purpose (absent_expected), or absent because something went wrong (absent_unexpected)? Values from all 7 rows: there may be others
+  fetch.status: for each value (failed, fetched, refetchable, released, removed_on_purpose), is the file in local_path there (present), absent because nobody wants it (removed on purpose, delivered elsewhere, deleted under retention: absent_expected), or absent because we wanted it and didn't get it (failed, error, timeout, lost: absent_unexpected)? Suggested for failed: absent_unexpected (the name says a failure, even if nothing was stored). Values from all 7 rows: there may be others
 init --from: 1 draft contract written, 0 kept, 0 not inferred. Not read: READMEs and data dictionaries (init --from doesn't link docs yet)
 ```
 
@@ -50,7 +50,7 @@ columns:
   status:
     type: string
     status: draft
-    values:  # TODO: what each value means for the file; there may be other values
+    values:  # TODO: what each value means for the file (suggested for failed: absent_unexpected); there may be other values
       failed: {means: TODO}
       fetched: {means: TODO}
       refetchable: {means: TODO}

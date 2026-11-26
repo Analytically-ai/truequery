@@ -1131,16 +1131,13 @@ class ContractPass:
 
     def _wrong_prefix(self, literal, col):
         """True when `literal` in front of `col` isn't its declared base."""
-        from truequery.checks.sql import _same_dir
+        from truequery.checks.sql import _prefix_elsewhere, _same_dir
         default = self._declared_default(col.spec.get("relative_to"))
         if default is None or _same_dir(literal, default):
             return False
-        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", literal):
-            return False  # a URL (s3://, https://, file://): another place
-        if literal.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", literal):
-            if not default.startswith(("/", "~")):
-                return False  # an absolute path may be where the base is
-        return True
+        # A URL, or an absolute path that may be where the base is: the
+        # SQL check stays quiet on the same literals.
+        return not _prefix_elsewhere(literal, default)
 
     def _report_prefix(self, anchor, literal, col):
         base = col.spec.get("relative_to")

@@ -1003,22 +1003,43 @@ def between_date_on_timestamp(stmt, loc, ctx):
 
 
 # -- sql/distinct-dedup-bandaid (heuristic, off by default) ------------------------------
+_DEDUP_AGGS = (exp.Sum, exp.Count, exp.Avg)
+
+
+def _projects_aggregate(sel) -> bool:
+    """An aggregate in this SELECT's own projection, not in a subquery
+    nested in it (a scalar subquery's COUNT belongs to that subquery)."""
+    return any(_owning_select(agg) is sel
+               for proj in sel.expressions
+               for agg in proj.find_all(*_DEDUP_AGGS))
+
+
+def _feeds_aggregate(sel) -> bool:
+    """A derived table (`FROM (SELECT DISTINCT ...)`, or the same in a
+    JOIN) whose SELECT directly above aggregates in its projection. A
+    DISTINCT in IN (...), EXISTS (...), a scalar subquery or a CTE feeds
+    no aggregate this way. A branch of a UNION in the derived table counts
+    as the derived table."""
+    sub = sel.parent
+    while isinstance(sub, exp.SetOperation):
+        sub = sub.parent
+    if not isinstance(sub, exp.Subquery) or not isinstance(
+            sub.parent, (exp.From, exp.Join)):
+        return False
+    outer = sub.parent.parent
+    return isinstance(outer, exp.Select) and _projects_aggregate(outer)
+
+
 def distinct_dedup_bandaid(stmt, loc, ctx):
     out = []
     for sel in stmt.find_all(exp.Select):
         if sel.args.get("distinct") is None:
             continue
-        agg_inside = sel.find(exp.Sum, exp.Count, exp.Avg) is not None
-        agg_outside = False
-        if not agg_inside:
-            # DISTINCT in a derived table feeding an outer aggregate:
-            # SELECT SUM(x) FROM (SELECT DISTINCT ...) 
-            node = sel.parent
-            while node is not None and not isinstance(node, exp.Select):
-                node = getattr(node, "parent", None)
-            if isinstance(node, exp.Select) and node is not sel:
-                agg_outside = node.find(exp.Sum, exp.Count, exp.Avg) is not None
-        if agg_inside or agg_outside:
+        if isinstance(sel.parent, exp.Exists) or (
+                isinstance(sel.parent, exp.Subquery)
+                and isinstance(sel.parent.parent, exp.In)):
+            continue  # a set to test membership in: DISTINCT is harmless
+        if _projects_aggregate(sel) or _feeds_aggregate(sel):
             out.append((sel,
                         "SELECT DISTINCT over aggregates usually papers over a join fanout",
                         "fix the fanout (pre-aggregate before joining) instead of deduplicating"))
@@ -1076,10 +1097,21 @@ def integer_division_truncation(stmt, loc, ctx):
 
 
 # -- sql/keyset-pagination (heuristic, off by default) ----------------------------------
+def _limit_is_one(limit) -> bool:
+    """LIMIT 1 / FETCH FIRST 1 ROW: picking the n-th row, not a page."""
+    count = limit.args.get("count") if isinstance(limit, exp.Fetch) \
+        else limit.args.get("expression")
+    return isinstance(count, exp.Literal) and not count.is_string \
+        and count.name == "1"
+
+
 def keyset_pagination(stmt, loc, ctx):
     out = []
     for sel in stmt.find_all(exp.Select):
-        if sel.args.get("offset") is not None and sel.args.get("limit") is not None:
+        limit = sel.args.get("limit")
+        if sel.args.get("offset") is not None and limit is not None:
+            if _limit_is_one(limit):
+                continue  # LIMIT 5, 1 / LIMIT 1 OFFSET n picks one ranked row
             out.append((sel,
                         "LIMIT+OFFSET pages shift under concurrent writes",
                         "paginate by keyset: WHERE id > ? ORDER BY id LIMIT ?"))
@@ -1313,17 +1345,127 @@ def group_by_bare_column(stmt, loc, ctx):
         keys = {e.sql().lower() for e in group.expressions}
         keys |= {e.name.lower() for e in group.expressions
                  if isinstance(e, exp.Column)}
+        fixed = None  # alias key -> columns fixed per group, built lazily
         for proj in sel.expressions:
             col = proj.unalias() if hasattr(proj, "unalias") else proj
             grouped = {col.sql().lower(), col.name.lower(),
                        (proj.alias or "").lower()} & keys
             if isinstance(col, exp.Column) and not grouped:
                 if sel.find(exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max):
+                    if fixed is None:
+                        fixed = _group_key_scope(sel, stmt)
+                    how = _key_fixes(col, fixed, ctx.keys)
+                    if how == "declared":
+                        loc.suppressed.append("sql/group-by-bare-column")
+                    if how:
+                        continue  # one value per group: its key is grouped
                     out.append((proj,
                                 "bare column not in GROUP BY returns an arbitrary value (MySQL/SQLite)",
                                 "add it to GROUP BY or aggregate it"))
                     break
     return out
+
+
+def _key_forms(table: str) -> set[str]:
+    """Column names that name a table's own key by convention: `id`,
+    `<table>_id`, `<table>id`, the table singular or plural."""
+    stems = {table}
+    if table.endswith("ies"):
+        stems.add(table[:-3] + "y")
+    if table.endswith("es"):
+        stems.add(table[:-2])
+    if table.endswith("s"):
+        stems.add(table[:-1])
+    else:
+        stems.add(table + ("es" if table.endswith(("s", "x", "ch", "sh"))
+                           else "s"))
+        if table.endswith("y"):
+            stems.add(table[:-1] + "ies")
+    return {"id"} | {s + "_id" for s in stems} | {s + "id" for s in stems}
+
+
+def _group_key_scope(sel, stmt):
+    """What one GROUP BY fixes, per FROM item of this SELECT:
+    {alias key: (table name or None, {fixed column names})}. A column is
+    fixed when it is grouped on that alias, or joined (`ON a.k = <grouped
+    column>`, a top-level AND conjunct) to a grouped column. Table name
+    None for a derived table or a CTE: neither has a known key. The join
+    step never starts from a grouped column on a side an outer join can
+    make NULL: every unmatched row lands in one NULL group there."""
+    ctes = {_alias_key(c).split(":", 1)[-1] for c in stmt.find_all(exp.CTE)}
+    items = []
+    from_ = sel.args.get("from_")
+    if from_ is not None and from_.this is not None:
+        items.append(from_.this)
+    joins = sel.args.get("joins") or []
+    items += [j.this for j in joins if j.this is not None]
+    sources = {}
+    for item in items:
+        table = None
+        if isinstance(item, exp.Table) and item.name \
+                and item.name.lower() not in ctes and not _is_generator(item):
+            table = ".".join(p for p in (item.db, item.name) if p).lower()
+        key = _alias_key(item)
+        if key in sources:
+            table = None  # two FROM items share a name: don't guess which
+        sources[key] = (table, set())
+    only = next(iter(sources)) if len(items) == 1 else None
+    nullable = set()  # alias keys an outer join can fill with NULL
+    for i, join in enumerate(joins):
+        side = (join.args.get("side") or "").upper()
+        if side in ("RIGHT", "FULL"):
+            nullable |= {_alias_key(item) for item in items[:i + 1]}
+        if side in ("LEFT", "FULL") and join.this is not None:
+            nullable.add(_alias_key(join.this))
+
+    def owner(column):
+        qual = column.args.get("table")
+        if qual is not None:
+            key = _ident_key(qual)
+            return key if key in sources else None
+        return only
+
+    grouped = set()
+    for expr in sel.args["group"].expressions:
+        expr = _unparen(expr)
+        if isinstance(expr, exp.Column) and owner(expr) is not None:
+            grouped.add((owner(expr), expr.name.lower()))
+            sources[owner(expr)][1].add(expr.name.lower())
+    for join in joins:
+        on = join.args.get("on")
+        if on is None or isinstance(on, exp.Or):
+            continue
+        for conj in _and_operands(_unparen(on)):
+            if not (isinstance(conj, exp.EQ)
+                    and isinstance(conj.left, exp.Column)
+                    and isinstance(conj.right, exp.Column)):
+                continue
+            for a, b in ((conj.left, conj.right), (conj.right, conj.left)):
+                if owner(a) is not None and owner(b) is not None \
+                        and owner(b) not in nullable \
+                        and (owner(b), b.name.lower()) in grouped:
+                    sources[owner(a)][1].add(a.name.lower())
+    return sources, owner
+
+
+def _key_fixes(col, scope, declared):
+    """How a bare column is one value per group, or "" when it isn't
+    known to be: "declared" when a contract or dbt key of its table is
+    fixed by the GROUP BY (directly or one join away), "named" when no
+    key is declared and a column named as the table's key (`id`,
+    `<table>_id`) is. Never from uniqueness seen in data."""
+    sources, owner = scope
+    alias = owner(col)
+    if alias is None:
+        return ""
+    table, fixed = sources[alias]
+    if table is None or not fixed:
+        return ""
+    candidates = declared.get(table, []) + (
+        declared.get(table.split(".")[-1], []) if "." in table else [])
+    if candidates:
+        return "declared" if any(k <= fixed for k in candidates) else ""
+    return "named" if fixed & _key_forms(table.split(".")[-1]) else ""
 
 
 # -- sql/case-without-else-in-aggregate --------------------------------------------------
@@ -2163,6 +2305,18 @@ def _same_dir(a: str, b: str) -> bool:
     return norm(a) == norm(b)
 
 
+def _prefix_elsewhere(literal: str, default: str) -> bool:
+    """A literal that may name the base's own place rather than a wrong
+    folder: a URL (s3://, https://, file://), or an absolute path when the
+    declared base is relative (it may be where the base is). The SQL and
+    pandas path checks share this, so they agree on what they can't tell."""
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", literal):
+        return True
+    if literal.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", literal):
+        return not default.startswith(("/", "~"))
+    return False
+
+
 def _path_side(expr, scope, bases: dict):
     """How one side of a comparison anchors a declared path column:
     (col, contract, name, anchor). anchor is the declared base name, None
@@ -2205,6 +2359,8 @@ def _path_side(expr, scope, bases: dict):
         return None
     if _same_dir(prefix, str(declared["default"])):
         return (target, contract, cname, None)
+    if _prefix_elsewhere(prefix, str(declared["default"])):
+        return None  # a URL, or an absolute path that may be the base: can't tell
     return (target, contract, cname, ("prefix", prefix, base))
 
 

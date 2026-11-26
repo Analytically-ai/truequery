@@ -344,7 +344,10 @@ def test_path_with_the_declared_base_is_quiet(tmp_path, on):
     assert "sem/relative-path-base-mismatch" not in _fired(findings)
 
 
-@pytest.mark.parametrize("prefix", ["/mnt/other/", "/srv/data/"])
+# A relative literal that isn't the base. An absolute one (/mnt/other/)
+# may be where the relative base is, so it is quiet, as in pandas
+# (tests/test_polish_0_2.py).
+@pytest.mark.parametrize("prefix", ["other/", "./archive/"])
 def test_path_with_another_literal_base_fires(tmp_path, prefix):
     findings = _rules(
         tmp_path, f"SELECT COUNT(*) FROM fetch_log f JOIN disk_files d "

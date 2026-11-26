@@ -112,6 +112,28 @@ PLACE_WORDS = frozenset({"city", "town", "county", "district", "place",
                          "department", "store", "vendor", "merchant",
                          "organization", "org", "site", "venue", "stadium",
                          "college", "school", "university", "airport"})
+# Status values that name a failure: we wanted the file and didn't get
+# it. init --from suggests absent_unexpected for them (a suggestion in the
+# question and the TODO comment; `means` stays TODO until a person answers).
+FAILURE_WORDS = frozenset({
+    "fail", "failed", "failure", "failing", "error", "errored", "errors",
+    "timeout", "timeouts", "timedout", "lost", "rejected", "aborted",
+    "crashed", "missing", "unreachable",
+})
+_NEGATIONS = frozenset({"no", "not", "non", "without", "free"})
+
+
+def names_failure(value: str) -> bool:
+    """`failed`, `HTTP_ERROR`, `timed_out`, `fetch-timeout`: a word in the
+    value names a failure, and none negates it (`no_error`, `error_free`
+    don't)."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)  # fetchFailed
+    words = {w for w in re.split(r"[^a-z0-9]+", spaced.lower()) if w}
+    joined = re.sub(r"[^a-z0-9]+", "", value.lower())  # timed_out
+    return not words & _NEGATIONS and bool(
+        words & FAILURE_WORDS or joined in FAILURE_WORDS)
+
+
 STATUS_WORDS = frozenset({"status", "state", "stage", "outcome", "result",
                           "disposition", "lifecycle"})
 CATEGORY_WORDS = STATUS_WORDS | frozenset({"type", "kind", "category",
@@ -1340,13 +1362,26 @@ def infer_dataset(ds: dict, root: str, config: dict | None) -> dict:
             spec["values"] = {v: {"means": "TODO"} for v in distinct}
             spec["status"] = "draft"
             target = path_cols[0] if len(path_cols) == 1 else "the path columns"
+            failures = [v for v in distinct if names_failure(v)]
+            hint = ""
+            if failures:
+                named = ", ".join(_short(v, 30) for v in failures[:8]) + (
+                    f" and {len(failures) - 8} more" if len(failures) > 8
+                    else "")
+                hint = (f" Suggested for {named}: absent_unexpected (the "
+                        "name says a failure, even if nothing was stored).")
             ask(col, f"for each value ({shown}), is the file in {target} "
-                "there (present), absent on purpose (absent_expected), or "
-                "absent because something went wrong (absent_unexpected)? "
-                "Values from "
+                "there (present), absent because nobody wants it (removed "
+                "on purpose, delivered elsewhere, deleted under retention: "
+                "absent_expected), or absent because we wanted it and "
+                "didn't get it (failed, error, timeout, lost: "
+                f"absent_unexpected)?{hint} Values from "
                 f"{sample_words}: there may be others")
-            comments[(col, "values")] = ("TODO: what each value means for "
-                                         "the file; there may be other values")
+            comments[(col, "values")] = (
+                "TODO: what each value means for the file"
+                + (f" (suggested for {named}: absent_unexpected)"
+                   if failures else "")
+                + "; there may be other values")
         else:
             spec["values"] = distinct
             spec["status"] = "draft"

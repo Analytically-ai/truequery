@@ -29,7 +29,12 @@ detection_sketch: >
   positives: columns functionally dependent on a grouped primary key (MySQL
   accepts these legitimately), and SQLite's documented single min()/max()
   case, where bare columns come from the min/max row; exempt both when the
-  contract declares the key or the intent.
+  contract declares the key or the intent. The checker exempts a column
+  whose table's key is in the GROUP BY, directly or through one join on that
+  key: a key declared in a contract or a dbt unique test, or, when none is
+  declared for that table, a column named id, <table>_id or <table>id. The
+  join step never starts from a grouped column on the side an outer join
+  can make NULL. Uniqueness seen in data never exempts a column.
 severity_suggestion: warning
 examples:
   bad: SELECT dept, emp, COUNT(*) FROM staff GROUP BY dept;
