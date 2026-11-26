@@ -37,12 +37,15 @@ for that status, not whether `verify` fails:
 
 - `present`: the file should be there. A row with no file is a data
   failure (the log says the file is there, and it isn't).
-- `absent_expected`: no file, on purpose (removed, released,
-  refetchable). Counted, not flagged.
-- `absent_unexpected`: no file because something went wrong (a failed
-  fetch). Counted and reported, not flagged: the data says what the status
-  says. A query that counts failures counts these rows, not every row
-  that isn't `present` (practice `dq/expected-absence-counted-as-missing`).
+- `absent_expected`: no file, and nobody wants one (removed on purpose,
+  delivered elsewhere, deleted under retention). Counted, not flagged.
+- `absent_unexpected`: no file, and we wanted one but didn't get it
+  (failed, error, timeout, lost). A failed download is
+  `absent_unexpected`, even when its description says nothing was stored:
+  what decides it is whether the absence was wanted. Counted and reported,
+  not flagged: the data says what the status says. A query that counts
+  failures counts these rows, not every row that isn't `present`
+  (practice `dq/expected-absence-counted-as-missing`).
 
 So above, the `fetched` row whose file is gone is a failure, and the
 `failed` row with no file is only counted.

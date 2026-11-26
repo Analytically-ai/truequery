@@ -33,7 +33,8 @@ only (steps 1–5) — for scripts and CI.
    one call as in `flow.md` step 2 (four in the question tool, a fifth
    in text), each with a suggested default — (a) what counts as
    revenue / the headline metric, (b) which accounts or status values
-   are test, internal, or expected absences (`means: absent_expected`),
+   are test, internal, or absences nobody wants (`means:
+   absent_expected`; a failure such as `failed` is `absent_unexpected`),
    (c) the money and unit conventions (`unit: minor|major` + `currency`,
    or binary vs decimal file sizes `GiB` vs `GB`), (d) the business date
    and time zone of naive timestamps (`UTC`, `naive`, or `local:<zone>`),
@@ -52,10 +53,14 @@ only (steps 1–5) — for scripts and CI.
    After `init --from`, the interview asks only what it couldn't settle,
    from its question list and the `# TODO` lines in the drafts: the grain
    and key, what each `means: TODO` status value means for the file
-   (is it there: `present`; absent on purpose: `absent_expected`; or
-   absent because something went wrong: `absent_unexpected`. Only a
-   missing `present` file fails `truequery verify`; the other two are
-   counted), the zone of
+   (is it there: `present`; or, when it isn't, was the absence wanted?
+   `absent_expected` means nobody wants the file: removed on purpose,
+   delivered elsewhere, deleted under retention; `absent_unexpected`
+   means we wanted it and didn't get it: failed, error, timeout, lost.
+   A status that names a failure is `absent_unexpected`, even when its
+   description says nothing was stored, and that is its suggested
+   default. Only a missing `present` file fails `truequery verify`; the
+   other two are counted), the zone of
    `time_zone: naive` or mixed timestamps, a unit taken from a column's
    name (GB or GiB?), a path base, and `pii: true` guesses. These replace
    (b)–(e) where they overlap; group them per dataset, and when there are

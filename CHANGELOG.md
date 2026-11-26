@@ -100,6 +100,35 @@
 - `/truequery init` runs `init --from` when the project has data files and
   no contracts, then asks only what it couldn't settle; `/truequery build`
   scaffolds the boundaries before writing the transform.
+- **`sql/group-by-bare-column` (on by default) is quiet when the column's
+  table has its key in the GROUP BY**, directly (`event_name … GROUP BY
+  event_id`) or through one join on that key (`JOIN drivers d ON
+  d.driverId = r.driverId … GROUP BY r.driverId`): the value is fixed per
+  group. The key comes from a contract or a dbt unique test; when none is
+  declared for that table, from a column named `id`, `<table>_id` or
+  `<table>id` (singular or plural). The join step never starts from a
+  grouped column on the side an outer join can make NULL (`users u LEFT
+  JOIN orders o … GROUP BY o.user_id` still fires: every user without an
+  order shares one group). Uniqueness seen in the data never counts, so
+  `GROUP BY name` still fires.
+- `sql/distinct-dedup-bandaid` (off by default) looks only at the query's
+  own level: an aggregate in the DISTINCT's own select list, or a derived
+  table `FROM (SELECT DISTINCT …)` under an aggregate in the select
+  directly above. A DISTINCT inside `IN (…)`, `EXISTS (…)`, a scalar
+  subquery or a CTE is no longer flagged.
+- `sql/keyset-pagination` (off by default) is quiet on `LIMIT 1` with an
+  offset (`LIMIT 5, 1`, `LIMIT 1 OFFSET n`): that picks one ranked row, it
+  doesn't page.
+- `sem/relative-path-base-mismatch` in SQL is quiet on a URL or an absolute
+  path in front of a path relative to a declared base, as the pandas check
+  already was: the absolute path may be where the base is.
+- `truequery init --from` suggests `absent_unexpected` for status values that
+  name a failure (`failed`, `error`, `timeout`, `lost`, …), in its question
+  and the draft's TODO comment; `means` stays `TODO` until you answer. The
+  interview and the docs now say what decides it: `absent_expected` means
+  nobody wants the file, `absent_unexpected` means we wanted it and didn't
+  get it, so a failed download is `absent_unexpected` even when nothing was
+  stored.
 
 ## 0.1.7 (2026-11-07)
 
